@@ -36,7 +36,11 @@ jobs:
         include:
           - { name: GCC debug, preset: debug, cxx: g++-14 }
           - { name: GCC release, preset: release, cxx: g++-14 }
-          - { name: Clang debug + clang-tidy, preset: debug, cxx: clang++-18, tidy: true }
+          # clang-tidy runs on every translation unit as it compiles; .clang-tidy makes findings errors.
+          - name: Clang debug + clang-tidy
+            preset: debug
+            cxx: clang++-18
+            configure-args: -DCMAKE_CXX_CLANG_TIDY=clang-tidy-18
           - { name: ASan + UBSan, preset: asan, cxx: clang++-18 }
           - { name: TSan, preset: tsan, cxx: clang++-18 }
     env:
@@ -47,9 +51,6 @@ jobs:
       # The runner's high ASLR entropy breaks TSan ("unexpected memory mapping").
       - if: matrix.preset == 'tsan'
         run: sudo sysctl vm.mmap_rnd_bits=28
-      - run: cmake --preset ${{ matrix.preset }}
-      - if: matrix.tidy
-        name: clang-tidy
-        run: run-clang-tidy-18 -clang-tidy-binary clang-tidy-18 -p build/${{ matrix.preset }} -quiet
+      - run: cmake --preset ${{ matrix.preset }} ${{ matrix.configure-args }}
       - run: cmake --build --preset ${{ matrix.preset }}
       - run: ctest --preset ${{ matrix.preset }}
