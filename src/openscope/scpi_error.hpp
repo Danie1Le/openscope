@@ -17,8 +17,8 @@ inline const ScpiError kNoError{.code = 0, .message = "No error"};
 /// A line that breaks the SCPI grammar. Nothing on the line runs.
 inline const ScpiError kSyntaxError{.code = -102, .message = "Syntax error"};
 
-/// A parameter of the wrong kind: a keyword where a number belongs, or a number where a keyword
-/// belongs.
+/// A parameter of the wrong kind: a keyword where a number belongs, a number where a keyword
+/// belongs, or a string, non-decimal number or block, which no command takes.
 inline const ScpiError kDataTypeError{.code = -104, .message = "Data type error"};
 
 /// More parameters than the command takes.
@@ -27,8 +27,12 @@ inline const ScpiError kParameterNotAllowed{.code = -108, .message = "Parameter 
 /// Fewer parameters than the command takes.
 inline const ScpiError kMissingParameter{.code = -109, .message = "Missing parameter"};
 
-/// A command header that matches no command, including a header suffix outside its range.
+/// A command header that matches no command, including a suffix on a node that takes none.
 inline const ScpiError kUndefinedHeader{.code = -113, .message = "Undefined header"};
+
+/// A header that matches a command except that a node's suffix is outside its range (`CHAN5`).
+inline const ScpiError kHeaderSuffixOutOfRange{.code = -114,
+                                               .message = "Header suffix out of range"};
 
 /// A numeric parameter's suffix is not a unit, with an optional multiplier, the parameter accepts.
 inline const ScpiError kInvalidSuffix{.code = -131, .message = "Invalid suffix"};

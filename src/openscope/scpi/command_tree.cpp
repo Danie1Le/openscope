@@ -15,6 +15,7 @@
 #include <variant>
 #include <vector>
 
+#include "openscope/scpi/ascii.hpp"
 #include "openscope/scpi/parser.hpp"
 #include "openscope/scpi_error.hpp"
 #include "openscope/session.hpp"
@@ -35,24 +36,26 @@ struct Overloaded : Lambdas... {
   using Lambdas::operator()...;
 };
 
-[[noreturn]] void reject_pattern(std::string_view pattern) {
-  throw std::invalid_argument("malformed SCPI pattern: '" + std::string(pattern) + "'");
+/// Fails registration: a mistake in the command table must stop start-up.
+[[noreturn]] void reject(std::string_view problem, std::string_view text) {
+  throw std::invalid_argument(std::string(problem) + ": '" + std::string(text) + "'");
 }
 
-bool is_upper(char c) { return c >= 'A' && c <= 'Z'; }
-bool is_lower(char c) { return c >= 'a' && c <= 'z'; }
+[[noreturn]] void reject_pattern(std::string_view pattern) {
+  reject("malformed SCPI pattern", pattern);
+}
 
 /// Parses `CHANnel<1-4>`: upper-case short form, lower-case rest, optional suffix range.
 MnemonicPattern parse_mnemonic_pattern(std::string_view text) {
   const std::size_t letters_end = std::min(text.find('<'), text.size());
   const std::string_view letters = text.substr(0, letters_end);
-  const auto short_end =
-      static_cast<std::size_t>(std::ranges::find_if_not(letters, is_upper) - letters.begin());
-  if (short_end == 0 || !std::ranges::all_of(letters.substr(short_end), is_lower)) {
+  const auto short_end = static_cast<std::size_t>(
+      std::ranges::find_if_not(letters, ascii::is_upper) - letters.begin());
+  if (short_end == 0 || !std::ranges::all_of(letters.substr(short_end), ascii::is_lower)) {
     reject_pattern(text);
   }
   MnemonicPattern pattern{.short_form = std::string(letters.substr(0, short_end)),
-                          .long_form = to_upper(letters),
+                          .long_form = ascii::to_upper(letters),
                           .max_suffix = 0};
 
   const std::string_view range = text.substr(letters_end);
@@ -112,9 +115,19 @@ HeaderPattern parse_header_pattern(std::string_view text) {
   return header;
 }
 
-ParameterRule to_rule(const ParameterSpec& spec) {
+/// Parses and checks one parameter of the command with pattern `header`.
+ParameterRule to_rule(const ParameterSpec& spec, std::string_view header) {
   return std::visit(Overloaded{
-                        [](const NumericParameter& numeric) -> ParameterRule { return numeric; },
+                        [&](const NumericParameter& numeric) -> ParameterRule {
+                          // A unit such as `Hz` would never match the upper-cased suffix, and
+                          // bounds that are NaN or reversed would reject every value.
+                          if (!std::ranges::all_of(numeric.unit, ascii::is_upper) ||
+                              !std::isfinite(numeric.min) || !std::isfinite(numeric.max) ||
+                              numeric.min > numeric.max) {
+                            reject("malformed numeric parameter", header);
+                          }
+                          return numeric;
+                        },
                         [](const BooleanParameter& boolean) -> ParameterRule { return boolean; },
                         [](const KeywordParameter& keyword) -> ParameterRule {
                           KeywordRule rule;
@@ -128,12 +141,21 @@ ParameterRule to_rule(const ParameterSpec& spec) {
                     spec);
 }
 
+/// Whether a typed suffix must lie in the pattern's range, or only be on a node that takes one.
+/// The second tells -114 "Header suffix out of range" apart from -113 "Undefined header".
+enum class SuffixRange { kChecked, kIgnored };
+
 /// Whether `typed` is the short or long form of `pattern`, with a suffix in its range if typed.
-bool matches(const MnemonicPattern& pattern, const Mnemonic& typed) {
+bool matches(const MnemonicPattern& pattern, const Mnemonic& typed,
+             SuffixRange range = SuffixRange::kChecked) {
   if (typed.name != pattern.short_form && typed.name != pattern.long_form) {
     return false;
   }
-  return !typed.suffix || (*typed.suffix >= 1 && *typed.suffix <= pattern.max_suffix);
+  if (!typed.suffix) {
+    return true;
+  }
+  return pattern.max_suffix > 0 && (range == SuffixRange::kIgnored ||
+                                    (*typed.suffix >= 1 && *typed.suffix <= pattern.max_suffix));
 }
 
 /// The suffix `typed` carries for `pattern`: 1 when omitted, 0 when the pattern takes none.
@@ -146,7 +168,7 @@ unsigned suffix_of(const MnemonicPattern& pattern, const Mnemonic& typed) {
 /// as deep as the pattern has nodes, which the command table fixes, never the input.
 // NOLINTBEGIN(misc-no-recursion)
 bool match_nodes(std::span<const HeaderNode> nodes, std::span<const Mnemonic> path,
-                 std::vector<unsigned>& suffixes) {
+                 SuffixRange range, std::vector<unsigned>& suffixes) {
   if (nodes.empty()) {
     return path.empty();
   }
@@ -157,13 +179,13 @@ bool match_nodes(std::span<const HeaderNode> nodes, std::span<const Mnemonic> pa
     if (node.mnemonic.max_suffix > 0) {
       suffixes.push_back(suffix);
     }
-    if (match_nodes(nodes.subspan(1), rest, suffixes)) {
+    if (match_nodes(nodes.subspan(1), rest, range, suffixes)) {
       return true;
     }
     suffixes.resize(mark);
     return false;
   };
-  if (!path.empty() && matches(node.mnemonic, path.front()) &&
+  if (!path.empty() && matches(node.mnemonic, path.front(), range) &&
       match_rest(suffix_of(node.mnemonic, path.front()), path.subspan(1))) {
     return true;
   }
@@ -171,10 +193,40 @@ bool match_nodes(std::span<const HeaderNode> nodes, std::span<const Mnemonic> pa
 }
 // NOLINTEND(misc-no-recursion)
 
-bool matches_header(const HeaderPattern& header, const ParsedCommand& command,
+bool matches_header(const HeaderPattern& header, const ParsedCommand& command, SuffixRange range,
                     std::vector<unsigned>& suffixes) {
   return header.common == command.common && header.query == command.query &&
-         match_nodes(header.nodes, command.path, suffixes);
+         match_nodes(header.nodes, command.path, range, suffixes);
+}
+
+/// Every path `header` accepts with each node typed in its short or long form and no suffix,
+/// optional nodes present and absent. A typed node without a suffix matches any suffix range, so
+/// another header can match some input of `header` exactly when it matches one of these paths.
+std::vector<ParsedCommand> spellings(const HeaderPattern& header) {
+  std::vector<std::vector<Mnemonic>> paths{{}};
+  for (const HeaderNode& node : header.nodes) {
+    std::vector<std::vector<Mnemonic>> longer;
+    for (const std::vector<Mnemonic>& path : paths) {
+      if (node.optional) {
+        longer.push_back(path);
+      }
+      for (const std::string* name : {&node.mnemonic.short_form, &node.mnemonic.long_form}) {
+        longer.push_back(path);
+        longer.back().push_back(Mnemonic{.name = *name, .suffix = std::nullopt});
+      }
+    }
+    paths = std::move(longer);
+  }
+  std::vector<ParsedCommand> commands;
+  commands.reserve(paths.size());
+  for (std::vector<Mnemonic>& path : paths) {
+    commands.push_back({.common = header.common,
+                        .absolute = true,
+                        .path = std::move(path),
+                        .query = header.query,
+                        .parameters = {}});
+  }
+  return commands;
 }
 
 /// IEEE 488.2 suffix multipliers, as powers of ten.
@@ -248,14 +300,17 @@ Conversion to_boolean(const ProgramData& data) {
     }
     return kIllegalParameterValue;
   }
-  const auto& number = std::get<Number>(data);
-  if (!number.suffix.empty()) {
+  const auto* number = std::get_if<Number>(&data);
+  if (number == nullptr) {
+    return kDataTypeError;
+  }
+  if (!number->suffix.empty()) {
     return kInvalidSuffix;
   }
-  if (std::isnan(number.value)) {
+  if (std::isnan(number->value)) {
     return kDataOutOfRange;
   }
-  return Argument{std::round(number.value) != 0.0};
+  return Argument{std::round(number->value) != 0.0};
 }
 
 Conversion to_choice(const KeywordRule& rule, const ProgramData& data) {
@@ -280,19 +335,19 @@ Conversion convert(const ParameterRule& rule, const ProgramData& data) {
                     rule);
 }
 
-/// Converts every parameter into `values`, or returns the first error: the count is checked
-/// before any value.
-std::optional<ScpiError> convert_all(const std::vector<ParameterRule>& rules,
+/// Converts every parameter sent into `values`, or returns the first error: the count (at least
+/// `required`, at most one per rule) is checked before any value.
+std::optional<ScpiError> convert_all(const std::vector<ParameterRule>& rules, std::size_t required,
                                      const std::vector<ProgramData>& parameters,
                                      std::vector<Argument>& values) {
   if (parameters.size() > rules.size()) {
     return kParameterNotAllowed;
   }
-  if (parameters.size() < rules.size()) {
+  if (parameters.size() < required) {
     return kMissingParameter;
   }
-  values.reserve(rules.size());
-  for (std::size_t i = 0; i < rules.size(); ++i) {
+  values.reserve(parameters.size());
+  for (std::size_t i = 0; i < parameters.size(); ++i) {
     Conversion converted = convert(rules[i], parameters[i]);
     if (auto* error = std::get_if<ScpiError>(&converted)) {
       return std::move(*error);
@@ -306,15 +361,26 @@ std::optional<ScpiError> convert_all(const std::vector<ParameterRule>& rules,
 
 void CommandTree::add(Command command) {
   if (!command.handler) {
-    throw std::invalid_argument("SCPI command without a handler: '" + std::string(command.header) +
-                                "'");
+    reject("SCPI command without a handler", command.header);
+  }
+  if (command.optional_parameters > command.parameters.size()) {
+    reject("more optional parameters than parameters", command.header);
   }
   Entry entry{.header = parse_header_pattern(command.header),
               .parameters = {},
+              .required_parameters = command.parameters.size() - command.optional_parameters,
               .handler = std::move(command.handler)};
+  for (const ParsedCommand& spelling : spellings(entry.header)) {
+    std::vector<unsigned> unused;
+    if (std::ranges::any_of(entries_, [&](const Entry& existing) {
+          return matches_header(existing.header, spelling, SuffixRange::kChecked, unused);
+        })) {
+      reject("SCPI header overlaps one already added", command.header);
+    }
+  }
   entry.parameters.reserve(command.parameters.size());
   for (const ParameterSpec& spec : command.parameters) {
-    entry.parameters.push_back(to_rule(spec));
+    entry.parameters.push_back(to_rule(spec, command.header));
   }
   entries_.push_back(std::move(entry));
 }
@@ -336,17 +402,20 @@ std::optional<std::string> CommandTree::execute(Session& session, std::string_vi
     }
     Arguments arguments;
     const auto entry = std::ranges::find_if(entries_, [&](const Entry& candidate) {
-      return matches_header(candidate.header, command, arguments.suffixes);
+      return matches_header(candidate.header, command, SuffixRange::kChecked, arguments.suffixes);
     });
     if (entry == entries_.end()) {
-      session.push_error(kUndefinedHeader);
+      const bool suffix_out_of_range = std::ranges::any_of(entries_, [&](const Entry& candidate) {
+        return matches_header(candidate.header, command, SuffixRange::kIgnored, arguments.suffixes);
+      });
+      session.push_error(suffix_out_of_range ? kHeaderSuffixOutOfRange : kUndefinedHeader);
       break;
     }
     if (!command.common) {
       current_path.assign(command.path.begin(), command.path.end() - 1);
     }
-    if (std::optional<ScpiError> error =
-            convert_all(entry->parameters, command.parameters, arguments.values)) {
+    if (std::optional<ScpiError> error = convert_all(entry->parameters, entry->required_parameters,
+                                                     command.parameters, arguments.values)) {
       session.push_error(std::move(*error));
       break;
     }

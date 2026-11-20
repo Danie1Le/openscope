@@ -10,26 +10,39 @@
 #include <utility>
 #include <vector>
 
-// The grammar, after IEEE 488.2 and SCPI-99, limited to the data types OpenScope commands take:
+#include "openscope/scpi/ascii.hpp"
+
+// The grammar, after IEEE 488.2 and SCPI-99:
 //
 //   line      = ws* [ command { ws* ";" ws* command } ] ws*
 //   command   = header [ ws+ parameter { ws* "," ws* parameter } ]
 //   header    = "*" mnemonic [ "?" ]
 //             | [ ":" ] mnemonic { ":" mnemonic } [ "?" ]
 //   mnemonic  = letter { letter | digit | "_" }      trailing digits are the numeric suffix
-//   parameter = number | mnemonic
+//   parameter = number | mnemonic | string | radix | block
 //   number    = [ "+" | "-" ] ( digit+ [ "." digit* ] | "." digit+ )
 //               [ ( "E" | "e" ) [ "+" | "-" ] digit+ ] [ ws* letter+ ]
-//   ws        = " " | "\t"
+//   string    = '"' { byte other than '"' | '""' } '"' | "'" { byte other than "'" | "''" } "'"
+//   radix     = "#" ( ( "H" | "h" ) hex-digit+ | ( "Q" | "q" ) octal-digit+ | ( "B" | "b" ) bit+ )
+//   block     = "#" nonzero-digit length bytes    the first digit says how many digits `length`
+//                                                 has; then exactly `length` bytes of any value
+//             | "#0" bytes                        the rest of the line
+//   ws        = any byte from 0x00 to 0x20 except "\n"   (IEEE 488.2 7.4.1.2 white space)
 //
-// Strings, block data and non-decimal numbers are not part of it, so they are syntax errors.
+// No OpenScope command takes a string, radix number or block, so they are parsed only for their
+// extent, and the command reports -104 "Data type error" rather than a syntax error.
 
 namespace openscope::scpi {
 namespace {
 
-bool is_letter(char c) { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'); }
-bool is_digit(char c) { return c >= '0' && c <= '9'; }
-bool is_space(char c) { return c == ' ' || c == '\t'; }
+using ascii::is_digit;
+using ascii::is_letter;
+using ascii::to_upper;
+
+bool is_space(char c) {
+  const auto byte = static_cast<unsigned char>(c);
+  return byte <= 0x20 && c != '\n';
+}
 bool is_mnemonic_char(char c) { return is_letter(c) || is_digit(c) || c == '_'; }
 
 /// A read position in one line.
@@ -44,10 +57,24 @@ class Scanner {
   }
 
   /// The character `ahead` places past the read position, or '\0' past the end. Callers only
-  /// test it with the character-class predicates above, which all reject '\0'.
+  /// compare it with letters, digits and punctuation, never with white space (which includes a
+  /// real '\0'), so the end reads as no match.
   [[nodiscard]] char peek(std::size_t ahead = 0) const {
     return pos_ + ahead < text_.size() ? text_[pos_ + ahead] : '\0';
   }
+
+  /// Consumes the next `count` bytes, whatever they are, or returns nullopt (consuming nothing)
+  /// when fewer remain.
+  std::optional<std::string_view> take(std::size_t count) {
+    if (count > text_.size() - pos_) {
+      return std::nullopt;
+    }
+    pos_ += count;
+    return text_.substr(pos_ - count, count);
+  }
+
+  /// Consumes the rest of the line.
+  void take_rest() { pos_ = text_.size(); }
 
   /// Consumes `c` if it is next.
   bool accept(char c) {
@@ -158,7 +185,75 @@ std::optional<Number> scan_number(Scanner& scanner) {
   return number;
 }
 
+/// Consumes a string that starts at the read position with `quote`; a doubled quote inside it is
+/// one quote character. False when the string is not closed.
+bool skip_string(Scanner& scanner, char quote) {
+  scanner.accept(quote);
+  for (;;) {
+    scanner.take_while([quote](char c) { return c != quote; });
+    if (!scanner.accept(quote)) {
+      return false;
+    }
+    if (!scanner.accept(quote)) {
+      return true;
+    }
+  }
+}
+
+/// The digits a radix number may use after `#H`, `#Q` or `#B` (`letter`, any case), or an empty
+/// set for any other letter.
+std::string_view radix_digits(char letter) {
+  switch (letter) {
+    case 'H':
+    case 'h':
+      return "0123456789ABCDEFabcdef";
+    case 'Q':
+    case 'q':
+      return "01234567";
+    case 'B':
+    case 'b':
+      return "01";
+    default:
+      return {};
+  }
+}
+
+/// Consumes a radix number or block that starts at the read position with `#`. False when it is
+/// malformed.
+bool skip_hash_data(Scanner& scanner) {
+  scanner.accept('#');
+  if (const std::string_view digits = radix_digits(scanner.peek()); !digits.empty()) {
+    scanner.take(1);
+    return !scanner.take_while([digits](char c) { return digits.find(c) != digits.npos; }).empty();
+  }
+  if (scanner.accept('0')) {
+    scanner.take_rest();  // An indefinite block runs to the end of the message.
+    return true;
+  }
+  if (!is_digit(scanner.peek())) {
+    return false;
+  }
+  const auto length_digits = static_cast<std::size_t>(scanner.peek() - '0');
+  scanner.take(1);
+  const std::optional<std::string_view> length_text = scanner.take(length_digits);
+  std::size_t length = 0;
+  if (!length_text ||
+      std::from_chars(length_text->data(), length_text->data() + length_text->size(), length).ptr !=
+          length_text->data() + length_text->size()) {
+    return false;
+  }
+  return scanner.take(length).has_value();
+}
+
 std::optional<ProgramData> scan_parameter(Scanner& scanner) {
+  const char first = scanner.peek();
+  if (first == '"' || first == '\'') {
+    return skip_string(scanner, first) ? std::optional<ProgramData>{UnsupportedData{}}
+                                       : std::nullopt;
+  }
+  if (first == '#') {
+    return skip_hash_data(scanner) ? std::optional<ProgramData>{UnsupportedData{}} : std::nullopt;
+  }
   if (const auto token = scan_mnemonic(scanner)) {
     return split_suffix(*token);
   }
@@ -214,16 +309,6 @@ std::optional<std::vector<ParsedCommand>> parse_line(std::string_view line) {
     return std::nullopt;
   }
   return commands;
-}
-
-std::string to_upper(std::string_view text) {
-  std::string upper(text);
-  for (char& c : upper) {
-    if (c >= 'a' && c <= 'z') {
-      c = static_cast<char>(c - 'a' + 'A');
-    }
-  }
-  return upper;
 }
 
 }  // namespace openscope::scpi

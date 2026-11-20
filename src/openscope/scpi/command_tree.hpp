@@ -14,11 +14,12 @@ namespace openscope::scpi {
 
 /// A number accepted within [min, max] after its unit suffix is applied. `unit` is the
 /// upper-case base unit the parameter may be written with (`"HZ"`, `"V"`, `"S"`), optionally
-/// behind an SI multiplier (`KHZ`, `MV`); empty means no suffix is allowed.
+/// behind an SI multiplier (`KHZ`, `MV`); empty means no suffix is allowed. The bounds are finite
+/// with min <= max. The unit is owned, so the tree never holds a view into the caller's text.
 struct NumericParameter {
   double min;
   double max;
-  std::string_view unit;
+  std::string unit;
 };
 
 /// SCPI-99 boolean: `ON`, `OFF`, or a number that is rounded, with non-zero meaning ON.
@@ -48,7 +49,8 @@ using Argument = std::variant<double, bool, Choice>;
 struct Arguments {
   /// One value per header node that takes a suffix, in header order (1 when omitted).
   std::vector<unsigned> suffixes;
-  /// One value per declared parameter, in order.
+  /// One value per parameter the caller sent, in declaration order. Optional trailing parameters
+  /// that were left out have no value, so the handler applies their defaults.
   std::vector<Argument> values;
 };
 
@@ -62,6 +64,9 @@ using Handler = std::function<std::optional<std::string>(Session&, const Argumen
 struct Command {
   std::string_view header;
   std::vector<ParameterSpec> parameters;
+  /// How many of the last `parameters` a caller may leave out, as in
+  /// `SOURce<n>:FAULt GLITch|DROPout|FSTep[,<magnitude>[,<duration>]]` (2).
+  std::size_t optional_parameters = 0;
   Handler handler;
 };
 
@@ -106,7 +111,10 @@ using ParameterRule = std::variant<NumericParameter, BooleanParameter, KeywordRu
 class CommandTree {
  public:
   /// Registers `command`. Throws std::invalid_argument when a header or keyword pattern is
-  /// malformed or the handler is empty, so a typo in the command table fails at start-up.
+  /// malformed, a numeric parameter has a unit that is not upper-case letters or bounds that are
+  /// not finite with min <= max, more parameters are optional than declared, the handler is
+  /// empty, or some input could match both this header and one already added (the first added
+  /// would always win). A mistake in the command table so fails at start-up, not per request.
   void add(Command command);
 
   /// Executes one line for `session` and returns the replies of its queries, joined with `;`, or
@@ -119,6 +127,8 @@ class CommandTree {
   struct Entry {
     detail::HeaderPattern header;
     std::vector<detail::ParameterRule> parameters;
+    /// How many leading parameters a caller must send.
+    std::size_t required_parameters;
     Handler handler;
   };
 
