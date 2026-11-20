@@ -24,8 +24,12 @@ struct Number {
   std::string suffix;
 };
 
-/// One parameter (program data element): a decimal number or a keyword.
-using ProgramData = std::variant<Number, Mnemonic>;
+/// A string, non-decimal number (`#H1F`) or block: well-formed IEEE 488.2 data that no OpenScope
+/// command takes. Only its extent is parsed; converting it reports -104 "Data type error".
+struct UnsupportedData {};
+
+/// One parameter (program data element): a decimal number, a keyword, or data no command takes.
+using ProgramData = std::variant<Number, Mnemonic, UnsupportedData>;
 
 /// One command (program message unit) of a line, parsed but not yet matched to a command.
 struct ParsedCommand {
@@ -45,9 +49,5 @@ struct ParsedCommand {
 /// line breaks the grammar (written out at the top of parser.cpp). An empty or blank line has no
 /// commands.
 std::optional<std::vector<ParsedCommand>> parse_line(std::string_view line);
-
-/// Upper-cases ASCII letters only, so the result never depends on the C locale. Headers, keywords
-/// and suffixes are compared upper-cased, so both the parser and the command tree use it.
-std::string to_upper(std::string_view text);
 
 }  // namespace openscope::scpi

@@ -31,7 +31,7 @@ With Clang, the sanitizer and coverage presets need the compiler runtime (`libcl
 
 ## Fuzzing
 
-The `fuzz` preset (always Clang) builds a libFuzzer target that feeds raw bytes, split into lines, to the instrument's execute-line entry point under ASan and UBSan. CI runs it for 60 seconds on every pull request; run it longer locally:
+The `fuzz` preset (always Clang) builds a libFuzzer target that feeds raw bytes, split into lines, to the instrument's execute-line entry point under ASan and UBSan. Each line goes to one of two Sessions, picked by the low bit of its first byte, so cross-Session paths are fuzzed too. CI runs it for 60 seconds on every pull request; run it longer locally:
 
 ```sh
 cmake --preset fuzz && cmake --build --preset fuzz
