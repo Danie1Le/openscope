@@ -13,3 +13,6 @@ target_compile_options(openscope_warnings INTERFACE
   -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion)
 
 enable_testing()
+
+add_subdirectory(src)
+add_subdirectory(tests)
