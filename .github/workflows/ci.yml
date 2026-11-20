@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # Pull requests share a group per ref, so a newer push cancels the superseded run. Pushes to main
+  # get a group per commit: a shared group would let GitHub drop a queued run when another arrives.
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  format:
+    name: Format
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: clang-format
+        run: |
+          files=$(git ls-files '*.cpp' '*.hpp')
+          if [ -n "$files" ]; then clang-format-18 --dry-run --Werror $files; fi
+
+  build-test:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: GCC debug, preset: debug, cxx: g++-14 }
+          - { name: GCC release, preset: release, cxx: g++-14 }
+          # clang-tidy runs on every translation unit as it compiles; .clang-tidy makes findings errors.
+          - name: Clang debug + clang-tidy
+            preset: debug
+            cxx: clang++-18
+            configure-args: -DCMAKE_CXX_CLANG_TIDY=clang-tidy-18
+          - { name: ASan + UBSan, preset: asan, cxx: clang++-18 }
+          - { name: TSan, preset: tsan, cxx: clang++-18 }
+    env:
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/setup-vcpkg
+      # The runner's high ASLR entropy breaks TSan ("unexpected memory mapping").
+      - if: matrix.preset == 'tsan'
+        run: sudo sysctl vm.mmap_rnd_bits=28
+      - run: cmake --preset ${{ matrix.preset }} ${{ matrix.configure-args }}
+      - run: cmake --build --preset ${{ matrix.preset }}
+      - run: ctest --preset ${{ matrix.preset }}
