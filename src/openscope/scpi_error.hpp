@@ -24,7 +24,7 @@ inline const ScpiError kDataTypeError{.code = -104, .message = "Data type error"
 /// More parameters than the command takes.
 inline const ScpiError kParameterNotAllowed{.code = -108, .message = "Parameter not allowed"};
 
-/// Fewer parameters than the command takes.
+/// Fewer parameters than the command requires.
 inline const ScpiError kMissingParameter{.code = -109, .message = "Missing parameter"};
 
 /// A command header that matches no command, including a suffix on a node that takes none.
