@@ -21,8 +21,9 @@ class Instrument {
   SessionId open_session();
 
   /// Executes one line of SCPI text for `session` and returns its reply, if it has one.
-  /// Errors are pushed onto that Session's error queue, not returned. Throws std::out_of_range
-  /// for a SessionId this Instrument did not open.
+  /// `line` excludes its terminator: the transport strips the trailing `\n` and an optional `\r`
+  /// before calling. Errors are pushed onto that Session's error queue, not returned. Throws
+  /// std::out_of_range for a SessionId this Instrument did not open.
   std::optional<std::string> execute(SessionId session, std::string_view line);
 
  private:

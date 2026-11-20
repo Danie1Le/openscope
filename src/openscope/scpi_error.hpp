@@ -1,20 +1,20 @@
 #pragma once
 
-#include <string_view>
+#include <string>
 
 namespace openscope {
 
 /// One entry in a Session's error queue: a SCPI error code and its message, as `SYST:ERR?`
-/// reports them.
+/// reports them. The message is owned, so handlers may build it at run time.
 struct ScpiError {
   int code;
-  std::string_view message;
+  std::string message;
 };
 
 /// What `SYST:ERR?` reports when the error queue is empty.
-inline constexpr ScpiError kNoError{.code = 0, .message = "No error"};
+inline const ScpiError kNoError{.code = 0, .message = "No error"};
 
 /// A command header that matches no command.
-inline constexpr ScpiError kUndefinedHeader{.code = -113, .message = "Undefined header"};
+inline const ScpiError kUndefinedHeader{.code = -113, .message = "Undefined header"};
 
 }  // namespace openscope

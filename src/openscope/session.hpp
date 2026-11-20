@@ -1,24 +1,26 @@
 #pragma once
 
 #include <deque>
+#include <utility>
 
 #include "openscope/scpi_error.hpp"
 
 namespace openscope {
 
-/// The state one connected client owns (ADR 0002): its error queue. Everything else is
+/// The state one connected client owns (ADR 0002): its error queue and its waveform-transfer
+/// settings (`WAV:SOUR`, `WAV:FORM`). Everything that changes the signal or acquisition is
 /// instrument-wide and lives in the Instrument.
 class Session {
  public:
   /// Appends `error` behind the errors already queued.
-  void push_error(ScpiError error) { errors_.push_back(error); }
+  void push_error(ScpiError error) { errors_.push_back(std::move(error)); }
 
   /// Removes and returns the oldest error, or `kNoError` when the queue is empty.
   ScpiError pop_error() {
     if (errors_.empty()) {
       return kNoError;
     }
-    const ScpiError oldest = errors_.front();
+    ScpiError oldest = std::move(errors_.front());
     errors_.pop_front();
     return oldest;
   }
