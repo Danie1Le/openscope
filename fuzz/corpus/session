@@ -1,0 +1,4 @@
+*IDN?;SYST:ERR:NEXT?
+*CLS 1
+ syst:err? ; :SYSTem:ERRor?
+*RST;BOGUS 1.5E-3MV,ON
