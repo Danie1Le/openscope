@@ -1,0 +1,6 @@
+find_package(GTest CONFIG REQUIRED)
+include(GoogleTest)
+
+add_executable(openscope_tests instrument_test.cpp)
+target_link_libraries(openscope_tests PRIVATE openscope openscope_warnings GTest::gmock_main)
+gtest_discover_tests(openscope_tests)
