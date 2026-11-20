@@ -141,6 +141,15 @@ TEST_F(InstrumentTest, CommandsSeparatedBySemicolonsRunInOrderAndRepliesAreJoine
             R"(-113,"Undefined header";)" + idn + R"(;0,"No error")");
 }
 
+// A stray CR, as from a script that ends lines with "\r\r\n", is white space, not a syntax error.
+TEST_F(InstrumentTest, CarriageReturnAndOtherControlBytesAreWhiteSpace) {
+  const std::string idn = session.send("*IDN?").value_or("");
+
+  EXPECT_EQ(session.send("*IDN?\r"), idn);
+  EXPECT_EQ(session.send("\v*IDN?\r;\t*IDN?\r"), idn + ";" + idn);
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
 TEST_F(InstrumentTest, ParameterOnACommandThatTakesNoneQueuesParameterNotAllowed) {
   session.send("BOGUS");
 
