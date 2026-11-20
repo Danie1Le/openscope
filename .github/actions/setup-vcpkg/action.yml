@@ -1,7 +1,7 @@
 name: Set up vcpkg
 description: >
-  Fetches vcpkg into VCPKG_ROOT at the builtin-baseline commit from vcpkg.json and restores
-  its binary cache.
+  Fetches vcpkg at the builtin-baseline commit from vcpkg.json, exports VCPKG_ROOT for later
+  steps, and restores vcpkg's binary cache.
 
 runs:
   using: composite
@@ -15,6 +15,8 @@ runs:
     - name: Fetch and bootstrap vcpkg
       shell: bash
       run: |
+        export VCPKG_ROOT="$RUNNER_TEMP/vcpkg"
+        echo "VCPKG_ROOT=$VCPKG_ROOT" >> "$GITHUB_ENV"
         commit=$(jq -r '."builtin-baseline"' vcpkg.json)
         git init --quiet "$VCPKG_ROOT"
         git -C "$VCPKG_ROOT" fetch --quiet --depth 1 https://github.com/microsoft/vcpkg "$commit"

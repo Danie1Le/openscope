@@ -13,9 +13,6 @@ concurrency:
   # Superseded PR pushes are cancelled; every commit on main keeps its own result.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-env:
-  VCPKG_ROOT: ${{ github.workspace }}/../vcpkg
-
 jobs:
   format:
     name: Format
