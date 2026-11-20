@@ -1,0 +1,3 @@
+# Error queue and waveform-transfer settings are per Session
+
+Real instruments keep one error queue and one `WAVeform:SOURce`/`FORMat` for everyone. OpenScope allows up to 8 concurrent clients (for example parallel pytest workers and the browser), and shared transfer settings would let one client's `WAV:SOUR CHAN2` corrupt another's `WAV:DATA?`. So the error queue, `WAV:SOUR` and `WAV:FORM` belong to each Session, and `*CLS` clears only the caller's queue. Everything that changes the signal or acquisition (channels, timebase, trigger, run state, generators) stays instrument-wide.
