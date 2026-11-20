@@ -10,29 +10,22 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Superseded PR pushes are cancelled; every commit on main keeps its own result.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # Must match builtin-baseline in vcpkg.json.
-  VCPKG_COMMIT: 9eec002df1cd109f8f104cd966a763daf9751489
   VCPKG_ROOT: ${{ github.workspace }}/../vcpkg
 
 jobs:
-  format-lint:
-    name: Format and lint
+  format:
+    name: Format
     runs-on: ubuntu-24.04
-    env:
-      CXX: clang++-18
     steps:
       - uses: actions/checkout@v4
       - name: clang-format
         run: |
           files=$(git ls-files '*.cpp' '*.hpp')
           if [ -n "$files" ]; then clang-format-18 --dry-run --Werror $files; fi
-      - uses: ./.github/actions/setup-vcpkg
-      - run: cmake --preset debug
-      - name: clang-tidy
-        run: run-clang-tidy-18 -p build/debug -quiet
 
   build-test:
     name: ${{ matrix.name }}
@@ -42,7 +35,8 @@ jobs:
       matrix:
         include:
           - { name: GCC debug, preset: debug, cxx: g++-14 }
-          - { name: Clang debug, preset: debug, cxx: clang++-18 }
+          - { name: GCC release, preset: release, cxx: g++-14 }
+          - { name: Clang debug + clang-tidy, preset: debug, cxx: clang++-18, tidy: true }
           - { name: ASan + UBSan, preset: asan, cxx: clang++-18 }
           - { name: TSan, preset: tsan, cxx: clang++-18 }
     env:
@@ -54,5 +48,8 @@ jobs:
       - if: matrix.preset == 'tsan'
         run: sudo sysctl vm.mmap_rnd_bits=28
       - run: cmake --preset ${{ matrix.preset }}
+      - if: matrix.tidy
+        name: clang-tidy
+        run: run-clang-tidy-18 -clang-tidy-binary clang-tidy-18 -p build/${{ matrix.preset }} -quiet
       - run: cmake --build --preset ${{ matrix.preset }}
       - run: ctest --preset ${{ matrix.preset }}
