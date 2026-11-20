@@ -28,3 +28,16 @@ CXX=clang++-18 cmake --fresh --preset debug -DCMAKE_CXX_CLANG_TIDY=clang-tidy-18
 ```
 
 With Clang, the sanitizer and coverage presets need the compiler runtime (`libclang-rt-18-dev` on Ubuntu).
+
+## Fuzzing
+
+The `fuzz` preset (always Clang) builds a libFuzzer target that feeds raw bytes, split into lines, to the instrument's execute-line entry point under ASan and UBSan. Each line goes to one of two Sessions, picked by the low bit of its first byte, so cross-Session paths are fuzzed too. CI runs it for 60 seconds on every pull request; run it longer locally:
+
+```sh
+cmake --preset fuzz && cmake --build --preset fuzz
+mkdir -p fuzz-corpus
+build/fuzz/fuzz/execute_line_fuzzer -max_total_time=600 -max_len=8192 -dict=fuzz/scpi.dict \
+  fuzz-corpus fuzz/corpus
+```
+
+New inputs go to `fuzz-corpus`, the first directory; `fuzz/corpus` holds the committed seeds. A crash leaves the input in a `crash-*` file; pass that file to the fuzzer to replay it.

@@ -54,3 +54,28 @@ jobs:
       - run: cmake --preset ${{ matrix.preset }} ${{ matrix.configure-args }}
       - run: cmake --build --preset ${{ matrix.preset }}
       - run: ctest --preset ${{ matrix.preset }}
+
+  fuzz:
+    name: Fuzz smoke (60 s)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CXX: clang++-18 # The fuzz preset pins it; set here so the vcpkg cache key matches.
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/setup-vcpkg
+      - run: cmake --preset fuzz
+      - run: cmake --build --preset fuzz
+      # Inputs up to 8 KB cross the 4 KB line limit, and a seed starts there. New inputs go to the
+      # scratch corpus (the first directory). A crash or a 10 s hang fails the job.
+      - name: Fuzz the execute-line entry point
+        run: |
+          mkdir -p fuzz-corpus fuzz-artifacts
+          build/fuzz/fuzz/execute_line_fuzzer -max_total_time=60 -max_len=8192 -timeout=10 \
+            -dict=fuzz/scpi.dict -artifact_prefix=fuzz-artifacts/ fuzz-corpus fuzz/corpus
+      - name: Upload crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fuzz-artifacts
+          path: fuzz-artifacts/

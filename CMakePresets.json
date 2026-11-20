@@ -47,6 +47,16 @@
         "CMAKE_CXX_COMPILER": "clang++-18",
         "CMAKE_CXX_FLAGS": "-fprofile-instr-generate -fcoverage-mapping"
       }
+    },
+    {
+      "name": "fuzz",
+      "displayName": "libFuzzer + AddressSanitizer + UndefinedBehaviorSanitizer (Clang)",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "clang++-18",
+        "CMAKE_CXX_FLAGS": "-fsanitize=fuzzer-no-link,address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer",
+        "OPENSCOPE_FUZZ": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -54,7 +64,8 @@
     { "name": "release", "configurePreset": "release" },
     { "name": "asan", "configurePreset": "asan" },
     { "name": "tsan", "configurePreset": "tsan" },
-    { "name": "coverage", "configurePreset": "coverage" }
+    { "name": "coverage", "configurePreset": "coverage" },
+    { "name": "fuzz", "configurePreset": "fuzz", "targets": ["execute_line_fuzzer"] }
   ],
   "testPresets": [
     {

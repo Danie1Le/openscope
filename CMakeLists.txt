@@ -14,5 +14,10 @@ target_compile_options(openscope_warnings INTERFACE
 
 enable_testing()
 
+option(OPENSCOPE_FUZZ "Build the libFuzzer targets (Clang only; the fuzz preset sets it)" OFF)
+
 add_subdirectory(src)
 add_subdirectory(tests)
+if(OPENSCOPE_FUZZ)
+  add_subdirectory(fuzz)
+endif()
