@@ -1,6 +1,6 @@
 # OpenScope
 
-A software oscilloscope engine in C++20: simulated signals are sampled, triggered into captures, measured, and exposed to scripts over SCPI. See `GLOSSARY.md` for the domain vocabulary and `docs/adr/` for the main design decisions.
+A software oscilloscope engine in C++20: simulated signals are sampled, triggered into captures, measured, and exposed to scripts over SCPI. See `GLOSSARY.md` for the domain vocabulary, `docs/adr/` for the main design decisions and `docs/scpi-reference.md` for the SCPI grammar, error codes and commands.
 
 ## Build and test
 
