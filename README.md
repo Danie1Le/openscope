@@ -12,7 +12,7 @@ cmake --build --preset debug
 ctest --preset debug
 ```
 
-Presets: `debug`, `release`, `asan` (AddressSanitizer + UndefinedBehaviorSanitizer), `tsan` (ThreadSanitizer) and `coverage` (Clang only). Each builds into `build/<preset>`. Warnings are errors in every preset.
+Presets: `debug`, `release`, `asan` (AddressSanitizer + UndefinedBehaviorSanitizer), `tsan` (ThreadSanitizer) and `coverage` (always Clang, for llvm-cov). Each builds into `build/<preset>`. Warnings are errors in every preset.
 
 Formatting and lint use the committed `.clang-format` and `.clang-tidy`:
 

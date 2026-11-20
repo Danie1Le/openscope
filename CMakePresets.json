@@ -43,7 +43,10 @@
       "name": "coverage",
       "displayName": "Coverage (Clang source-based, for llvm-cov)",
       "inherits": "base",
-      "cacheVariables": { "CMAKE_CXX_FLAGS": "-fprofile-instr-generate -fcoverage-mapping" }
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "clang++-18",
+        "CMAKE_CXX_FLAGS": "-fprofile-instr-generate -fcoverage-mapping"
+      }
     }
   ],
   "buildPresets": [
