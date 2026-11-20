@@ -18,5 +18,7 @@ Formatting and lint use the committed `.clang-format` and `.clang-tidy`:
 
 ```sh
 clang-format-18 --dry-run --Werror $(git ls-files '*.cpp' '*.hpp')
-run-clang-tidy-18 -p build/debug -quiet   # on a build configured with CXX=clang++-18
+CXX=clang++-18 cmake --preset debug -DCMAKE_CXX_CLANG_TIDY=clang-tidy-18   # then build: findings fail it
 ```
+
+With Clang, the sanitizer and coverage presets need the compiler runtime (`libclang-rt-18-dev` on Ubuntu).
