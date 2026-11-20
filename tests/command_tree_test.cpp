@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <limits>
 #include <optional>
@@ -239,14 +240,18 @@ TEST_F(CommandTreeTest, HeaderSuffixesReachTheHandlerDefaultingToOne) {
 TEST_F(CommandTreeTest, HeaderSuffixOutsideItsRangeQueuesHeaderSuffixOutOfRange) {
   for (const char* line :
        {"SOUR0:FREQ 1", "SOUR5:FREQ 1", "SOUR99999999999999999999:FREQ 1", "CALC3:CLE",
-        "CALC:MATH4:CLE", "CALC0:MATH0:CLE", "source5:frequency 1", "SOUR2:FREQ 1;:SOUR5:FREQ 1"}) {
-    calls.clear();
-    send(line);
-    EXPECT_EQ(next_error_code(), kHeaderSuffixOutOfRange.code) << line;
-    EXPECT_EQ(next_error_code(), 0) << line;
-    EXPECT_EQ(calls.size(), std::string_view(line).find(';') == std::string_view::npos ? 0U : 1U)
-        << line;
+        "CALC:MATH4:CLE", "CALC0:MATH0:CLE", "source5:frequency 1"}) {
+    expect_rejected(line, kHeaderSuffixOutOfRange.code);
   }
+}
+
+TEST_F(CommandTreeTest, HeaderSuffixOutOfRangeDiscardsTheRestOfTheLine) {
+  send("SOUR2:FREQ 1;:SOUR5:FREQ 1;:SOUR3:FREQ 1");
+
+  ASSERT_EQ(calls.size(), 1U);
+  EXPECT_EQ(calls[0].arguments.suffixes, std::vector<unsigned>{2});
+  EXPECT_EQ(next_error_code(), kHeaderSuffixOutOfRange.code);
+  EXPECT_EQ(next_error_code(), 0);
 }
 
 TEST_F(CommandTreeTest, SuffixOnANodeThatTakesNoneIsUndefined) {
@@ -309,9 +314,8 @@ TEST_F(CommandTreeTest, WhitespaceMaySurroundParametersAndSeparators) {
 // IEEE 488.2 7.4.1.2: white space is any byte from 0x00 to 0x20 except newline.
 TEST_F(CommandTreeTest, EveryIeee4882WhiteSpaceByteSeparatesTokens) {
   for (const char byte : {'\0', '\x01', '\t', '\v', '\f', '\r', '\x1F', ' '}) {
-    const std::string ws(1, byte);
-    const std::string line =
-        ws + "TEST:PAIR" + ws + "1" + ws + "," + ws + "2" + ws + ";" + ws + "*TST?" + ws;
+    std::string line = "_TEST:PAIR_1_,_2_;_*TST?_";
+    std::ranges::replace(line, '_', byte);
     calls.clear();
     EXPECT_EQ(send(line), "0") << static_cast<int>(byte);
     EXPECT_EQ(calls.size(), 2U) << static_cast<int>(byte);
@@ -427,6 +431,25 @@ TEST_F(CommandTreeTest, ErrorDiscardsTheRestOfTheLineButNotWhatAlreadyRan) {
   }
 }
 
+TEST_F(CommandTreeTest, ExecutionErrorFromAHandlerDiscardsTheRestOfTheLine) {
+  const ScpiError conflict{.code = -221, .message = "Settings conflict"};
+  tree.add({.header = "TEST:FAIL",
+            .parameters = {},
+            .handler = [this, conflict](Session&, const Arguments& arguments) -> HandlerResult {
+              calls.push_back({.header = "TEST:FAIL", .arguments = arguments});
+              return conflict;
+            }});
+
+  EXPECT_EQ(send("*TST?;:TEST:FAIL;*TST?;:CHAN:DISP ON"), "0");
+
+  ASSERT_EQ(calls.size(), 2U);
+  EXPECT_EQ(calls[1].header, "TEST:FAIL");
+  const ScpiError queued = session.pop_error();
+  EXPECT_EQ(queued.code, conflict.code);
+  EXPECT_EQ(queued.message, conflict.message);
+  EXPECT_EQ(next_error_code(), 0);
+}
+
 TEST_F(CommandTreeTest, RelativeHeadersContinueFromThePreviousPath) {
   send("TRIG:MODE AUTO;SOUR CHAN2;MODE NORM");
 
@@ -486,16 +509,23 @@ std::optional<std::string> no_reply(Session& /*session*/, const Arguments& /*arg
 }
 
 /// Whether adding a command with `header` and `parameters` throws std::invalid_argument.
-bool rejected(std::string_view header, std::vector<ParameterSpec> parameters = {},
-              Handler handler = no_reply) {
-  CommandTree tree;
+/// Whether `tree.add(command)` throws std::invalid_argument.
+bool add_rejected(CommandTree& tree, Command command) {
   try {
-    tree.add(
-        {.header = header, .parameters = std::move(parameters), .handler = std::move(handler)});
+    tree.add(std::move(command));
   } catch (const std::invalid_argument&) {
     return true;
   }
   return false;
+}
+
+bool rejected(std::string_view header, std::vector<ParameterSpec> parameters = {},
+              Handler handler = no_reply, std::size_t optional_parameters = 0) {
+  CommandTree tree;
+  return add_rejected(tree, {.header = header,
+                             .parameters = std::move(parameters),
+                             .optional_parameters = optional_parameters,
+                             .handler = std::move(handler)});
 }
 
 TEST(CommandTreePatternTest, MalformedPatternsAreRejectedWhenAdded) {
@@ -542,20 +572,12 @@ TEST(CommandTreePatternTest, WellFormedPatternsAreAccepted) {
 }
 
 TEST(CommandTreePatternTest, OptionalParameterCountIsCheckedWhenAdded) {
+  const std::vector<ParameterSpec> pair = {BooleanParameter{}, BooleanParameter{}};
   for (const std::size_t optional : {0U, 1U, 2U}) {
-    CommandTree tree;
-    EXPECT_NO_THROW(tree.add({.header = "PAIR",
-                              .parameters = {BooleanParameter{}, BooleanParameter{}},
-                              .optional_parameters = optional,
-                              .handler = no_reply}))
-        << optional;
+    EXPECT_FALSE(rejected("PAIR", pair, no_reply, optional)) << optional;
   }
-  CommandTree tree;
-  EXPECT_THROW(tree.add({.header = "PAIR",
-                         .parameters = {BooleanParameter{}, BooleanParameter{}},
-                         .optional_parameters = 3,
-                         .handler = no_reply}),
-               std::invalid_argument);
+  EXPECT_TRUE(rejected("PAIR", pair, no_reply, 3));
+  EXPECT_TRUE(rejected("NONE", {}, no_reply, 1));
 }
 
 TEST(CommandTreePatternTest, MalformedNumericParametersAreRejectedWhenAdded) {
@@ -588,12 +610,7 @@ TEST(CommandTreePatternTest, WellFormedNumericParametersAreAccepted) {
 bool overlap_rejected(std::string_view existing, std::string_view header) {
   CommandTree tree;
   tree.add({.header = existing, .parameters = {}, .handler = no_reply});
-  try {
-    tree.add({.header = header, .parameters = {}, .handler = no_reply});
-  } catch (const std::invalid_argument&) {
-    return true;
-  }
-  return false;
+  return add_rejected(tree, {.header = header, .parameters = {}, .handler = no_reply});
 }
 
 // The first matching command always runs, so a header that another one shadows could never run.
@@ -631,22 +648,15 @@ TEST(CommandTreePatternTest, HeadersThatNeverMatchTheSameInputAreAccepted) {
 }
 
 // The tree keeps its own copy of the unit, so a unit built at run time may go away after add().
-TEST(CommandTreePatternTest, NumericUnitIsCopiedWhenAdded) {
-  CommandTree tree;
+TEST_F(CommandTreeTest, NumericUnitIsCopiedWhenAdded) {
   {
     std::string unit = "V";
-    tree.add({.header = "LEVel",
-              .parameters = {NumericParameter{.min = 0.0, .max = 10.0, .unit = unit}},
-              .handler = no_reply});
-    unit = "Q";  // Overwrites the bytes a view into `unit` would still point at.
+    record("LEVel", {NumericParameter{.min = 0.0, .max = 10.0, .unit = unit}});
+    unit = "Q";  // The caller changes its text after add(); the tree must keep "V".
   }
-  Session session;
 
-  tree.execute(session, "LEV 1V");
-  EXPECT_EQ(session.pop_error().code, kNoError.code);
-
-  tree.execute(session, "LEV 1Q");
-  EXPECT_EQ(session.pop_error().code, kInvalidSuffix.code);
+  EXPECT_EQ(value_of<double>("LEV 1V"), 1.0);
+  expect_rejected("LEV 1Q", kInvalidSuffix.code);
 }
 
 }  // namespace

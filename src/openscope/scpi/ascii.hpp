@@ -8,9 +8,13 @@
 /// them so each class is written once.
 namespace openscope::scpi::ascii {
 
+/// `A` to `Z`.
 constexpr bool is_upper(char c) { return c >= 'A' && c <= 'Z'; }
+/// `a` to `z`.
 constexpr bool is_lower(char c) { return c >= 'a' && c <= 'z'; }
+/// An ASCII letter of either case.
 constexpr bool is_letter(char c) { return is_upper(c) || is_lower(c); }
+/// `0` to `9`.
 constexpr bool is_digit(char c) { return c >= '0' && c <= '9'; }
 
 /// Upper-cases ASCII letters only; every other byte passes through unchanged. Headers, keywords

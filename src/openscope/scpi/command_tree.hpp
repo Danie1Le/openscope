@@ -8,6 +8,7 @@
 #include <variant>
 #include <vector>
 
+#include "openscope/scpi_error.hpp"
 #include "openscope/session.hpp"
 
 namespace openscope::scpi {
@@ -54,9 +55,12 @@ struct Arguments {
   std::vector<Argument> values;
 };
 
-/// Runs a matched command for the calling Session and returns its reply, if it has one. It may
-/// push execution errors (such as -221) onto the Session's queue itself.
-using Handler = std::function<std::optional<std::string>(Session&, const Arguments&)>;
+/// What a handler returns: its reply (nullopt for a command without one), or the execution error
+/// (such as -221) that stopped it. The tree queues the error and discards the rest of the line.
+using HandlerResult = std::variant<std::optional<std::string>, ScpiError>;
+
+/// Runs a matched command for the calling Session.
+using Handler = std::function<HandlerResult(Session&, const Arguments&)>;
 
 /// One command: its header pattern, its parameters and its handler. Patterns are written as in
 /// instrument manuals: `*IDN?`, `SYSTem:ERRor[:NEXT]?`, `CHANnel<1-4>:SCALe`. A query is a
@@ -114,12 +118,14 @@ class CommandTree {
   /// malformed, a numeric parameter has a unit that is not upper-case letters or bounds that are
   /// not finite with min <= max, more parameters are optional than declared, the handler is
   /// empty, or some input could match both this header and one already added (the first added
-  /// would always win). A mistake in the command table so fails at start-up, not per request.
+  /// would always win). That way a mistake in the command table fails at start-up, not when a
+  /// client first sends the command.
   void add(Command command);
 
   /// Executes one line for `session` and returns the replies of its queries, joined with `;`, or
-  /// nullopt when no query replied. A syntax error anywhere runs nothing. Any other error runs
-  /// the commands before it and discards the rest of the line. Errors go to `session`'s queue.
+  /// nullopt when no query replied. A syntax error anywhere runs nothing. Any other error,
+  /// including an execution error a handler returns, runs the commands before it and discards
+  /// the rest of the line. Errors go to `session`'s queue.
   std::optional<std::string> execute(Session& session, std::string_view line) const;
 
  private:

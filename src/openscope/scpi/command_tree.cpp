@@ -5,6 +5,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -143,7 +144,7 @@ ParameterRule to_rule(const ParameterSpec& spec, std::string_view header) {
 
 /// Whether a typed suffix must lie in the pattern's range, or only be on a node that takes one.
 /// The second tells -114 "Header suffix out of range" apart from -113 "Undefined header".
-enum class SuffixRange { kChecked, kIgnored };
+enum class SuffixRange : std::uint8_t { kChecked, kIgnored };
 
 /// Whether `typed` is the short or long form of `pattern`, with a suffix in its range if typed.
 bool matches(const MnemonicPattern& pattern, const Mnemonic& typed,
@@ -154,8 +155,10 @@ bool matches(const MnemonicPattern& pattern, const Mnemonic& typed,
   if (!typed.suffix) {
     return true;
   }
-  return pattern.max_suffix > 0 && (range == SuffixRange::kIgnored ||
-                                    (*typed.suffix >= 1 && *typed.suffix <= pattern.max_suffix));
+  if (range == SuffixRange::kIgnored) {
+    return pattern.max_suffix > 0;
+  }
+  return *typed.suffix >= 1 && *typed.suffix <= pattern.max_suffix;
 }
 
 /// The suffix `typed` carries for `pattern`: 1 when omitted, 0 when the pattern takes none.
@@ -197,6 +200,15 @@ bool matches_header(const HeaderPattern& header, const ParsedCommand& command, S
                     std::vector<unsigned>& suffixes) {
   return header.common == command.common && header.query == command.query &&
          match_nodes(header.nodes, command.path, range, suffixes);
+}
+
+/// Whether the header of any of `entries` (CommandTree entries) matches `command`.
+template <typename Entries>
+bool any_header_matches(const Entries& entries, const ParsedCommand& command, SuffixRange range) {
+  std::vector<unsigned> unused_suffixes;
+  return std::ranges::any_of(entries, [&](const auto& entry) {
+    return matches_header(entry.header, command, range, unused_suffixes);
+  });
 }
 
 /// Every path `header` accepts with each node typed in its short or long form and no suffix,
@@ -300,17 +312,14 @@ Conversion to_boolean(const ProgramData& data) {
     }
     return kIllegalParameterValue;
   }
-  const auto* number = std::get_if<Number>(&data);
-  if (number == nullptr) {
-    return kDataTypeError;
-  }
-  if (!number->suffix.empty()) {
+  const auto& number = std::get<Number>(data);
+  if (!number.suffix.empty()) {
     return kInvalidSuffix;
   }
-  if (std::isnan(number->value)) {
+  if (std::isnan(number.value)) {
     return kDataOutOfRange;
   }
-  return Argument{std::round(number->value) != 0.0};
+  return Argument{std::round(number.value) != 0.0};
 }
 
 Conversion to_choice(const KeywordRule& rule, const ProgramData& data) {
@@ -327,6 +336,9 @@ Conversion to_choice(const KeywordRule& rule, const ProgramData& data) {
 }
 
 Conversion convert(const ParameterRule& rule, const ProgramData& data) {
+  if (std::holds_alternative<UnsupportedData>(data)) {
+    return kDataTypeError;  // No parameter kind takes a string, radix number or block.
+  }
   return std::visit(Overloaded{
                         [&](const NumericParameter& numeric) { return to_number(numeric, data); },
                         [&](const BooleanParameter&) { return to_boolean(data); },
@@ -371,10 +383,7 @@ void CommandTree::add(Command command) {
               .required_parameters = command.parameters.size() - command.optional_parameters,
               .handler = std::move(command.handler)};
   for (const ParsedCommand& spelling : spellings(entry.header)) {
-    std::vector<unsigned> unused;
-    if (std::ranges::any_of(entries_, [&](const Entry& existing) {
-          return matches_header(existing.header, spelling, SuffixRange::kChecked, unused);
-        })) {
+    if (any_header_matches(entries_, spelling, SuffixRange::kChecked)) {
       reject("SCPI header overlaps one already added", command.header);
     }
   }
@@ -405,10 +414,9 @@ std::optional<std::string> CommandTree::execute(Session& session, std::string_vi
       return matches_header(candidate.header, command, SuffixRange::kChecked, arguments.suffixes);
     });
     if (entry == entries_.end()) {
-      const bool suffix_out_of_range = std::ranges::any_of(entries_, [&](const Entry& candidate) {
-        return matches_header(candidate.header, command, SuffixRange::kIgnored, arguments.suffixes);
-      });
-      session.push_error(suffix_out_of_range ? kHeaderSuffixOutOfRange : kUndefinedHeader);
+      session.push_error(any_header_matches(entries_, command, SuffixRange::kIgnored)
+                             ? kHeaderSuffixOutOfRange
+                             : kUndefinedHeader);
       break;
     }
     if (!command.common) {
@@ -419,7 +427,12 @@ std::optional<std::string> CommandTree::execute(Session& session, std::string_vi
       session.push_error(std::move(*error));
       break;
     }
-    if (std::optional<std::string> answer = entry->handler(session, arguments)) {
+    HandlerResult result = entry->handler(session, arguments);
+    if (auto* error = std::get_if<ScpiError>(&result)) {
+      session.push_error(std::move(*error));
+      break;
+    }
+    if (auto& answer = std::get<std::optional<std::string>>(result)) {
       if (reply) {
         reply->append(1, ';').append(*answer);
       } else {

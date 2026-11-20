@@ -222,20 +222,24 @@ std::string_view radix_digits(char letter) {
 /// malformed.
 bool skip_hash_data(Scanner& scanner) {
   scanner.accept('#');
-  if (const std::string_view digits = radix_digits(scanner.peek()); !digits.empty()) {
-    scanner.take(1);
-    return !scanner.take_while([digits](char c) { return digits.find(c) != digits.npos; }).empty();
+  const char kind = scanner.peek();
+  if (const std::string_view digits = radix_digits(kind); !digits.empty()) {
+    scanner.accept(kind);
+    const auto is_radix_digit = [digits](char c) {
+      return digits.find(c) != std::string_view::npos;
+    };
+    return !scanner.take_while(is_radix_digit).empty();
   }
   if (scanner.accept('0')) {
     scanner.take_rest();  // An indefinite block runs to the end of the message.
     return true;
   }
-  if (!is_digit(scanner.peek())) {
+  if (!is_digit(kind)) {
     return false;
   }
-  const auto length_digits = static_cast<std::size_t>(scanner.peek() - '0');
-  scanner.take(1);
-  const std::optional<std::string_view> length_text = scanner.take(length_digits);
+  scanner.accept(kind);
+  const std::optional<std::string_view> length_text =
+      scanner.take(static_cast<std::size_t>(kind - '0'));
   std::size_t length = 0;
   if (!length_text ||
       std::from_chars(length_text->data(), length_text->data() + length_text->size(), length).ptr !=
@@ -247,12 +251,9 @@ bool skip_hash_data(Scanner& scanner) {
 
 std::optional<ProgramData> scan_parameter(Scanner& scanner) {
   const char first = scanner.peek();
-  if (first == '"' || first == '\'') {
-    return skip_string(scanner, first) ? std::optional<ProgramData>{UnsupportedData{}}
-                                       : std::nullopt;
-  }
-  if (first == '#') {
-    return skip_hash_data(scanner) ? std::optional<ProgramData>{UnsupportedData{}} : std::nullopt;
+  if (first == '"' || first == '\'' || first == '#') {
+    const bool well_formed = first == '#' ? skip_hash_data(scanner) : skip_string(scanner, first);
+    return well_formed ? std::optional<ProgramData>{UnsupportedData{}} : std::nullopt;
   }
   if (const auto token = scan_mnemonic(scanner)) {
     return split_suffix(*token);
