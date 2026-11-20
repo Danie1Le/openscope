@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <deque>
 #include <utility>
 
@@ -12,8 +13,19 @@ namespace openscope {
 /// instrument-wide and lives in the Instrument.
 class Session {
  public:
-  /// Appends `error` behind the errors already queued.
-  void push_error(ScpiError error) { errors_.push_back(std::move(error)); }
+  /// The most errors the queue holds, the -350 entry included.
+  static constexpr std::size_t kErrorQueueCapacity = 20;
+
+  /// Appends `error` behind the errors already queued. On a full queue it follows SCPI-99: the
+  /// newest entry becomes -350 "Queue overflow" and later errors are dropped, so the oldest
+  /// errors, which name the first cause of a failure, survive.
+  void push_error(ScpiError error) {
+    if (errors_.size() < kErrorQueueCapacity) {
+      errors_.push_back(std::move(error));
+    } else if (errors_.back().code != kQueueOverflow.code) {
+      errors_.back() = kQueueOverflow;
+    }
+  }
 
   /// Removes and returns the oldest error, or `kNoError` when the queue is empty.
   ScpiError pop_error() {
