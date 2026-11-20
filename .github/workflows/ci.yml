@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Must match builtin-baseline in vcpkg.json.
+  VCPKG_COMMIT: 9eec002df1cd109f8f104cd966a763daf9751489
+  VCPKG_ROOT: ${{ github.workspace }}/../vcpkg
+
+jobs:
+  format-lint:
+    name: Format and lint
+    runs-on: ubuntu-24.04
+    env:
+      CXX: clang++-18
+    steps:
+      - uses: actions/checkout@v4
+      - name: clang-format
+        run: |
+          files=$(git ls-files '*.cpp' '*.hpp')
+          if [ -n "$files" ]; then clang-format-18 --dry-run --Werror $files; fi
+      - uses: ./.github/actions/setup-vcpkg
+      - run: cmake --preset debug
+      - name: clang-tidy
+        run: run-clang-tidy-18 -p build/debug -quiet
+
+  build-test:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: GCC debug, preset: debug, cxx: g++-14 }
+          - { name: Clang debug, preset: debug, cxx: clang++-18 }
+          - { name: ASan + UBSan, preset: asan, cxx: clang++-18 }
+          - { name: TSan, preset: tsan, cxx: clang++-18 }
+    env:
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-vcpkg
+      # The runner's high ASLR entropy breaks TSan ("unexpected memory mapping").
+      - if: matrix.preset == 'tsan'
+        run: sudo sysctl vm.mmap_rnd_bits=28
+      - run: cmake --preset ${{ matrix.preset }}
+      - run: cmake --build --preset ${{ matrix.preset }}
+      - run: ctest --preset ${{ matrix.preset }}

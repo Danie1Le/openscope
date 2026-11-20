@@ -1,0 +1,18 @@
+name: Set up vcpkg
+description: Clones vcpkg at VCPKG_COMMIT into VCPKG_ROOT and restores its binary cache.
+
+runs:
+  using: composite
+  steps:
+    - name: Restore vcpkg binary cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/vcpkg/archives
+        key: vcpkg-${{ runner.os }}-${{ env.CXX }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
+        restore-keys: vcpkg-${{ runner.os }}-${{ env.CXX }}-
+    - name: Clone and bootstrap vcpkg
+      shell: bash
+      run: |
+        git clone --quiet https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
+        git -C "$VCPKG_ROOT" checkout --quiet "$VCPKG_COMMIT"
+        "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
