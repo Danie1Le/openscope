@@ -508,7 +508,6 @@ std::optional<std::string> no_reply(Session& /*session*/, const Arguments& /*arg
   return std::nullopt;
 }
 
-/// Whether adding a command with `header` and `parameters` throws std::invalid_argument.
 /// Whether `tree.add(command)` throws std::invalid_argument.
 bool add_rejected(CommandTree& tree, Command command) {
   try {
@@ -519,6 +518,7 @@ bool add_rejected(CommandTree& tree, Command command) {
   return false;
 }
 
+/// Whether adding `header` with `parameters` throws std::invalid_argument.
 bool rejected(std::string_view header, std::vector<ParameterSpec> parameters = {},
               Handler handler = no_reply, std::size_t optional_parameters = 0) {
   CommandTree tree;
