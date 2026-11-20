@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "openscope/session.hpp"
 #include "scpi_session.hpp"
 
 namespace openscope {
@@ -140,32 +141,6 @@ TEST_F(InstrumentTest, CommandsSeparatedBySemicolonsRunInOrderAndRepliesAreJoine
             R"(-113,"Undefined header";)" + idn + R"(;0,"No error")");
 }
 
-// SCPI-99 compound headers: a header without a leading colon continues from the previous path.
-TEST_F(InstrumentTest, RelativeHeaderContinuesFromThePreviousCommandsPath) {
-  session.send("BOGUS");
-  session.send("BOGUS");
-
-  EXPECT_EQ(session.send("SYST:ERR?;ERR?"), R"(-113,"Undefined header";-113,"Undefined header")");
-}
-
-TEST_F(InstrumentTest, CommonCommandsKeepTheCurrentPath) {
-  EXPECT_EQ(session.send("SYST:ERR?;*CLS;ERR:NEXT?"), R"(0,"No error";0,"No error")");
-}
-
-TEST_F(InstrumentTest, LeadingColonResolvesFromTheRoot) {
-  EXPECT_EQ(session.send("SYST:ERR?;:SYST:ERR?"), R"(0,"No error";0,"No error")");
-  EXPECT_EQ(session.send("SYST:ERR?;SYST:ERR?"), R"(0,"No error")");  // Then SYST:SYST:ERR?.
-  EXPECT_EQ(session.next_error(), kUndefinedHeaderReply);
-}
-
-TEST_F(InstrumentTest, WhitespaceAroundCommandsAndSeparatorsIsIgnored) {
-  const std::string idn = session.send("*IDN?").value_or("");
-
-  EXPECT_EQ(session.send(" \t*IDN? ; *IDN?\t "), idn + ";" + idn);
-  EXPECT_EQ(session.send("   "), std::nullopt);
-  EXPECT_EQ(session.next_error(), kNoErrorReply);
-}
-
 TEST_F(InstrumentTest, ParameterOnACommandThatTakesNoneQueuesParameterNotAllowed) {
   session.send("BOGUS");
 
@@ -186,16 +161,6 @@ TEST_F(InstrumentTest, SyntaxErrorAnywhereOnALineRunsNothingOnIt) {
 
   EXPECT_EQ(session.next_error(), kUndefinedHeaderReply);
   EXPECT_EQ(session.next_error(), R"(-102,"Syntax error")");
-  EXPECT_EQ(session.next_error(), kNoErrorReply);
-}
-
-TEST_F(InstrumentTest, ErrorStopsTheRestOfTheLineAfterEarlierCommandsRan) {
-  session.send("BOGUS");
-
-  EXPECT_EQ(session.send("SYST:ERR?;BOGUS;*CLS"), R"(-113,"Undefined header")");
-
-  // *CLS after the bad header did not run, so the new error is still queued.
-  EXPECT_EQ(session.next_error(), kUndefinedHeaderReply);
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 

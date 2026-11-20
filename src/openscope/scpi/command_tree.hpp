@@ -31,6 +31,7 @@ struct KeywordParameter {
   std::vector<std::string_view> choices;
 };
 
+/// What one parameter of a command accepts; the tree validates it before the handler runs.
 using ParameterSpec = std::variant<NumericParameter, BooleanParameter, KeywordParameter>;
 
 /// The keyword a caller picked: its position in KeywordParameter::choices and its numeric
@@ -64,7 +65,10 @@ struct Command {
   Handler handler;
 };
 
-/// A parsed mnemonic pattern: `CHANnel<1-4>` accepts `CHAN` or `CHANNEL` with suffix 1 to 4.
+/// Parsed forms of the patterns in a Command, private to the command tree.
+namespace detail {
+
+/// `CHANnel<1-4>` accepts `CHAN` or `CHANNEL` with suffix 1 to 4.
 struct MnemonicPattern {
   std::string short_form;
   std::string long_form;
@@ -72,22 +76,28 @@ struct MnemonicPattern {
   unsigned max_suffix = 0;
 };
 
-/// One node of a parsed header pattern; `[:NEXT]` is an optional node.
+/// One node of a header pattern; `[:NEXT]` is an optional node.
 struct HeaderNode {
   MnemonicPattern mnemonic;
   bool optional = false;
 };
 
-/// A parsed header pattern such as `SYSTem:ERRor[:NEXT]?`.
+/// `SYSTem:ERRor[:NEXT]?`: whether it is a common command and a query, and its nodes.
 struct HeaderPattern {
   bool common = false;
   bool query = false;
   std::vector<HeaderNode> nodes;
 };
 
+/// A KeywordParameter with its choices parsed.
+struct KeywordRule {
+  std::vector<MnemonicPattern> choices;
+};
+
 /// A ParameterSpec with its keyword choices parsed.
-using ParameterRule =
-    std::variant<NumericParameter, BooleanParameter, std::vector<MnemonicPattern>>;
+using ParameterRule = std::variant<NumericParameter, BooleanParameter, KeywordRule>;
+
+}  // namespace detail
 
 /// The SCPI command tree: matches each command of a line against the registered headers (short
 /// or long form, any case, numeric suffixes, optional nodes, SCPI-99 compound-header paths),
@@ -96,19 +106,19 @@ using ParameterRule =
 class CommandTree {
  public:
   /// Registers `command`. Throws std::invalid_argument when a header or keyword pattern is
-  /// malformed, so a typo in the command table fails at start-up.
+  /// malformed or the handler is empty, so a typo in the command table fails at start-up.
   void add(Command command);
 
   /// Executes one line for `session` and returns the replies of its queries, joined with `;`, or
   /// nullopt when no query replied. A syntax error anywhere runs nothing. Any other error runs
   /// the commands before it and discards the rest of the line. Errors go to `session`'s queue.
-  std::optional<std::string> execute(std::string_view line, Session& session) const;
+  std::optional<std::string> execute(Session& session, std::string_view line) const;
 
  private:
   /// A registered command with its header and keyword patterns parsed.
   struct Entry {
-    HeaderPattern header;
-    std::vector<ParameterRule> parameters;
+    detail::HeaderPattern header;
+    std::vector<detail::ParameterRule> parameters;
     Handler handler;
   };
 

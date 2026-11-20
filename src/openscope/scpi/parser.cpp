@@ -104,13 +104,13 @@ bool scan_header(Scanner& scanner, ParsedCommand& command) {
     command.path.push_back(Mnemonic{.name = to_upper(*name), .suffix = std::nullopt});
   } else {
     command.absolute = scanner.accept(':');
-    do {
+    for (bool more = true; more; more = scanner.accept(':')) {
       const auto token = scan_mnemonic(scanner);
       if (!token) {
         return false;
       }
       command.path.push_back(split_suffix(*token));
-    } while (scanner.accept(':'));
+    }
   }
   command.query = scanner.accept('?');
   return true;
@@ -134,9 +134,9 @@ std::optional<Number> scan_number(Scanner& scanner) {
     return std::nullopt;
   }
   // An `E` starts an exponent only when digits follow; otherwise it begins a suffix such as `EX`.
-  const char sign = scanner.peek(1);
+  const char after_e = scanner.peek(1);
   if ((scanner.peek() == 'E' || scanner.peek() == 'e') &&
-      (is_digit(sign) || ((sign == '+' || sign == '-') && is_digit(scanner.peek(2))))) {
+      (is_digit(after_e) || ((after_e == '+' || after_e == '-') && is_digit(scanner.peek(2))))) {
     scanner.accept(scanner.peek());
     accept_sign(scanner);
     scanner.take_while(is_digit);
@@ -149,7 +149,8 @@ std::optional<Number> scan_number(Scanner& scanner) {
   Number number{.value = 0.0, .suffix = {}};
   const auto result = std::from_chars(text.data(), text.data() + text.size(), number.value);
   if (result.ec != std::errc{}) {
-    // Too large or too small for a double: NaN, which no range accepts.
+    // Beyond a double's range, too large (1E999) or too small (1E-999): NaN, which no range
+    // accepts, so the number is reported out of range.
     number.value = std::numeric_limits<double>::quiet_NaN();
   }
   scanner.skip_space();
@@ -179,7 +180,7 @@ std::optional<ParsedCommand> scan_command(Scanner& scanner) {
   if (separator.empty()) {
     return std::nullopt;  // Parameters must be separated from the header by whitespace.
   }
-  do {
+  for (bool more = true; more; more = scanner.accept(',')) {
     scanner.skip_space();
     auto parameter = scan_parameter(scanner);
     if (!parameter) {
@@ -187,7 +188,7 @@ std::optional<ParsedCommand> scan_command(Scanner& scanner) {
     }
     command.parameters.push_back(std::move(*parameter));
     scanner.skip_space();
-  } while (scanner.accept(','));
+  }
   return command;
 }
 
@@ -200,7 +201,7 @@ std::optional<std::vector<ParsedCommand>> parse_line(std::string_view line) {
   if (scanner.at_end()) {
     return commands;
   }
-  do {
+  for (bool more = true; more; more = scanner.accept(';')) {
     scanner.skip_space();
     auto command = scan_command(scanner);
     if (!command) {
@@ -208,7 +209,7 @@ std::optional<std::vector<ParsedCommand>> parse_line(std::string_view line) {
     }
     commands.push_back(std::move(*command));
     scanner.skip_space();
-  } while (scanner.accept(';'));
+  }
   if (!scanner.at_end()) {
     return std::nullopt;
   }

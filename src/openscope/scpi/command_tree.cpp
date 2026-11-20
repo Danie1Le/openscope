@@ -22,6 +22,19 @@
 namespace openscope::scpi {
 namespace {
 
+using detail::HeaderNode;
+using detail::HeaderPattern;
+using detail::KeywordRule;
+using detail::MnemonicPattern;
+using detail::ParameterRule;
+
+/// Visitor built from lambdas, so std::visit fails to compile when a ParameterSpec or
+/// ParameterRule alternative has no case.
+template <typename... Lambdas>
+struct Overloaded : Lambdas... {
+  using Lambdas::operator()...;
+};
+
 [[noreturn]] void reject_pattern(std::string_view pattern) {
   throw std::invalid_argument("malformed SCPI pattern: '" + std::string(pattern) + "'");
 }
@@ -70,10 +83,13 @@ HeaderPattern parse_header_pattern(std::string_view text) {
   if (rest.starts_with('*')) {
     header.common = true;
     header.nodes.push_back({.mnemonic = parse_mnemonic_pattern(rest.substr(1)), .optional = false});
+    const MnemonicPattern& name = header.nodes.front().mnemonic;
+    if (name.short_form != name.long_form || name.max_suffix != 0) {
+      reject_pattern(text);  // Common commands have one form and no suffix.
+    }
     return header;
   }
-  bool first = true;
-  do {
+  for (bool first = true; first || !rest.empty(); first = false) {
     const bool optional = rest.starts_with("[:");
     if (optional) {
       rest.remove_prefix(2);
@@ -92,23 +108,24 @@ HeaderPattern parse_header_pattern(std::string_view text) {
       }
       rest.remove_prefix(1);
     }
-    first = false;
-  } while (!rest.empty());
+  }
   return header;
 }
 
 ParameterRule to_rule(const ParameterSpec& spec) {
-  if (const auto* keyword = std::get_if<KeywordParameter>(&spec)) {
-    std::vector<MnemonicPattern> choices;
-    for (const std::string_view choice : keyword->choices) {
-      choices.push_back(parse_mnemonic_pattern(choice));
-    }
-    return choices;
-  }
-  if (const auto* numeric = std::get_if<NumericParameter>(&spec)) {
-    return *numeric;
-  }
-  return BooleanParameter{};
+  return std::visit(Overloaded{
+                        [](const NumericParameter& numeric) -> ParameterRule { return numeric; },
+                        [](const BooleanParameter& boolean) -> ParameterRule { return boolean; },
+                        [](const KeywordParameter& keyword) -> ParameterRule {
+                          KeywordRule rule;
+                          rule.choices.reserve(keyword.choices.size());
+                          for (const std::string_view choice : keyword.choices) {
+                            rule.choices.push_back(parse_mnemonic_pattern(choice));
+                          }
+                          return rule;
+                        },
+                    },
+                    spec);
 }
 
 /// Whether `typed` is the short or long form of `pattern`, with a suffix in its range if typed.
@@ -125,35 +142,34 @@ unsigned suffix_of(const MnemonicPattern& pattern, const Mnemonic& typed) {
 }
 
 /// Matches `path` against `nodes`, skipping optional nodes as needed, and appends the suffix of
-/// every suffixed node to `suffixes`. On failure `suffixes` is left as it was.
+/// every suffixed node to `suffixes`. On failure `suffixes` is left as it was. The recursion is
+/// as deep as the pattern has nodes, which the command table fixes, never the input.
+// NOLINTBEGIN(misc-no-recursion)
 bool match_nodes(std::span<const HeaderNode> nodes, std::span<const Mnemonic> path,
                  std::vector<unsigned>& suffixes) {
   if (nodes.empty()) {
     return path.empty();
   }
   const HeaderNode& node = nodes.front();
-  const std::size_t mark = suffixes.size();
-  if (!path.empty() && matches(node.mnemonic, path.front())) {
+  // Takes `suffix` for this node and matches the remaining nodes against `rest`.
+  const auto match_rest = [&](unsigned suffix, std::span<const Mnemonic> rest) {
+    const std::size_t mark = suffixes.size();
     if (node.mnemonic.max_suffix > 0) {
-      suffixes.push_back(suffix_of(node.mnemonic, path.front()));
+      suffixes.push_back(suffix);
     }
-    if (match_nodes(nodes.subspan(1), path.subspan(1), suffixes)) {
+    if (match_nodes(nodes.subspan(1), rest, suffixes)) {
       return true;
     }
     suffixes.resize(mark);
-  }
-  if (!node.optional) {
     return false;
-  }
-  if (node.mnemonic.max_suffix > 0) {
-    suffixes.push_back(1);
-  }
-  if (match_nodes(nodes.subspan(1), path, suffixes)) {
+  };
+  if (!path.empty() && matches(node.mnemonic, path.front()) &&
+      match_rest(suffix_of(node.mnemonic, path.front()), path.subspan(1))) {
     return true;
   }
-  suffixes.resize(mark);
-  return false;
+  return node.optional && match_rest(1, path);  // Omitted: its suffix defaults to 1.
 }
+// NOLINTEND(misc-no-recursion)
 
 bool matches_header(const HeaderPattern& header, const ParsedCommand& command,
                     std::vector<unsigned>& suffixes) {
@@ -201,10 +217,9 @@ std::optional<int> unit_exponent(std::string_view suffix, std::string_view unit)
 /// `value` times 10^`exponent`. Powers of ten up to 10^22 are exact doubles, so one multiply or
 /// divide rounds once: 10 mV is exactly 0.01, which 10 * 0.001 is not.
 double scale(double value, int exponent) {
-  double power = 1.0;
-  for (int i = 0; i < std::abs(exponent); ++i) {
-    power *= 10.0;
-  }
+  constexpr std::array kPowersOfTen{1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8, 1e9,
+                                    1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18};
+  const double power = kPowersOfTen.at(static_cast<std::size_t>(std::abs(exponent)));
   return exponent < 0 ? value / power : value * power;
 }
 
@@ -213,7 +228,7 @@ using Conversion = std::variant<Argument, ScpiError>;
 Conversion to_number(const NumericParameter& spec, const ProgramData& data) {
   const auto* number = std::get_if<Number>(&data);
   if (number == nullptr) {
-    return kIllegalParameterValue;
+    return kDataTypeError;
   }
   const std::optional<int> exponent = unit_exponent(number->suffix, spec.unit);
   if (!exponent) {
@@ -243,27 +258,26 @@ Conversion to_boolean(const ProgramData& data) {
   return Argument{std::round(number.value) != 0.0};
 }
 
-Conversion to_choice(const std::vector<MnemonicPattern>& choices, const ProgramData& data) {
+Conversion to_choice(const KeywordRule& rule, const ProgramData& data) {
   const auto* keyword = std::get_if<Mnemonic>(&data);
   if (keyword == nullptr) {
-    return kIllegalParameterValue;
+    return kDataTypeError;
   }
-  for (std::size_t i = 0; i < choices.size(); ++i) {
-    if (matches(choices[i], *keyword)) {
-      return Argument{Choice{.index = i, .suffix = suffix_of(choices[i], *keyword)}};
+  for (std::size_t i = 0; i < rule.choices.size(); ++i) {
+    if (matches(rule.choices[i], *keyword)) {
+      return Argument{Choice{.index = i, .suffix = suffix_of(rule.choices[i], *keyword)}};
     }
   }
   return kIllegalParameterValue;
 }
 
 Conversion convert(const ParameterRule& rule, const ProgramData& data) {
-  if (const auto* numeric = std::get_if<NumericParameter>(&rule)) {
-    return to_number(*numeric, data);
-  }
-  if (const auto* choices = std::get_if<std::vector<MnemonicPattern>>(&rule)) {
-    return to_choice(*choices, data);
-  }
-  return to_boolean(data);
+  return std::visit(Overloaded{
+                        [&](const NumericParameter& numeric) { return to_number(numeric, data); },
+                        [&](const BooleanParameter&) { return to_boolean(data); },
+                        [&](const KeywordRule& keyword) { return to_choice(keyword, data); },
+                    },
+                    rule);
 }
 
 /// Converts every parameter into `values`, or returns the first error: the count is checked
@@ -277,6 +291,7 @@ std::optional<ScpiError> convert_all(const std::vector<ParameterRule>& rules,
   if (parameters.size() < rules.size()) {
     return kMissingParameter;
   }
+  values.reserve(rules.size());
   for (std::size_t i = 0; i < rules.size(); ++i) {
     Conversion converted = convert(rules[i], parameters[i]);
     if (auto* error = std::get_if<ScpiError>(&converted)) {
@@ -297,13 +312,14 @@ void CommandTree::add(Command command) {
   Entry entry{.header = parse_header_pattern(command.header),
               .parameters = {},
               .handler = std::move(command.handler)};
+  entry.parameters.reserve(command.parameters.size());
   for (const ParameterSpec& spec : command.parameters) {
     entry.parameters.push_back(to_rule(spec));
   }
   entries_.push_back(std::move(entry));
 }
 
-std::optional<std::string> CommandTree::execute(std::string_view line, Session& session) const {
+std::optional<std::string> CommandTree::execute(Session& session, std::string_view line) const {
   std::optional<std::vector<ParsedCommand>> commands = parse_line(line);
   if (!commands) {
     session.push_error(kSyntaxError);
@@ -335,7 +351,11 @@ std::optional<std::string> CommandTree::execute(std::string_view line, Session& 
       break;
     }
     if (std::optional<std::string> answer = entry->handler(session, arguments)) {
-      reply = reply ? *reply + ';' + *answer : std::move(*answer);
+      if (reply) {
+        reply->append(1, ';').append(*answer);
+      } else {
+        reply = std::move(answer);
+      }
     }
   }
   return reply;

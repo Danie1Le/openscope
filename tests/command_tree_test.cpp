@@ -2,7 +2,7 @@
 
 #include <gtest/gtest.h>
 
-#include <limits>
+#include <cstddef>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -44,7 +44,7 @@ class CommandTreeTest : public testing::Test {
   }
 
   void record(std::string_view header, std::vector<ParameterSpec> parameters,
-              std::optional<std::string> reply = std::nullopt) {
+              const std::optional<std::string>& reply = std::nullopt) {
     tree.add({.header = header,
               .parameters = std::move(parameters),
               .handler = [this, header, reply](Session&, const Arguments& arguments) {
@@ -53,7 +53,7 @@ class CommandTreeTest : public testing::Test {
               }});
   }
 
-  std::optional<std::string> send(std::string_view line) { return tree.execute(line, session); }
+  std::optional<std::string> send(std::string_view line) { return tree.execute(session, line); }
 
   int next_error_code() { return session.pop_error().code; }
 
@@ -143,7 +143,7 @@ TEST_F(CommandTreeTest, NumericParameterAcceptsItsBoundsAndRejectsBeyondThem) {
   for (const char* line :
        {"SOUR:FREQ 0.999999", "SOUR:FREQ 1000001", "SOUR:FREQ 0", "SOUR:FREQ -1",
         "SOUR:FREQ 1.000001MHZ", "CHAN:OFFS 5.000001", "CHAN:OFFS -5.000001", "SOUR:FREQ 1E999",
-        "SOUR:FREQ -1E999", "SOUR:FREQ 1E-999", "SOUR:FREQ 1EXHZ",
+        "SOUR:FREQ -1E999", "SOUR:FREQ 1E-999", "CHAN:OFFS 1E-999", "SOUR:FREQ 1EXHZ",
         "SOUR:FREQ "
         "1000000000000000000000000000000000000000000000000000000000000000000000000000000000"
         "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
@@ -154,9 +154,9 @@ TEST_F(CommandTreeTest, NumericParameterAcceptsItsBoundsAndRejectsBeyondThem) {
   }
 }
 
-TEST_F(CommandTreeTest, KeywordWhereANumberBelongsQueuesIllegalParameterValue) {
-  expect_rejected("SOUR:FREQ ON", kIllegalParameterValue.code);
-  expect_rejected("SOUR:FREQ MAX", kIllegalParameterValue.code);
+TEST_F(CommandTreeTest, KeywordWhereANumberBelongsQueuesDataTypeError) {
+  expect_rejected("SOUR:FREQ ON", kDataTypeError.code);
+  expect_rejected("SOUR:FREQ MAX", kDataTypeError.code);
 }
 
 TEST_F(CommandTreeTest, BooleanParameterAcceptsOnOffAndRoundedNumbers) {
@@ -185,7 +185,7 @@ TEST_F(CommandTreeTest, KeywordParameterAcceptsShortAndLongFormsInAnyCase) {
       {"TRIG:MODE norm", 1}, {"TRIG:MODE NORMAL", 1}, {"TRIG:MODE Normal", 1},
   };
   for (const auto& [line, expected] : cases) {
-    const Choice choice = value_of<Choice>(line);
+    const auto choice = value_of<Choice>(line);
     EXPECT_EQ(choice.index, expected) << line;
     EXPECT_EQ(choice.suffix, 0U) << line;
   }
@@ -193,9 +193,10 @@ TEST_F(CommandTreeTest, KeywordParameterAcceptsShortAndLongFormsInAnyCase) {
 
 TEST_F(CommandTreeTest, KeywordParameterRejectsAnythingOutsideItsChoices) {
   for (const char* line :
-       {"TRIG:MODE NORMA", "TRIG:MODE NOR", "TRIG:MODE SINGLE", "TRIG:MODE AUTO1", "TRIG:MODE 1"}) {
+       {"TRIG:MODE NORMA", "TRIG:MODE NOR", "TRIG:MODE SINGLE", "TRIG:MODE AUTO1"}) {
     expect_rejected(line, kIllegalParameterValue.code);
   }
+  expect_rejected("TRIG:MODE 1", kDataTypeError.code);
 }
 
 TEST_F(CommandTreeTest, KeywordChoiceCarriesItsSuffixDefaultingToOne) {
@@ -204,7 +205,7 @@ TEST_F(CommandTreeTest, KeywordChoiceCarriesItsSuffixDefaultingToOne) {
       {"TRIG:SOUR CHAN1", 1}, {"TRIG:SOUR CHAN01", 1},
   };
   for (const auto& [line, expected] : cases) {
-    const Choice choice = value_of<Choice>(line);
+    const auto choice = value_of<Choice>(line);
     EXPECT_EQ(choice.index, 0U) << line;
     EXPECT_EQ(choice.suffix, expected) << line;
   }
@@ -392,14 +393,30 @@ TEST_F(CommandTreeTest, EmptyOrBlankLineDoesNothing) {
   }
 }
 
+std::optional<std::string> no_reply(Session& /*session*/, const Arguments& /*arguments*/) {
+  return std::nullopt;
+}
+
+/// Whether adding a command with `header` and `parameters` throws std::invalid_argument.
+bool rejected(std::string_view header, std::vector<ParameterSpec> parameters = {},
+              Handler handler = no_reply) {
+  CommandTree tree;
+  try {
+    tree.add(
+        {.header = header, .parameters = std::move(parameters), .handler = std::move(handler)});
+  } catch (const std::invalid_argument&) {
+    return true;
+  }
+  return false;
+}
+
 TEST(CommandTreePatternTest, MalformedPatternsAreRejectedWhenAdded) {
-  const auto handler = [](Session&, const Arguments&) -> std::optional<std::string> {
-    return std::nullopt;
-  };
   for (const char* header : {"",
                              "?",
                              "*",
                              "*?",
+                             "*Idn?",
+                             "*IDN<1-4>",
                              "sYSTem",
                              "SYSTem1",
                              "SYST_ERR",
@@ -422,29 +439,18 @@ TEST(CommandTreePatternTest, MalformedPatternsAreRejectedWhenAdded) {
                              "1ABC",
                              "SYST:ERR?:X",
                              "SYST<1-99999999999>"}) {
-    CommandTree tree;
-    EXPECT_THROW(tree.add({.header = header, .parameters = {}, .handler = handler}),
-                 std::invalid_argument)
-        << header;
+    EXPECT_TRUE(rejected(header)) << header;
   }
-  CommandTree tree;
-  EXPECT_THROW(tree.add({.header = "TRIG:MODE",
-                         .parameters = {KeywordParameter{.choices = {"normal"}}},
-                         .handler = handler}),
-               std::invalid_argument);
-  EXPECT_THROW(tree.add({.header = "TRIG:MODE", .parameters = {}, .handler = nullptr}),
-               std::invalid_argument);
+  EXPECT_TRUE(rejected("TRIG:MODE", {KeywordParameter{.choices = {"normal"}}}));
+  EXPECT_TRUE(rejected("TRIG:MODE", {}, nullptr));
 }
 
 TEST(CommandTreePatternTest, WellFormedPatternsAreAccepted) {
-  CommandTree tree;
-  const auto handler = [](Session&, const Arguments&) -> std::optional<std::string> {
-    return std::nullopt;
-  };
   for (const char* header : {"*IDN?", "*RST", "SYSTem:ERRor[:NEXT]?", ":SYSTem:ERRor?",
                              "[:SENSe]:FREQuency", "CHANnel<1-4>:SCALe", "NEXT"}) {
-    EXPECT_NO_THROW(tree.add({.header = header, .parameters = {}, .handler = handler})) << header;
+    EXPECT_FALSE(rejected(header)) << header;
   }
+  EXPECT_FALSE(rejected("TRIG:SOUR", {KeywordParameter{.choices = {"CHANnel<1-4>", "EXTernal"}}}));
 }
 
 }  // namespace

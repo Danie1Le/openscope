@@ -33,8 +33,11 @@ struct ParsedCommand {
   bool common = false;
   /// The header started with `:`, so it is resolved from the root, not the current path.
   bool absolute = false;
+  /// The header's nodes as typed, before a relative header is joined to the current path.
   std::vector<Mnemonic> path;
+  /// The header ended in `?`.
   bool query = false;
+  /// The parameters in order, not yet checked against any command.
   std::vector<ProgramData> parameters;
 };
 
@@ -43,7 +46,8 @@ struct ParsedCommand {
 /// commands.
 std::optional<std::vector<ParsedCommand>> parse_line(std::string_view line);
 
-/// Upper-cases ASCII letters only, so the result never depends on the C locale.
+/// Upper-cases ASCII letters only, so the result never depends on the C locale. Headers, keywords
+/// and suffixes are compared upper-cased, so both the parser and the command tree use it.
 std::string to_upper(std::string_view text);
 
 }  // namespace openscope::scpi

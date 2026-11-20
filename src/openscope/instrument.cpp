@@ -51,7 +51,7 @@ std::optional<std::string> Instrument::execute(SessionId session, std::string_vi
     caller.push_error(kInputBufferOverrun);
     return std::nullopt;
   }
-  return commands_.execute(line, caller);
+  return commands_.execute(caller, line);
 }
 
 }  // namespace openscope

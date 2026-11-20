@@ -17,6 +17,10 @@ inline const ScpiError kNoError{.code = 0, .message = "No error"};
 /// A line that breaks the SCPI grammar. Nothing on the line runs.
 inline const ScpiError kSyntaxError{.code = -102, .message = "Syntax error"};
 
+/// A parameter of the wrong kind: a keyword where a number belongs, or a number where a keyword
+/// belongs.
+inline const ScpiError kDataTypeError{.code = -104, .message = "Data type error"};
+
 /// More parameters than the command takes.
 inline const ScpiError kParameterNotAllowed{.code = -108, .message = "Parameter not allowed"};
 
@@ -32,7 +36,7 @@ inline const ScpiError kInvalidSuffix{.code = -131, .message = "Invalid suffix"}
 /// A numeric parameter outside the range the command accepts.
 inline const ScpiError kDataOutOfRange{.code = -222, .message = "Data out of range"};
 
-/// A parameter of the wrong kind, or a keyword the command does not accept.
+/// A keyword the parameter does not accept.
 inline const ScpiError kIllegalParameterValue{.code = -224, .message = "Illegal parameter value"};
 
 /// Recorded in place of the newest error when a Session's error queue is full.
