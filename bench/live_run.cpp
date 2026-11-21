@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <exception>
 #include <format>
 #include <iostream>
 #include <memory>
@@ -22,10 +23,11 @@
 #include "openscope/live_pipeline.hpp"
 #include "openscope/sample_clock.hpp"
 
-int main(int argc, char** argv) {
+namespace {
+
+int run(std::span<char*> arguments) {
   using std::chrono::steady_clock;
   using Milliseconds = std::chrono::duration<double, std::milli>;
-  const std::span arguments(argv, static_cast<std::size_t>(argc));
   const int seconds = arguments.size() > 1 ? std::stoi(arguments[1]) : 10;
   // The *RST sample rate unless one is given.
   const std::string rate_command =
@@ -63,5 +65,17 @@ int main(int argc, char** argv) {
                              captured_to, live.skipped_samples(), live.dropped_blocks(),
                              instrument.discarded_captures(), slowest.count())
               << std::flush;
+  }
+  return 0;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  try {
+    return run(std::span(argv, static_cast<std::size_t>(argc)));
+  } catch (const std::exception& error) {  // A bad argument, for one.
+    std::cerr << "live_run: " << error.what() << '\n';
+    return 1;
   }
 }
