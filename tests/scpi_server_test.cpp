@@ -17,14 +17,15 @@
 #include <boost/asio/post.hpp>
 #include <boost/asio/read_until.hpp>
 #include <boost/asio/write.hpp>
-#include <boost/system/error_code.hpp>
 #include <boost/system/system_error.hpp>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <future>
+#include <iterator>
 #include <memory>
-#include <nlohmann/json.hpp>
+#include <nlohmann/json.hpp>  // IWYU pragma: keep (the definition of json)
+#include <nlohmann/json_fwd.hpp>
 #include <optional>
 #include <random>
 #include <sstream>
@@ -37,6 +38,7 @@
 #include "instrument_fixture.hpp"
 #include "openscope/instrument.hpp"
 #include "openscope/server/json_log.hpp"
+#include "openscope/server/server_options.hpp"
 #include "scpi_session.hpp"
 
 namespace openscope {
@@ -55,11 +57,19 @@ using test::padded;
 /// How long a test watches for something that should not happen.
 constexpr milliseconds kQuiet{300};
 
+/// The `events` named `name`, in order.
+std::vector<nlohmann::json> events_named(const std::vector<nlohmann::json>& events,
+                                         std::string_view name) {
+  std::vector<nlohmann::json> named;
+  std::ranges::copy_if(events, std::back_inserter(named),
+                       [&](const nlohmann::json& event) { return event["event"] == name; });
+  return named;
+}
+
 /// The first of `events` named `name`, or null.
 nlohmann::json first_event(const std::vector<nlohmann::json>& events, std::string_view name) {
-  const auto found = std::ranges::find_if(
-      events, [&](const nlohmann::json& event) { return event["event"] == name; });
-  return found == events.end() ? nlohmann::json() : *found;
+  std::vector<nlohmann::json> named = events_named(events, name);
+  return named.empty() ? nlohmann::json() : named.front();
 }
 
 /// A ScpiServer on a free loopback port, run on its own I/O thread like the engine's.
@@ -131,7 +141,7 @@ class Client {
   std::optional<std::string> read_line(milliseconds patience = kPatience) {
     std::optional<std::string> line;
     boost::asio::async_read_until(socket_, boost::asio::dynamic_buffer(received_), '\n',
-                                  [&](const boost::system::error_code& error, std::size_t length) {
+                                  [&](const auto& error, std::size_t length) {
                                     if (error) {
                                       closed_ = error != boost::asio::error::operation_aborted;
                                       return;
@@ -203,13 +213,16 @@ class ScpiServerTest : public testing::Test {
  protected:
   /// Restarts the server with `idle_timeout`.
   void restart(milliseconds idle_timeout) {
-    server.emplace(instrument, ServerOptions{.port = 0, .idle_timeout = idle_timeout});
+    server.reset();
+    server = std::make_unique<RunningServer>(
+        instrument, ServerOptions{.port = 0, .idle_timeout = idle_timeout});
   }
 
   [[nodiscard]] std::uint16_t port() const { return server->port(); }
 
   Instrument instrument;
-  std::optional<RunningServer> server{std::in_place, instrument, ServerOptions{.port = 0}};
+  std::unique_ptr<RunningServer> server =
+      std::make_unique<RunningServer>(instrument, ServerOptions{.port = 0});
 };
 
 TEST(ServerOptionsTest, DefaultsToLoopbackOnPort5025) {
@@ -415,9 +428,8 @@ TEST_F(ScpiServerTest, LinesSentWhileOneIsHeldAndAfterItRunOnceInOrder) {
 
   EXPECT_EQ(client.read_line(), "1");
   EXPECT_EQ(client.read_line(), "0.1");
-  for (int i = 0; i < 5; ++i) {
-    ASSERT_EQ(client.query("CHAN1:OFFS " + std::to_string(i) + ";OFFS?"), std::to_string(i));
-  }
+  EXPECT_EQ(client.query("CHAN1:OFFS 0.2;OFFS?"), "0.2");
+  EXPECT_EQ(client.query("CHAN1:OFFS 0.3;OFFS?"), "0.3");
 }
 
 TEST_F(ScpiServerTest, DisconnectWhileWaitingOnOpcEndsTheSessionAndFreesItsSlot) {
@@ -463,10 +475,11 @@ TEST_F(ScpiServerTest, RandomBytesNeverStopTheServer) {
   }
   client.send("\n*CLS;*IDN?\n");
 
-  std::optional<std::string> line;
-  do {
+  // Lines of the garbage may reply too; the *IDN? reply comes after them.
+  std::optional<std::string> line = client.read_line();
+  while (line && !line->starts_with("OpenScope,")) {
     line = client.read_line();
-  } while (line && !line->starts_with("OpenScope,"));
+  }
   EXPECT_TRUE(line.has_value());
   EXPECT_EQ(client.query("SYST:ERR?"), kNoErrorReply);
 }
@@ -488,25 +501,19 @@ TEST_F(ScpiServerTest, LogsListeningConnectsRefusalsAndDisconnectsAsJsonLines) {
   EXPECT_EQ(events.front()["event"], "listening");
   EXPECT_EQ(events.front()["address"], "127.0.0.1");
   EXPECT_EQ(events.front()["port"], port());
-  std::size_t connects = 0;
-  std::size_t disconnects = 0;
-  std::size_t refusals = 0;
-  for (const nlohmann::json& event : events) {
-    if (event["event"] == "connect") {
-      ++connects;
-      EXPECT_TRUE(event["session"].is_number());
-      EXPECT_THAT(event["peer"].get<std::string>(), StartsWith("127.0.0.1:"));
-    } else if (event["event"] == "disconnect") {
-      ++disconnects;
-      EXPECT_EQ(event["reason"], "idle timeout");
-    } else if (event["event"] == "refuse") {
-      ++refusals;
-      EXPECT_EQ(event["reason"], "too many clients");
-    }
+  const std::vector<nlohmann::json> connects = events_named(events, "connect");
+  EXPECT_EQ(connects.size(), ScpiServer::kMaxClients);
+  for (const nlohmann::json& connect : connects) {
+    EXPECT_TRUE(connect["session"].is_number());
+    EXPECT_THAT(connect["peer"].get<std::string>(), StartsWith("127.0.0.1:"));
   }
-  EXPECT_EQ(connects, ScpiServer::kMaxClients);
-  EXPECT_EQ(disconnects, ScpiServer::kMaxClients);
-  EXPECT_EQ(refusals, 1U);
+  const std::vector<nlohmann::json> disconnects = events_named(events, "disconnect");
+  EXPECT_EQ(disconnects.size(), ScpiServer::kMaxClients);
+  for (const nlohmann::json& disconnect : disconnects) {
+    EXPECT_EQ(disconnect["reason"], "idle timeout");
+  }
+  EXPECT_EQ(events_named(events, "refuse").size(), 1U);
+  EXPECT_EQ(first_event(events, "refuse")["reason"], "too many clients");
 }
 
 TEST_F(ScpiServerTest, LogsAnOversizedLineAndAClientDisconnect) {

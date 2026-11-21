@@ -3,7 +3,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <nlohmann/json.hpp>
+#include <nlohmann/json.hpp>  // IWYU pragma: keep (the definition of json)
+#include <nlohmann/json_fwd.hpp>
 #include <sstream>
 #include <string>
 

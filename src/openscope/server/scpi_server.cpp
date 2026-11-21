@@ -10,20 +10,24 @@
 #include <boost/asio/post.hpp>
 #include <boost/asio/steady_timer.hpp>
 #include <boost/asio/write.hpp>
-#include <boost/system/error_code.hpp>
+#include <boost/system/detail/error_code.hpp>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <format>
 #include <memory>
-#include <nlohmann/json.hpp>
+#include <nlohmann/json.hpp>  // IWYU pragma: keep (the definition of ordered_json)
+#include <nlohmann/json_fwd.hpp>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
+#include <vector>
 
 #include "openscope/instrument.hpp"
 #include "openscope/server/json_log.hpp"
+#include "openscope/server/server_options.hpp"
 
 namespace openscope {
 
@@ -83,7 +87,7 @@ class ScpiServer::Connection : public std::enable_shared_from_this<Connection> {
     server_->instrument_->close_session(session_);
     log("disconnect", {{"reason", reason}});
     error_code ignored;
-    socket_.close(ignored);
+    std::ignore = socket_.close(ignored);
     idle_timer_.cancel();
   }
 
@@ -247,7 +251,12 @@ ScpiServer::ScpiServer(asio::io_context& io, Instrument& instrument, const Serve
 ScpiServer::~ScpiServer() {
   for (const std::weak_ptr<Connection>& connection : connections_) {
     if (const std::shared_ptr<Connection> open = connection.lock()) {
-      open->close("server stopped");
+      // Closing ends a Session this server opened, which cannot fail; only writing the log line
+      // can (out of memory), and a destructor has nowhere to report that, so the next one closes.
+      try {
+        open->close("server stopped");
+      } catch (...) {  // NOLINT(bugprone-empty-catch): see above.
+      }
     }
   }
 }
@@ -286,7 +295,7 @@ void ScpiServer::admit(tcp::socket socket) {
   std::string peer = describe(endpoint);
   if (connections_.size() >= kMaxClients) {
     log_->write("refuse", {{"peer", peer}, {"reason", "too many clients"}});
-    socket.close(error);
+    std::ignore = socket.close(error);
     return;
   }
   auto connection = std::make_shared<Connection>(*this, std::move(socket), std::move(peer));
