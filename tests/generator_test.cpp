@@ -34,12 +34,12 @@ Generator make(const GeneratorSettings& settings, std::uint64_t seed = 0) {
   return generator;
 }
 
-TEST(GeneratorTest, DefaultsAreAOneVoltOneKilohertzSine) {
+TEST(GeneratorTest, DefaultsAreATwoVoltPeakToPeakOneKilohertzSine) {
   const Generator generator{0, 1e6};
 
   EXPECT_EQ(generator.settings().function, GeneratorFunction::kSine);
   EXPECT_EQ(generator.settings().frequency, 1e3);
-  EXPECT_EQ(generator.settings().amplitude, 1.0);
+  EXPECT_EQ(generator.settings().amplitude, 2.0);
   EXPECT_EQ(generator.settings().offset, 0.0);
   EXPECT_EQ(generator.settings().noise, 0.0);
   // A quarter cycle of 1 kHz at 1 MSa/s is 250 samples.
@@ -48,10 +48,10 @@ TEST(GeneratorTest, DefaultsAreAOneVoltOneKilohertzSine) {
   EXPECT_THAT(samples(generator, 750, 1), ElementsAre(-1.0F));
 }
 
-TEST(GeneratorTest, SineSwingsByItsAmplitudeAroundItsOffset) {
+TEST(GeneratorTest, SineSpansItsPeakToPeakAmplitudeAroundItsOffset) {
   const Generator generator = make({.function = GeneratorFunction::kSine,
                                     .frequency = 250.0,
-                                    .amplitude = 2.0,
+                                    .amplitude = 4.0,
                                     .offset = 0.5,
                                     .noise = 0.0});
 
@@ -65,7 +65,7 @@ TEST(GeneratorTest, SineSwingsByItsAmplitudeAroundItsOffset) {
 TEST(GeneratorTest, SquareIsHighForTheFirstHalfOfEachCycle) {
   const Generator generator = make({.function = GeneratorFunction::kSquare,
                                     .frequency = 250.0,
-                                    .amplitude = 2.0,
+                                    .amplitude = 4.0,
                                     .offset = 1.0,
                                     .noise = 0.0});
 
@@ -75,7 +75,7 @@ TEST(GeneratorTest, SquareIsHighForTheFirstHalfOfEachCycle) {
 TEST(GeneratorTest, TriangleRisesFromZeroToPeakThenFallsToTrough) {
   const Generator generator = make({.function = GeneratorFunction::kTriangle,
                                     .frequency = 125.0,
-                                    .amplitude = 1.0,
+                                    .amplitude = 2.0,
                                     .offset = 0.0,
                                     .noise = 0.0});
 
@@ -86,7 +86,7 @@ TEST(GeneratorTest, TriangleRisesFromZeroToPeakThenFallsToTrough) {
 TEST(GeneratorTest, RampRisesFromTroughAcrossEachCycle) {
   const Generator generator = make({.function = GeneratorFunction::kRamp,
                                     .frequency = 125.0,
-                                    .amplitude = 1.0,
+                                    .amplitude = 2.0,
                                     .offset = 0.0,
                                     .noise = 0.0});
 
@@ -104,10 +104,10 @@ TEST(GeneratorTest, DcIsItsOffsetAndIgnoresAmplitudeAndFrequency) {
   EXPECT_THAT(samples(generator, 0, 3), ElementsAre(-1.25F, -1.25F, -1.25F));
 }
 
-TEST(GeneratorTest, NoiseFunctionStaysWithinItsAmplitudeAroundItsOffset) {
+TEST(GeneratorTest, NoiseFunctionSpansItsPeakToPeakAmplitudeAroundItsOffset) {
   const Generator generator = make({.function = GeneratorFunction::kNoise,
                                     .frequency = 1.0,
-                                    .amplitude = 2.0,
+                                    .amplitude = 4.0,
                                     .offset = 1.0,
                                     .noise = 0.0});
 
@@ -199,7 +199,7 @@ TEST(GeneratorTest, NoiseFunctionAndAddedNoiseAreIndependent) {
 TEST(GeneratorTest, FrequencyChangeKeepsThePhaseContinuous) {
   GeneratorSettings ramp{.function = GeneratorFunction::kRamp,
                          .frequency = 250.0,
-                         .amplitude = 1.0,
+                         .amplitude = 2.0,
                          .offset = 0.0,
                          .noise = 0.0};
   Generator generator = make(ramp);
@@ -214,7 +214,7 @@ TEST(GeneratorTest, FrequencyChangeKeepsThePhaseContinuous) {
 TEST(GeneratorTest, SampleRateChangeKeepsThePhaseContinuous) {
   const GeneratorSettings ramp{.function = GeneratorFunction::kRamp,
                                .frequency = 250.0,
-                               .amplitude = 1.0,
+                               .amplitude = 2.0,
                                .offset = 0.0,
                                .noise = 0.0};
   Generator generator = make(ramp);
@@ -227,7 +227,7 @@ TEST(GeneratorTest, SampleRateChangeKeepsThePhaseContinuous) {
 TEST(GeneratorTest, RepeatedChangesEachKeepThePhaseContinuous) {
   GeneratorSettings ramp{.function = GeneratorFunction::kRamp,
                          .frequency = 125.0,
-                         .amplitude = 1.0,
+                         .amplitude = 2.0,
                          .offset = 0.0,
                          .noise = 0.0};
   Generator generator = make(ramp);
@@ -259,7 +259,7 @@ TEST(GeneratorTest, ConfigureReplacesTheSettings) {
 TEST(GeneratorTest, PhaseStaysExactFarAlongTheSampleClock) {
   const Generator generator = make({.function = GeneratorFunction::kRamp,
                                     .frequency = 125.0,
-                                    .amplitude = 1.0,
+                                    .amplitude = 2.0,
                                     .offset = 0.0,
                                     .noise = 0.0});
 
@@ -292,7 +292,7 @@ TEST(GeneratorTest, IndexesBeforeTheLastChangeFollowTheNewSettingsBackwards) {
   Generator generator{0, kSampleRate};
   generator.configure({.function = GeneratorFunction::kRamp,
                        .frequency = 125.0,
-                       .amplitude = 1.0,
+                       .amplitude = 2.0,
                        .offset = 0.0,
                        .noise = 0.0},
                       kSampleRate, 8);  // The default sine is at phase 8 * 1 kHz / 1 kSa/s = 0.

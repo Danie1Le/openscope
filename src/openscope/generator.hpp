@@ -16,9 +16,9 @@ struct GeneratorSettings {
   GeneratorFunction function = GeneratorFunction::kSine;
   /// Cycles per second of the periodic functions.
   double frequency = 1e3;
-  /// Peak amplitude in volts: the signal swings from offset - amplitude to offset + amplitude.
-  /// DC ignores it.
-  double amplitude = 1.0;
+  /// Peak-to-peak amplitude in volts, the SCPI generator convention: the signal swings from
+  /// offset - amplitude / 2 to offset + amplitude / 2. DC ignores it.
+  double amplitude = 2.0;
   /// Volts added to the whole signal.
   double offset = 0.0;
   /// RMS volts of Gaussian noise added on top of the function.

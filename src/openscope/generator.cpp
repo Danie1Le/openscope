@@ -89,13 +89,14 @@ double Generator::phase_at(SampleIndex index) const {
 }
 
 void Generator::generate(SampleIndex first, std::span<float> samples) const {
+  const double peak = settings_.amplitude / 2.0;
   for (std::size_t i = 0; i < samples.size(); ++i) {
     const SampleIndex index = first + i;
     double volts = settings_.offset;
     if (settings_.function == GeneratorFunction::kNoise) {
-      volts += settings_.amplitude * ((2.0 * uniform(seed_, Stream::kNoiseFunction, index)) - 1.0);
+      volts += peak * ((2.0 * uniform(seed_, Stream::kNoiseFunction, index)) - 1.0);
     } else {
-      volts += settings_.amplitude * shape(settings_.function, phase_at(index));
+      volts += peak * shape(settings_.function, phase_at(index));
     }
     if (settings_.noise > 0.0) {
       volts += settings_.noise * gaussian(seed_, index);
