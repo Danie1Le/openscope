@@ -148,7 +148,9 @@ An armed Single is the pending operation that `*OPC?` and `*WAI` wait for. Nothi
 
 ### Consistency model
 
-Every query reads the latest capture at the moment it runs. In the Running run state, two queries, even on one line, may read two different captures. To query one capture several times, take it with `SINGle;*OPC?` and then send the queries: the instrument is Stopped, so the latest capture no longer changes until the next `RUN` or `SINGle` (or `*RST`, which drops it).
+Every query of capture data reads the latest capture at the moment it runs. In the Running run state, two queries, even on one line, may read two different captures. To query one capture several times, take it with `SINGle;*OPC?` and then send the queries: the instrument is Stopped, so the latest capture no longer changes until the next `RUN` or `SINGle` (or `*RST`, which drops it).
+
+`MEAS:STAT?` is the exception: it reads the [measurement statistics](#statistics), which count every capture since the last reset, not the latest capture alone. While Running they change with every capture, so two `MEAS:STAT?` queries may count different captures. After `SINGle;*OPC?` they hold still, but they still cover every capture since the reset, the Single's last; reset them first (`MEAS:STAT:RES;:SINGle;*OPC?`) for statistics of the Single's capture alone.
 
 ### Settings
 
@@ -215,7 +217,7 @@ A fault is placed by the sample index, so with the same seed and the same comman
 
 A channel's input range is its offset plus or minus four vertical divisions (four times its scale). A sample outside it is clipped: held at the nearer limit. The sample rate and record length alone define a capture: one record length of sample indexes, positioned by the trigger (below). Only the latest capture is kept.
 
-A capture takes its settings from its first sample and holds one signal, so changing a Generator setting (`SOUR<n>:FUNC`, `FREQ`, `AMPL`, `OFFS`, `NOIS`), a channel setting (`CHAN<n>:DISP`, `SCAL`, `OFFS`), an acquisition setting (`ACQ:SRAT`, `POIN`) or a trigger setting (`TRIG:...`) drops the capture in progress, restarts the trigger and resets the [measurement statistics](#statistics), and the next capture starts collecting samples at the next sample index. Any such change does this, from any Session and even one that sets the value already in place; an armed Single stays armed and takes its capture from the next sample index. The latest capture already completed stays as it was and stays readable. Timebase changes do not drop the capture in progress (the timebase is a display viewport, ADR 0004), but as setting changes they do reset the statistics. A Session's own `WAV:...` and `FFT:...` settings and a fault (`SOUR<n>:FAUL`), which is meant to be captured, do neither.
+A capture takes its settings from its first sample and holds one signal, so changing a Generator setting (`SOUR<n>:FUNC`, `FREQ`, `AMPL`, `OFFS`, `NOIS`), a channel setting (`CHAN<n>:DISP`, `SCAL`, `OFFS`), an acquisition setting (`ACQ:SRAT`, `POIN`) or a trigger setting (`TRIG:...`) drops the capture in progress, restarts the trigger and resets the [measurement statistics](#statistics), and the next capture starts collecting samples at the next sample index. Any such change does this, from any Session and even one that sets the value already in place; an armed Single stays armed and takes its capture from the next sample index. The latest capture already completed stays as it was and stays readable. Timebase changes do none of this (the timebase is a display viewport, ADR 0004), nor do a Session's own `WAV:...` and `FFT:...` settings or a fault (`SOUR<n>:FAUL`), which is meant to be captured.
 
 ### Trigger
 
@@ -306,7 +308,7 @@ The entry does not stop the line: `MEAS:VPP? CHAN1;VRMS? CHAN1` on a clipped sig
 
 Measurement statistics follow every measurement of every enabled channel across the captures since the last reset, so a script can check how stable a value is. Every capture that completes counts, untriggered captures included, even when several complete between two queries and only the last becomes the latest capture. They are instrument-wide: every Session reads the same statistics, and a reset from one Session resets them for all.
 
-The statistics reset on `MEAS:STAT:RES`, on `*RST` and on every instrument-wide setting command (`SOUR<n>:...`, `CHAN<n>:...`, `ACQ:...`, `TIM:SCAL`, `TRIG:...`), from any Session and even one that sets the value already in place, so they never mix data from two settings. A capture interrupted by the change is dropped (see [Channels and captures](#channels-and-captures)), so the first capture counted after a reset starts after it. Commands that change no setting keep them: a Session's own `WAV:...` and `FFT:...` settings, faults (`SOUR<n>:FAUL`, which are meant to show in the statistics), run control (`RUN`, `STOP`, `SINGle`), queries, and a setter that is rejected.
+The statistics reset on `MEAS:STAT:RES`, on `*RST` and on every setting command that shapes captures (`SOUR<n>:...`, `CHAN<n>:...`, `ACQ:...`, `TRIG:...`), from any Session and even one that sets the value already in place, so they never mix data from two settings. A capture interrupted by the change is dropped (see [Channels and captures](#channels-and-captures)), so the first capture counted after a reset starts after it. Other commands keep them: `TIM:SCAL` (the timebase only zooms the display and changes no captured data, ADR 0004), a Session's own `WAV:...` and `FFT:...` settings, faults (`SOUR<n>:FAUL`, which are meant to show in the statistics), run control (`RUN`, `STOP`, `SINGle`), queries, and a setter that is rejected.
 
 The fields:
 
