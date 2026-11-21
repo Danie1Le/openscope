@@ -37,11 +37,18 @@ inline const ScpiError kHeaderSuffixOutOfRange{.code = -114,
 /// A numeric parameter's suffix is not a unit, with an optional multiplier, the parameter accepts.
 inline const ScpiError kInvalidSuffix{.code = -131, .message = "Invalid suffix"};
 
+/// A query on a channel that is not in the latest capture, because it was not enabled when the
+/// capture was taken.
+inline const ScpiError kSettingsConflict{.code = -221, .message = "Settings conflict"};
+
 /// A numeric parameter outside the range the command accepts.
 inline const ScpiError kDataOutOfRange{.code = -222, .message = "Data out of range"};
 
 /// A keyword the parameter does not accept.
 inline const ScpiError kIllegalParameterValue{.code = -224, .message = "Illegal parameter value"};
+
+/// A query for capture data before the first capture has completed.
+inline const ScpiError kDataCorruptOrStale{.code = -230, .message = "Data corrupt or stale"};
 
 /// Recorded in place of the newest error when a Session's error queue is full.
 inline const ScpiError kQueueOverflow{.code = -350, .message = "Queue overflow"};

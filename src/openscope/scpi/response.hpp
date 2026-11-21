@@ -1,7 +1,9 @@
 #pragma once
 
 #include <concepts>
+#include <cstddef>
 #include <format>
+#include <span>
 #include <string>
 
 #include "openscope/scpi/ascii.hpp"
@@ -16,5 +18,18 @@ template <std::floating_point Real>
 std::string format_real(Real value) {
   return ascii::to_upper(std::format("{}", value));
 }
+
+/// The most bytes a definite-length block can carry: its length is at most nine digits.
+inline constexpr std::size_t kMaxBlockBytes = 999'999'999;
+
+/// The header of an IEEE 488.2 definite-length block of `length` bytes: `#`, the number of digits
+/// in the length, then the length (`#212` for 12 bytes, `#10` for none). Throws std::length_error
+/// when `length` is over kMaxBlockBytes.
+std::string definite_length_header(std::size_t length);
+
+/// `values` as a definite-length block of IEEE 754 float32, least significant byte first, the
+/// byte order PyVISA's `query_binary_values` reads by default. Throws std::length_error when the
+/// bytes would not fit in one block (over 249,999,999 values).
+std::string float32_block(std::span<const float> values);
 
 }  // namespace openscope::scpi
