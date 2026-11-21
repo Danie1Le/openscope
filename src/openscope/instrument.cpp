@@ -350,9 +350,8 @@ void Instrument::add_trigger_number(std::string_view header, NumericParameter ra
   add_setting(
       header, std::move(range),
       [this, field](Session&, const Arguments& arguments) {
-        change_trigger([&](TriggerSettings& settings) {
-          settings.*field = value_of<double>(arguments);
-        });
+        change_trigger(
+            [&](TriggerSettings& settings) { settings.*field = value_of<double>(arguments); });
       },
       [this, field](Session&, const Arguments&) { return scpi::format_real(trigger_.*field); });
 }
@@ -364,9 +363,8 @@ void Instrument::add_trigger_keyword(std::string_view header,
   add_keyword_setting(
       header, keywords,
       [this, field](Session&, const Arguments&, std::size_t keyword) {
-        change_trigger([&](TriggerSettings& settings) {
-          settings.*field = static_cast<Keyword>(keyword);
-        });
+        change_trigger(
+            [&](TriggerSettings& settings) { settings.*field = static_cast<Keyword>(keyword); });
       },
       [this, field](Session&, const Arguments&) {
         return static_cast<std::size_t>(trigger_.*field);
