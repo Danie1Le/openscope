@@ -124,7 +124,9 @@ void Instrument::add_channel_commands() {
   add_setting(
       "CHANnel<1-4>:DISPlay", scpi::BooleanParameter{},
       [this](Session&, const Arguments& arguments) {
-        channel_to_change(arguments).enabled = value_of<bool>(arguments);
+        change_channel(arguments, [&](ChannelSettings& settings) {
+          settings.enabled = value_of<bool>(arguments);
+        });
       },
       [this](Session&, const Arguments& arguments) {
         return std::string(channels_.at(channel_of(arguments)).enabled ? "1" : "0");
@@ -139,9 +141,9 @@ void Instrument::add_acquisition_commands() {
   add_setting(
       "ACQuire:SRATe", NumericParameter{.min = 1.0, .max = 1e9, .unit = ""},
       [this](Session&, const Arguments& arguments) {
-        AcquisitionSettings settings = acquisition_;
-        settings.sample_rate = value_of<double>(arguments);
-        set_acquisition(settings);
+        change_acquisition([&](AcquisitionSettings& settings) {
+          settings.sample_rate = value_of<double>(arguments);
+        });
       },
       [this](Session&, const Arguments&) { return scpi::format_real(acquisition_.sample_rate); });
   add_setting(
@@ -150,11 +152,11 @@ void Instrument::add_acquisition_commands() {
                        .max = static_cast<double>(AcquisitionSettings::kMaxRecordLength),
                        .unit = ""},
       [this](Session&, const Arguments& arguments) {
-        AcquisitionSettings settings = acquisition_;
-        // A count of samples: a fraction rounds to the nearest whole number, half away from zero.
-        settings.record_length =
-            static_cast<std::size_t>(std::llround(value_of<double>(arguments)));
-        set_acquisition(settings);
+        change_acquisition([&](AcquisitionSettings& settings) {
+          // A count of samples: a fraction rounds to the nearest whole number, half away from zero.
+          settings.record_length =
+              static_cast<std::size_t>(std::llround(value_of<double>(arguments)));
+        });
       },
       [this](Session&, const Arguments&) { return std::to_string(acquisition_.record_length); });
 }
@@ -206,7 +208,9 @@ void Instrument::add_channel_number(std::string_view header, NumericParameter ra
   add_setting(
       header, std::move(range),
       [this, field](Session&, const Arguments& arguments) {
-        channel_to_change(arguments).*field = value_of<double>(arguments);
+        change_channel(arguments, [&](ChannelSettings& settings) {
+          settings.*field = value_of<double>(arguments);
+        });
       },
       [this, field](Session&, const Arguments& arguments) {
         return scpi::format_real(channels_.at(channel_of(arguments)).*field);
@@ -221,15 +225,16 @@ void Instrument::change_generator(const Arguments& arguments,
   generator.configure(settings, acquisition_.sample_rate, clock_.now());
 }
 
-ChannelSettings& Instrument::channel_to_change(const Arguments& arguments) {
+void Instrument::change_channel(const Arguments& arguments,
+                                const std::function<void(ChannelSettings&)>& change) {
+  change(channels_.at(channel_of(arguments)));
   captures_.discard();
-  return channels_.at(channel_of(arguments));
 }
 
-void Instrument::set_acquisition(const AcquisitionSettings& settings) {
-  acquisition_ = settings;
+void Instrument::change_acquisition(const std::function<void(AcquisitionSettings&)>& change) {
+  change(acquisition_);
   for (Generator& generator : generators_) {
-    generator.configure(generator.settings(), settings.sample_rate, clock_.now());
+    generator.configure(generator.settings(), acquisition_.sample_rate, clock_.now());
   }
   captures_.discard();
 }

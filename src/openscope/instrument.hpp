@@ -89,12 +89,13 @@ class Instrument {
   /// sample index on.
   void change_generator(const scpi::Arguments& arguments,
                         const std::function<void(GeneratorSettings&)>& change);
-  /// The channel a `CHANnel<n>` command names, for changing. The capture in progress is
-  /// discarded, since a capture keeps the channel settings of the block that started it.
-  ChannelSettings& channel_to_change(const scpi::Arguments& arguments);
-  /// Applies new acquisition settings: Generators keep their phase across a sample-rate change and
-  /// the capture in progress is discarded.
-  void set_acquisition(const AcquisitionSettings& settings);
+  /// Applies `change` to the settings of the channel a `CHANnel<n>` command names and discards the
+  /// capture in progress, since a capture keeps the channel settings of the block that started it.
+  void change_channel(const scpi::Arguments& arguments,
+                      const std::function<void(ChannelSettings&)>& change);
+  /// Applies `change` to the acquisition settings and discards the capture in progress.
+  /// Generators keep their phase across a sample-rate change.
+  void change_acquisition(const std::function<void(AcquisitionSettings&)>& change);
   /// `*RST`: restores every instrument-wide setting, restarts every Generator as if it had run at
   /// its defaults since sample index 0, and drops the latest capture. The sample clock keeps
   /// counting and Sessions keep their own state (ADR 0002).
