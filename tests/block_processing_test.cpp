@@ -287,5 +287,29 @@ TEST_F(BlockProcessingTest, ProcessingOnAnotherThreadWhileCommandsRun) {
   EXPECT_EQ(session.next_error(), test::kNoErrorReply);
 }
 
+// The acquisition half samples without the mutex, on copies of the Generators, while this thread
+// changes them: TSan checks that sampling shares nothing with commands unlocked.
+TEST_F(BlockProcessingTest, AcquiringOnAnotherThreadWhileCommandsChangeTheGenerators) {
+  constexpr int kBlocks = 200;
+  session.send("ACQ:POIN 100");
+  std::vector<AcquiredBlock> blocks;
+  blocks.reserve(kBlocks);
+
+  std::thread acquisition([&] {
+    for (int n = 0; n < kBlocks; ++n) {
+      blocks.push_back(acquired(instrument, 100));
+    }
+  });
+  for (int n = 0; n < kBlocks; ++n) {
+    session.send(n % 2 == 0 ? "SOUR1:OFFS 0.5;FREQ 2000" : "SOUR1:OFFS 0;FREQ 1000");
+  }
+  acquisition.join();
+  for (const AcquiredBlock& block : blocks) {
+    instrument.process(block);
+  }
+
+  EXPECT_EQ(session.next_error(), test::kNoErrorReply);
+}
+
 }  // namespace
 }  // namespace openscope

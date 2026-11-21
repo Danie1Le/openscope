@@ -644,9 +644,25 @@ std::optional<AcquiredBlock> Instrument::acquire(std::size_t count) {
   if (count > kMaxBlockLength) {
     throw std::invalid_argument("sample block longer than kMaxBlockLength");
   }
-  const std::scoped_lock lock(mutex_);
-  std::optional<AcquiredBlock> block = sample(count);
-  clock_.take(count);
+  std::optional<AcquiredBlock> block;
+  std::optional<std::array<Generator, kChannelCount>> generators;
+  SampleIndex first = 0;
+  {
+    const std::scoped_lock lock(mutex_);
+    block = snapshot();
+    if (block) {
+      generators.emplace(generators_);
+    }
+    first = clock_.now();
+    clock_.take(count);
+  }
+  // Sampling is most of the cost, so it runs without the mutex and commands never wait on it. The
+  // copies sample what generators_ would: a command changes a Generator from the sample clock's
+  // next index on, after this block (ADR 0003).
+  if (block) {
+    block->samples =
+        sample_channels(*generators, block->channels, block->trigger.source, first, count);
+  }
   return block;
 }
 
@@ -678,13 +694,21 @@ double Instrument::sample_rate() const {
 }
 
 std::optional<AcquiredBlock> Instrument::sample(std::size_t count) {
+  std::optional<AcquiredBlock> block = snapshot();
+  if (block) {
+    block->samples = sample_channels(generators_, channels_, trigger_.source, clock_.now(), count);
+  }
+  return block;
+}
+
+std::optional<AcquiredBlock> Instrument::snapshot() {
   // Stopped samples nothing: Generators are pure functions of the sample index (ADR 0003), and
   // the capture in progress was dropped when the instrument stopped.
   if (run_state_ == RunState::kStopped) {
     return std::nullopt;
   }
   return AcquiredBlock{
-      .samples = sample_channels(generators_, channels_, trigger_.source, clock_.now(), count),
+      .samples = {},
       .acquisition = acquisition_,
       .channels = channels_,
       .trigger = trigger_,

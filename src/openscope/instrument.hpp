@@ -98,8 +98,10 @@ class Instrument {
 
   /// Live mode's acquisition half: takes the next `count` sample indexes on the sample clock and
   /// returns them sampled, with a snapshot of the settings `process` needs. While Stopped it
-  /// still takes them, but samples nothing and returns nullopt. Throws std::invalid_argument when
-  /// `count` exceeds kMaxBlockLength.
+  /// still takes them, but samples nothing and returns nullopt. It holds the mutex that commands
+  /// take only to take the indexes and the snapshot, not while it samples, so a command never
+  /// waits for a block to be sampled. Throws std::invalid_argument when `count` exceeds
+  /// kMaxBlockLength.
   [[nodiscard]] std::optional<AcquiredBlock> acquire(std::size_t count);
 
   /// Live mode's processing half: assembles `block`, from `acquire`, into captures without the
@@ -150,6 +152,9 @@ class Instrument {
   /// Samples `count` indexes from the sample clock's next one, without taking them, under the
   /// current settings; nullopt while Stopped. Needs mutex_.
   std::optional<AcquiredBlock> sample(std::size_t count);
+  /// A block of no samples with the current settings and the next sequence number, to sample
+  /// into; nullopt while Stopped. Needs mutex_.
+  std::optional<AcquiredBlock> snapshot();
   /// Feeds `block` to the capture assembler. Touches the processing state only, so it needs no
   /// lock.
   Pushed assemble(const AcquiredBlock& block);
