@@ -57,7 +57,8 @@ struct Capture {
 enum class CaptureLimit : std::uint8_t {
   /// Every one (the Running run state).
   kEvery,
-  /// The first; the samples after it are left for the caller (the Armed-single run state).
+  /// The first (the Armed-single run state). The samples after it are left for the caller, who
+  /// discards before pushing them: the trigger has already seen the whole block.
   kFirst,
 };
 

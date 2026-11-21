@@ -607,15 +607,15 @@ void Instrument::advance(std::size_t samples) {
       const bool single = pending();
       const SampleBlock block =
           sample_channels(generators_, channels_, trigger_.source, clock_.now(), count);
-      const std::optional<std::size_t> used =
+      const std::optional<std::size_t> capture_end =
           captures_.push(block, acquisition_, channels_, trigger_,
                          single ? CaptureLimit::kFirst : CaptureLimit::kEvery);
       // The Single's capture ends the operation at its last sample: the lines it resumes run with
       // the clock there, and the next block starts there under whatever they changed, so how
       // `advance` is chunked never changes a capture or a reply (ADR 0003).
-      if (single && used) {
-        clock_.take(*used);
-        samples -= *used;
+      if (single && capture_end) {
+        clock_.take(*capture_end);
+        samples -= *capture_end;
         enter(RunState::kStopped);
         resume_held();
         continue;

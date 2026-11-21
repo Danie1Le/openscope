@@ -9,11 +9,11 @@
 #include <cstddef>
 #include <memory>
 #include <optional>
+#include <ostream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
-#include <utility>
 #include <vector>
 
 #include "instrument_fixture.hpp"
@@ -210,7 +210,7 @@ TEST_F(RunControlTest, StopWhileArmedEndsTheSingleWithoutACapture) {
 TEST_F(RunControlTest, ResetReturnsToRunning) {
   session.send("STOP");
 
-  session.send("*RST;:SOUR1:FUNC DC;:TRIG:POS 0");
+  session.send(std::string("*RST;:") + kUntriggeredDc);
   instrument.advance(2 * kResetRecordLength);
 
   EXPECT_EQ(first_index(instrument), kResetRecordLength);
@@ -476,30 +476,48 @@ SteppedRun run_stepped(std::string_view line, std::size_t samples, std::size_t s
           reader.send("WAV:PRE?;DATA?")};
 }
 
-// ADR 0003: captures and replies do not depend on how `advance` is chunked, even when a line
-// resumed inside it arms a Single, runs, or changes a setting at the sample the Single ended.
-// Each parameter is a line and its reply when the clock is stepped one record at a time.
-class SteppingInvarianceTest : public testing::TestWithParam<std::pair<const char*, const char*>> {
+/// A line SteppingInvarianceTest runs, how many sample indexes it steps the clock, and the line's
+/// reply when the clock is stepped one record length at a time.
+struct ResumedLine {
+  const char* line;
+  std::size_t samples;
+  const char* reply;
+
+  friend void PrintTo(const ResumedLine& resumed, std::ostream* out) { *out << resumed.line; }
 };
 
-TEST_P(SteppingInvarianceTest, OneAdvanceGivesWhatManySmallOnesGive) {
-  constexpr std::size_t kSamples = 3 * kResetRecordLength;
-  const auto [line, reply] = GetParam();
-  const SteppedRun by_record = run_stepped(line, kSamples, kResetRecordLength);
-  ASSERT_EQ(std::get<0>(by_record), reply);
+// ADR 0003: captures and replies do not depend on how `advance` is chunked, even when a line
+// resumed inside it arms a Single, runs, or changes a setting at the sample the Single ended.
+class SteppingInvarianceTest : public testing::TestWithParam<ResumedLine> {};
 
-  for (const std::size_t step : {kSamples, std::size_t{1}, std::size_t{7}, std::size_t{3333},
+TEST_P(SteppingInvarianceTest, OneAdvanceGivesWhatManySmallOnesGive) {
+  const auto [line, samples, reply] = GetParam();
+  const SteppedRun by_record = run_stepped(line, samples, kResetRecordLength);
+  const auto& [by_record_reply, by_record_first, by_record_capture] = by_record;
+  ASSERT_EQ(by_record_reply, reply);
+
+  for (const std::size_t step : {samples, std::size_t{1}, std::size_t{7}, std::size_t{3333},
                                  kResetRecordLength - 1, kResetRecordLength + 1}) {
-    EXPECT_EQ(run_stepped(line, kSamples, step), by_record) << "step " << step;
+    EXPECT_EQ(run_stepped(line, samples, step), by_record) << "step " << step;
   }
 }
 
-INSTANTIATE_TEST_SUITE_P(ResumedLines, SteppingInvarianceTest,
-                         testing::Values(std::pair{"SINGle;*WAI;SINGle;*OPC?", "1"},
-                                         std::pair{"SINGle;*WAI;RUN;SYST:ERR?", kNoErrorReply},
-                                         std::pair{"SINGle;*WAI;SOUR1:OFFS 0.5;:RUN;SYST:ERR?",
-                                                   kNoErrorReply},
-                                         std::pair{"SINGle;*WAI;SINGle;*WAI;SINGle;*OPC?", "1"}));
+INSTANTIATE_TEST_SUITE_P(
+    ResumedLines, SteppingInvarianceTest,
+    testing::Values(
+        ResumedLine{"SINGle;*WAI;SINGle;*OPC?", 3 * kResetRecordLength, "1"},
+        ResumedLine{"SINGle;*WAI;RUN;SYST:ERR?", 3 * kResetRecordLength, kNoErrorReply},
+        ResumedLine{"SINGle;*WAI;SOUR1:OFFS 0.5;:RUN;SYST:ERR?", 3 * kResetRecordLength,
+                    kNoErrorReply},
+        ResumedLine{"SINGle;*WAI;SINGle;*WAI;SINGle;*OPC?", 3 * kResetRecordLength, "1"},
+        // Triggered captures: pre-trigger samples, Normal mode and a holdoff running across the
+        // sample the Single ends at.
+        ResumedLine{"SOUR1:FUNC SIN;NOIS 0.05;:TRIG:MODE NORM;POS 50;HOLD 3E-3;:SINGle;*WAI;"
+                    "SINGle;*WAI;:RUN;SYST:ERR?",
+                    5 * kResetRecordLength, kNoErrorReply},
+        // Singles that end inside the sample blocks `advance` splits a long call into.
+        ResumedLine{"ACQ:POIN 40000;:SINGle;*WAI;SINGle;*WAI;:RUN;SYST:ERR?",
+                    15 * kResetRecordLength, kNoErrorReply}));
 
 // Any setting change discards the capture in progress, even one that sets the value already in
 // place, and the capture restarts at the next sample index.
@@ -541,8 +559,8 @@ INSTANTIATE_TEST_SUITE_P(EverySetting, SettingChangeTest,
                                          "TRIG:SOUR CHAN1", "TRIG:LEV 0", "TRIG:SLOP POS",
                                          "TRIG:MODE AUTO", "TRIG:HOLD 0", "TRIG:POS 0"));
 
-// ADR 0004: the timebase only zooms the display, and WAV and FFT settings belong to one Session.
-// A Fault is an event in the signal, which the capture is there to show.
+// The timebase only zooms the display (ADR 0004), and WAV and FFT settings belong to one Session
+// (ADR 0002). A Fault is an event in the signal, which the capture is there to show.
 TEST_F(RunControlTest, DisplayAndSessionSettingsAndFaultsKeepTheCaptureInProgress) {
   instrument.advance(6000);
 
