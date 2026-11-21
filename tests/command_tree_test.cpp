@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -528,6 +529,10 @@ class HeldLineTest : public CommandTreeTest {
     return called;
   }
 };
+
+// A copy of a held line could be resumed twice and run its rest twice.
+static_assert(!std::is_copy_constructible_v<Execution> && !std::is_copy_assignable_v<Execution>);
+static_assert(std::is_nothrow_move_constructible_v<Execution>);
 
 TEST_F(HeldLineTest, HoldStopsTheLineAfterTheCommandThatHeldIt) {
   const Execution execution = tree.execute(session, "*TST?;*HOLD?;*TST?;:TRIG:MODE AUTO");

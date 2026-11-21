@@ -486,7 +486,7 @@ void Instrument::execute(SessionId session, std::string_view line, const ReplyHa
     on_reply(std::nullopt);
     return;
   }
-  on_reply(commands_.execute(caller, line).reply());
+  on_reply(commands_.execute(caller, line).take_reply());
 }
 
 void Instrument::advance(std::size_t samples) {
