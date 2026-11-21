@@ -43,12 +43,12 @@ struct SignalLevels {
   double minimum;
   /// The highest sample.
   double maximum;
-  /// The settled high level: the mode of the upper half of the histogram, or the highest sample
-  /// that is not an outlier when that half has no settled level. A spike or short glitch is never
-  /// top.
+  /// The settled high level: the mean of the samples in the fullest bin of the upper half of the
+  /// histogram, or the highest sample that is not an outlier when that half has no settled level.
+  /// A spike or short glitch is never top.
   double top;
-  /// The settled low level: the mode of the lower half of the histogram, or the lowest sample that
-  /// is not an outlier.
+  /// The settled low level: the same from the lower half of the histogram, or the lowest sample
+  /// that is not an outlier.
   double base;
 };
 

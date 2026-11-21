@@ -37,9 +37,9 @@ inline const ScpiError kHeaderSuffixOutOfRange{.code = -114,
 /// A numeric parameter's suffix is not a unit, with an optional multiplier, the parameter accepts.
 inline const ScpiError kInvalidSuffix{.code = -131, .message = "Invalid suffix"};
 
-/// A measurement with no value because top minus base is under 0.2 vertical divisions
-/// (measurement status No signal). The query still replies, with SCPI's not-a-number value, so the
-/// rest of the line runs.
+/// A measurement that needs edges or cycles with no value because top minus base is under 0.2
+/// vertical divisions (measurement status No signal). The query still replies, with SCPI's
+/// not-a-number value, so the rest of the line runs.
 inline const ScpiError kNoSignal{.code = -200, .message = "Execution error;No signal"};
 
 /// A measurement with no value because the capture holds under one whole cycle or no complete edge
