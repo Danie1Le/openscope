@@ -28,8 +28,8 @@ void CaptureAssembler::push(const SampleBlock& block, const AcquisitionSettings&
       filled_ = 0;
       for (std::size_t n = 0; n < kChannelCount; ++n) {
         if (channels[n].enabled) {
-          CapturedChannel& captured = building_->channels.at(n).emplace(CapturedChannel{
-              .scale = channels[n].scale, .offset = channels[n].offset, .samples = {}});
+          CapturedChannel& captured = building_->channels.at(n).emplace(
+              CapturedChannel{.settings = channels[n], .samples = {}});
           captured.samples.reserve(acquisition.record_length);
         }
       }

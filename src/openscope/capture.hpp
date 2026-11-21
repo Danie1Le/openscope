@@ -23,10 +23,9 @@ struct AcquisitionSettings {
 
 /// One enabled channel's part of a capture, with the vertical settings its samples were taken at.
 struct CapturedChannel {
-  /// Volts per vertical division.
-  double scale = 0.0;
-  /// The voltage at the centre of the input range.
-  double offset = 0.0;
+  /// The channel's settings when the capture started, so its input-range limits are the ones
+  /// that clipped the samples.
+  ChannelSettings settings;
   /// One sample per sample index of the capture, in volts, already clipped.
   std::vector<float> samples;
 };

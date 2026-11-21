@@ -49,8 +49,8 @@ TEST_F(CaptureTest, CaptureSpansOneRecordLengthOfTheEnabledChannelsOnly) {
   EXPECT_TRUE(capture->untriggered);
   EXPECT_EQ(capture->trigger_position, 0U);
   const CapturedChannel channel = test::captured(instrument, 1);
-  EXPECT_EQ(channel.scale, 1.0);
-  EXPECT_EQ(channel.offset, 0.0);
+  EXPECT_EQ(channel.settings.scale, 1.0);
+  EXPECT_EQ(channel.settings.offset, 0.0);
   EXPECT_EQ(channel.samples.size(), test::kResetRecordLength);
   for (std::size_t n = 1; n < kChannelCount; ++n) {
     EXPECT_FALSE(capture->channels.at(n).has_value()) << "CH" << n + 1;
