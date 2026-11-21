@@ -210,7 +210,7 @@ constexpr Band kDoubtBand{.lower = 0.4, .upper = 0.6};
 constexpr double kDoubtfulCycleShare = 0.125;
 
 /// The band rise and fall time are measured across: the 10% and 90% reference levels.
-constexpr Band kTransitionBand{.lower = 0.1, .upper = 0.9};
+constexpr Band kRiseFallBand{.lower = 0.1, .upper = 0.9};
 
 /// One move of the signal from beyond one level of a band to beyond the other. Its times are in
 /// sample periods.
@@ -365,7 +365,7 @@ template <Edge::Direction kDirection>
 std::optional<double> transition_time(const MeasuredSignal& signal) {
   double total = 0.0;
   std::size_t count = 0;
-  for (const Edge& edge : find_edges(signal, kTransitionBand)) {
+  for (const Edge& edge : find_edges(signal, kRiseFallBand)) {
     if (edge.direction == kDirection) {
       total += edge.duration;
       ++count;
