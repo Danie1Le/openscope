@@ -38,7 +38,7 @@ inline const ScpiError kHeaderSuffixOutOfRange{.code = -114,
 inline const ScpiError kInvalidSuffix{.code = -131, .message = "Invalid suffix"};
 
 /// A query on a channel that is not in the latest capture, because it was not enabled when the
-/// capture was taken.
+/// capture was taken; or a fault injected into a Generator that already holds as many as it can.
 inline const ScpiError kSettingsConflict{.code = -221, .message = "Settings conflict"};
 
 /// A numeric parameter outside the range the command accepts.

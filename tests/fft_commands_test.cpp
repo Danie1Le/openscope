@@ -161,11 +161,11 @@ TEST_F(FftCommandsTest, ARecordLengthOfOneGivesOneDcBin) {
 }
 
 TEST_F(FftCommandsTest, TheLongestRecordLengthGivesHalfAMillionBins) {
-  session.send(std::format("ACQ:POIN {};:TRIG:LEV 2;POS 0", Capture::kMaxRecordLength));
-  instrument.advance(Capture::kMaxRecordLength);
+  session.send(std::format("ACQ:POIN {};:TRIG:LEV 2;POS 0", AcquisitionSettings::kMaxRecordLength));
+  instrument.advance(AcquisitionSettings::kMaxRecordLength);
 
   EXPECT_EQ(decode_float32_block(session.send("FFT:DATA?").value_or("")).size(),
-            (Capture::kMaxRecordLength / 2) + 1);
+            (AcquisitionSettings::kMaxRecordLength / 2) + 1);
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 

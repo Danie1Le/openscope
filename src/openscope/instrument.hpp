@@ -125,6 +125,11 @@ class Instrument {
   /// sample index on.
   void change_generator(const scpi::Arguments& arguments,
                         const std::function<void(GeneratorSettings&)>& change);
+  /// Runs `SOURce<n>:FAULt`: adds a Fault to the Generator the command names, starting at the next
+  /// sample index. Reports -222 for a magnitude beyond what its kind allows and -221 when the
+  /// Generator already holds Generator::kMaxFaults.
+  scpi::HandlerResult inject_fault(const scpi::Arguments& arguments);
+
   /// Applies `change` to the settings of the channel a `CHANnel<n>` command names and discards the
   /// capture in progress, since a capture keeps the channel settings of the block that started it.
   void change_channel(const scpi::Arguments& arguments,
@@ -136,8 +141,8 @@ class Instrument {
   /// the trigger.
   void change_trigger(const std::function<void(TriggerSettings&)>& change);
   /// `*RST`: restores every instrument-wide setting, restarts every Generator as if it had run at
-  /// its defaults since sample index 0, and drops the latest capture. The sample clock keeps
-  /// counting and Sessions keep their own state (ADR 0002).
+  /// its defaults since sample index 0 with no Faults, and drops the latest capture. The sample
+  /// clock keeps counting and Sessions keep their own state (ADR 0002).
   void reset();
 
   scpi::CommandTree commands_;
