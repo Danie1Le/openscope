@@ -138,6 +138,19 @@ TEST_F(WaveformTest, QueriesBeforeTheFirstCaptureReportStaleData) {
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 
+TEST_F(WaveformTest, QueriesAfterRstReportStaleDataUntilTheNextCaptureCompletes) {
+  instrument.advance(kResetRecordLength);
+  session.send("*RST");
+  instrument.advance(kResetRecordLength - 1);
+
+  EXPECT_EQ(session.send("WAV:DATA?"), std::nullopt);
+  EXPECT_EQ(session.next_error(), kDataStaleReply);
+
+  instrument.advance(1);
+  EXPECT_NE(session.send("WAV:PRE?"), std::nullopt);
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
 TEST_F(WaveformTest, AnErrorStopsTheRestOfTheLine) {
   EXPECT_EQ(session.send("*IDN?;WAV:DATA?;*IDN?"), session.send("*IDN?"));
 
