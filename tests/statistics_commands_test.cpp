@@ -482,6 +482,18 @@ TEST_F(StatisticsTest, BlockAcquiredBeforeStopIsNotCounted) {
   EXPECT_EQ(count_of(session.send("MEAS:STAT? VPP,CHAN1")), 2.0);
 }
 
+// RUN after a Single's block was acquired: the Single still ends at its capture, and the rest of
+// the block is captured as Running and counted too.
+TEST_F(StatisticsTest, CapturesAfterASingleThatRunHasEndedAreCounted) {
+  session.send("SINGle");
+  const AcquiredBlock block = test::acquired(instrument, 3 * kRecord);
+
+  session.send("RUN");
+  instrument.process(block);
+
+  EXPECT_EQ(count_of(session.send("MEAS:STAT? VPP,CHAN1")), 3.0);
+}
+
 // The processing thread counts the Single's capture before the lines held on it carry on.
 TEST_F(StatisticsTest, LineHeldOnASingleInLiveModeReadsTheSinglesCapture) {
   session.send("SOUR1:FUNC DC;OFFS 0.25");
