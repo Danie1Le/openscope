@@ -182,29 +182,39 @@ double root_mean_square(std::span<const float> samples) {
   return std::sqrt(sum_of_squares / static_cast<double>(samples.size()));
 }
 
-/// The 10%, 50% and 90% points between base and top (GLOSSARY: Reference levels).
-struct ReferenceLevels {
-  double low;
-  double middle;
-  double high;
-};
-
-ReferenceLevels reference_levels(const SignalLevels& levels) {
-  const double span = levels.top - levels.base;
-  return {.low = levels.base + (0.1 * span),
-          .middle = levels.base + (0.5 * span),
-          .high = levels.base + (0.9 * span)};
+/// The level `fraction` of the way from base to top: 0.5 is the 50% reference level.
+double level_at(const SignalLevels& levels, double fraction) {
+  return levels.base + (fraction * (levels.top - levels.base));
 }
 
-/// One move of the signal from beyond one outer reference level (10% or 90%) to beyond the other.
-/// Its times are in sample periods.
+/// A hysteresis band between two levels, as fractions of the way from base to top (#10): the
+/// signal is low under the lower level and high over the upper one, and keeps its side in between.
+struct Band {
+  double lower;
+  double upper;
+};
+
+/// The band whole cycles are counted with. It is centred on the 50% level so that a sampled peak
+/// falling short of 90% (a triangle or ramp at 10 samples per cycle with noise) still counts, and
+/// wide enough that noise around 50% does not.
+constexpr Band kCycleBand{.lower = 0.3, .upper = 0.7};
+
+/// A band inside kCycleBand. A move across it that turns back before crossing kCycleBand may be a
+/// cycle that kCycleBand missed or a glitch: whole cycles are then not known (FR-13).
+constexpr Band kDoubtBand{.lower = 0.4, .upper = 0.6};
+
+/// The band rise and fall time are measured across: the 10% and 90% reference levels.
+constexpr Band kTransitionBand{.lower = 0.1, .upper = 0.9};
+
+/// One move of the signal from beyond one level of a band to beyond the other. Its times are in
+/// sample periods.
 struct Edge {
   enum class Direction : std::uint8_t { kRising, kFalling };
   Direction direction;
   /// When the edge last crossed the 50% level, from the first sample.
   double middle;
-  /// How long the edge took from last leaving the outer level it started from (10% rising, 90%
-  /// falling) to reaching the other one.
+  /// How long the edge took from last leaving the band level it started from (the lower one when
+  /// rising, the upper one when falling) to reaching the other one.
   double duration;
 };
 
@@ -223,33 +233,35 @@ double crossing_before(std::span<const float> samples, std::size_t reached, doub
   return static_cast<double>(before) + ((level - from) / (to - from));
 }
 
-/// The edges of `signal`, in order, so rising and falling alternate. The 10% and 90% reference
-/// levels are a hysteresis band (#10): a rising edge is the signal going from under 10% to over
-/// 90%, a falling one the reverse, so noise or a glitch that crosses 50% without reaching the far
-/// level is no edge. Until the signal is first beyond either outer level, which side it came from
-/// is unknown, so the first move across the band is no edge.
-std::vector<Edge> find_edges(const MeasuredSignal& signal) {
-  const ReferenceLevels levels = reference_levels(signal.levels);
+/// The edges of `signal` across `band`, in order, so rising and falling alternate: a rising edge is
+/// the signal going from under the band's lower level to over its upper one, a falling one the
+/// reverse, so noise or a glitch that crosses 50% without reaching the far level is no edge. A
+/// capture that starts inside the band has no edge until the signal first passes one of its
+/// levels: which side it came from is unknown.
+std::vector<Edge> find_edges(const MeasuredSignal& signal, Band band) {
+  const double lower = level_at(signal.levels, band.lower);
+  const double upper = level_at(signal.levels, band.upper);
+  const double middle = level_at(signal.levels, 0.5);
   enum class Side : std::uint8_t { kUnknown, kLow, kHigh };
   Side side = Side::kUnknown;
   std::vector<Edge> edges;
   for (std::size_t index = 0; index < signal.samples.size(); ++index) {
     const double sample = signal.samples[index];
     Side now = side;
-    if (sample < levels.low) {
+    if (sample < lower) {
       now = Side::kLow;
-    } else if (sample > levels.high) {
+    } else if (sample > upper) {
       now = Side::kHigh;
     }
     if (now != side && side != Side::kUnknown) {
       const bool rising = now == Side::kHigh;
+      const auto [start, far] = rising ? std::pair{lower, upper} : std::pair{upper, lower};
       const auto crossing = [&](double level) {
         return crossing_before(signal.samples, index, level, rising ? 1.0 : -1.0);
       };
       edges.push_back({.direction = rising ? Edge::Direction::kRising : Edge::Direction::kFalling,
-                       .middle = crossing(levels.middle),
-                       .duration = crossing(rising ? levels.high : levels.low) -
-                                   crossing(rising ? levels.low : levels.high)});
+                       .middle = crossing(middle),
+                       .duration = crossing(far) - crossing(start)});
     }
     side = now;
   }
@@ -267,13 +279,24 @@ struct WholeCycles {
   double length;
 };
 
-/// The whole cycles in `signal`, or nullopt when there is not one.
+/// The whole cycles in `signal`, or nullopt when there is not one or they are not known: the signal
+/// crossed kDoubtBand and back between two edges across kCycleBand.
 std::optional<WholeCycles> whole_cycles(const MeasuredSignal& signal) {
-  std::vector<Edge> edges = find_edges(signal);
+  std::vector<Edge> edges = find_edges(signal, kCycleBand);
   if (edges.size() < 3) {
     return std::nullopt;
   }
   edges.resize(edges.size() - ((edges.size() - 1) % 2));
+  // Every edge across kCycleBand crosses kDoubtBand first, with the same or an earlier 50%
+  // crossing, so between the first and the last edge kDoubtBand has exactly one edge per later
+  // edge; more means a move across kDoubtBand that went back.
+  const auto doubt_edges =
+      std::ranges::count_if(find_edges(signal, kDoubtBand), [&](const Edge& edge) {
+        return edge.middle > edges.front().middle && edge.middle <= edges.back().middle;
+      });
+  if (std::cmp_not_equal(doubt_edges, edges.size() - 1)) {
+    return std::nullopt;
+  }
   const double length = edges.back().middle - edges.front().middle;
   const std::size_t count = edges.size() / 2;
   return WholeCycles{.edges = std::move(edges), .count = count, .length = length};
@@ -311,7 +334,7 @@ template <Edge::Direction kDirection>
 std::optional<double> transition_time(const MeasuredSignal& signal) {
   double total = 0.0;
   std::size_t count = 0;
-  for (const Edge& edge : find_edges(signal)) {
+  for (const Edge& edge : find_edges(signal, kTransitionBand)) {
     if (edge.direction == kDirection) {
       total += edge.duration;
       ++count;

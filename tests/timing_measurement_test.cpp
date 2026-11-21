@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <format>
@@ -40,14 +41,21 @@ using testing::DoubleNear;
 
 using TimingMeasurementTest = MeasurementTest;
 
+/// The measurements of whole cycles of channel 1, short form, in one line.
+constexpr auto kCycleQueries = "MEAS:FREQ? CHAN1;PER? CHAN1;DUTY? CHAN1";
+
 /// Every timing measurement of channel 1, short form, in one line.
 constexpr auto kTimingQueries = "MEAS:FREQ? CHAN1;PER? CHAN1;DUTY? CHAN1;RIS? CHAN1;FALL? CHAN1";
+
+/// How many queries kTimingQueries holds, and so how many status entries it pushes at most.
+constexpr std::ptrdiff_t kTimingQueryCount =
+    std::ranges::count(std::string_view{kTimingQueries}, ';') + 1;
 
 TEST_F(TimingMeasurementTest, SquareWaveRepliesAreExact) {
   session.send("SOUR1:FUNC SQU;:CHAN2:DISP ON;:SOUR2:FUNC SQU;FREQ 2.5KHZ");
   instrument.advance(kResetRecordLength);
 
-  EXPECT_EQ(session.send("MEAS:FREQ? CHAN1;PER? CHAN1;DUTY? CHAN1"), "1000;0.001;50");
+  EXPECT_EQ(session.send(kCycleQueries), "1000;0.001;50");
   EXPECT_EQ(session.send("MEAS:FREQ? CHAN2;PER? CHAN2;DUTY? CHAN2"), "2500;4E-04;50");
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
@@ -131,24 +139,24 @@ TEST_F(TimingMeasurementTest, EveryShapeHasTheGeneratorsFrequency) {
   }
 }
 
-/// A signal with noise at 1% of its amplitude, and the acquisition that captures it.
+/// A noisy signal at 1 MS/s and the record length that captures it.
 struct NoisySignal {
   std::string_view function;
   double frequency;
-  double sample_rate;
   std::size_t record_length;
+  /// RMS volts of noise on the 2 Vpp signal: 0.02 is 1% of its amplitude.
+  double noise = 0.02;
 };
 
 /// The reply to `query` (on channel 1), then to `SYST:ERR?`, on an Instrument seeded `seed` once it
-/// has captured `signal` with noise at 1% of its amplitude (20 mV RMS on 2 Vpp).
+/// has captured `signal`.
 std::pair<double, std::string> measure_noisy(std::uint64_t seed, const NoisySignal& signal,
                                              std::string_view query) {
   Instrument instrument{seed};
   ScpiSession session{instrument};
   session.send(kUntriggeredCaptures);
-  session.send(std::format("ACQ:SRAT {};POIN {};:SOUR1:FUNC {};FREQ {};NOIS 0.02",
-                           signal.sample_rate, signal.record_length, signal.function,
-                           signal.frequency));
+  session.send(std::format("ACQ:POIN {};:SOUR1:FUNC {};FREQ {};NOIS {}", signal.record_length,
+                           signal.function, signal.frequency, signal.noise));
   instrument.advance(signal.record_length);
   const double value = number(session.send(std::format("{} CHAN1", query)));
   return {value, session.next_error()};
@@ -160,8 +168,8 @@ constexpr std::uint64_t kNoiseSeeds = 5;
 class NoisySignalTimingTest : public testing::TestWithParam<NoisySignal> {};
 
 // NFR-6: frequency within 0.5% of the Generator's with noise at 1% of the amplitude, over several
-// seeds. Noise makes a slow edge cross its 50% level several times; the hysteresis between the 10%
-// and 90% levels counts each edge once.
+// seeds. Noise makes a slow edge cross its 50% level several times; the hysteresis between the 30%
+// and 70% levels counts each crossing once.
 TEST_P(NoisySignalTimingTest, FrequencyIsWithinHalfAPercent) {
   const NoisySignal signal = GetParam();
   for (std::uint64_t seed = 1; seed <= kNoiseSeeds; ++seed) {
@@ -172,14 +180,84 @@ TEST_P(NoisySignalTimingTest, FrequencyIsWithinHalfAPercent) {
 }
 
 INSTANTIATE_TEST_SUITE_P(OnePercentNoise, NoisySignalTimingTest,
-                         testing::Values(NoisySignal{"SIN", 1e3, 1e6, 10'000},
-                                         NoisySignal{"SIN", 1e5, 1e6, 100},
-                                         NoisySignal{"SIN", 1234.5, 1e6, 100'000},
-                                         NoisySignal{"SQU", 1e3, 1e6, 10'000},
-                                         NoisySignal{"TRI", 1e3, 1e6, 10'000}));
+                         testing::Values(NoisySignal{"SIN", 1e3, 10'000},
+                                         NoisySignal{"SIN", 1e5, 100},
+                                         NoisySignal{"SIN", 1234.5, 100'000},
+                                         NoisySignal{"SQU", 1e3, 10'000},
+                                         NoisySignal{"TRI", 1e3, 10'000}));
+
+// #48 review: at 10 to 16 samples per cycle the sampled peaks of a noisy triangle or ramp can fall
+// short of the 90% level, and counting cycles between the 10% and 90% levels lost those cycles
+// (TRI at 96432 Hz read 85748 Hz, 8/9 of it). Each record holds ten whole cycles plus a sample, or
+// a hundred times that.
+INSTANTIATE_TEST_SUITE_P(
+    FewSamplesPerCycle, NoisySignalTimingTest,
+    testing::Values(NoisySignal{"TRI", 96432, 105}, NoisySignal{"TRI", 96432, 10'500},
+                    NoisySignal{"TRI", 81301, 124}, NoisySignal{"TRI", 81301, 12'400},
+                    NoisySignal{"RAMP", 96432, 105, 0.01}, NoisySignal{"RAMP", 96432, 10'500, 0.01},
+                    NoisySignal{"RAMP", 81301, 124}, NoisySignal{"RAMP", 81301, 12'400},
+                    NoisySignal{"RAMP", 63694, 159}, NoisySignal{"RAMP", 63694, 15'900}));
+
+/// A sweep over noisy signals: their noise, how close a frequency they reply must be, and whether
+/// Too few cycles is an allowed reply.
+struct FrequencySweep {
+  double noise;
+  double tolerance;
+  bool may_be_too_few_cycles;
+};
+
+/// Whether `signal`'s frequency, measured on an Instrument seeded `seed`, is right: within
+/// `sweep.tolerance` plus one sample period over the eight whole cycles the shortest record holds
+/// at least (a step edge's 50% crossing is known only to within its sample interval), or else Too
+/// few cycles where the sweep allows it.
+testing::AssertionResult is_right_or_flagged(std::uint64_t seed, const NoisySignal& signal,
+                                             const FrequencySweep& sweep) {
+  const auto [frequency, error] = measure_noisy(seed, signal, "MEAS:FREQ?");
+  const double samples_per_cycle = 1e6 / signal.frequency;
+  const double resolution =
+      1.0 / (static_cast<double>(signal.record_length) - (2 * samples_per_cycle));
+  const bool right =
+      std::abs(frequency - signal.frequency) <= (sweep.tolerance + resolution) * signal.frequency &&
+      error == kNoErrorReply;
+  if (right || (sweep.may_be_too_few_cycles && error == kTooFewCyclesReply)) {
+    return testing::AssertionSuccess();
+  }
+  return testing::AssertionFailure()
+         << std::format("{} at {} Hz, {} samples, seed {}: {} with {}", signal.function,
+                        signal.frequency, signal.record_length, seed, frequency, error);
+}
+
+class FrequencySweepTest : public testing::TestWithParam<FrequencySweep> {};
+
+// FR-13: across every shape at 10 to 15 samples per cycle, records of 10 and 1000 cycles and
+// several seeds, a noisy signal's frequency is right or not a number with Too few cycles, never a
+// wrong number with no error. At 1% noise (NFR-6) it is always right.
+TEST_P(FrequencySweepTest, IsRightOrTooFewCycles) {
+  const FrequencySweep sweep = GetParam();
+  for (const std::string_view shape : {"SIN", "SQU", "TRI", "RAMP"}) {
+    for (const double samples_per_cycle : {10.0, 10.37, 11.1, 12.3, 13.7, 15.0}) {
+      for (const double cycles : {10.0, 1000.0}) {
+        const NoisySignal signal{
+            .function = shape,
+            .frequency = 1e6 / samples_per_cycle,
+            .record_length = static_cast<std::size_t>(std::ceil(cycles * samples_per_cycle)) + 1,
+            .noise = sweep.noise};
+        for (std::uint64_t seed = 1; seed <= kNoiseSeeds; ++seed) {
+          EXPECT_TRUE(is_right_or_flagged(seed, signal, sweep));
+        }
+      }
+    }
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    OneAndFivePercentNoise, FrequencySweepTest,
+    testing::Values(
+        FrequencySweep{.noise = 0.02, .tolerance = 5e-3, .may_be_too_few_cycles = false},
+        FrequencySweep{.noise = 0.1, .tolerance = 1e-2, .may_be_too_few_cycles = true}));
 
 /// A 1 kHz square wave, with noise at 1% of its amplitude in NoisySquareTimingTest.
-constexpr NoisySignal kNoisySquare{"SQU", 1e3, 1e6, 10'000};
+constexpr NoisySignal kNoisySquare{"SQU", 1e3, 10'000};
 
 // A square wave's edges are one sample long, so noise barely moves its 50% crossings.
 TEST(NoisySquareTimingTest, DutyCycleIsHalf) {
@@ -192,31 +270,47 @@ TEST(NoisySquareTimingTest, DutyCycleIsHalf) {
 
 // NFR-6: rise and fall times within 2 sample periods (2 us) of the Generator's, whose square wave
 // steps in no time at all. A slow edge has no such bound: noise at 1% of the amplitude alone moves
-// its 10% and 90% crossings by several samples.
+// its 10% and 90% crossings by several samples. The step falls between two samples, so its 10% and
+// 90% crossings interpolate to 0.8 sample periods apart; noise changes the step height by about 1%
+// and so the reading by about 0.01 us. A reading further off than 0.05 us is noise moving the
+// crossings.
 TEST(NoisySquareTimingTest, EdgesAreWithinTwoSamplePeriods) {
   for (std::uint64_t seed = 1; seed <= kNoiseSeeds; ++seed) {
     for (const std::string_view query : {"MEAS:RIS?", "MEAS:FALL?"}) {
       const auto [seconds, error] = measure_noisy(seed, kNoisySquare, query);
-      EXPECT_THAT(seconds, DoubleNear(0.0, 2e-6)) << query << " seed " << seed;
+      EXPECT_THAT(seconds, DoubleNear(0.8e-6, 0.05e-6)) << query << " seed " << seed;
       EXPECT_EQ(error, kNoErrorReply) << query << " seed " << seed;
     }
   }
 }
 
+/// Replies to `kTimingQueries` and the error queue after a square wave on channel 1 had a 20-sample
+/// glitch of `volts` a quarter into its high level (at sample 1250).
+std::string after_square_wave_glitch(double volts) {
+  Instrument instrument;
+  ScpiSession session{instrument};
+  session.send(kUntriggeredCaptures);
+  session.send("SOUR1:FUNC SQU");
+  instrument.advance(1250);
+  session.send(std::format("SOUR1:FAUL GLIT,{},20", volts));
+  instrument.advance(kResetRecordLength - 1250);
+  return session.send(std::format("{};:SYST:ERR?", kTimingQueries)).value_or("");
+}
+
 // Spec story 57: spikes past top and base move no reference level and cross none, and glitches
-// that cross the 50% level without reaching the far reference level (a dip to -0.2 V from the
-// high level, a bump to 0.2 V from the low one) are inside the hysteresis, so none of them is an
-// edge and none changes a timing measurement.
+// that cross the 50% level without reaching 40% or 60% (a dip to -0.1 V from the high level, a
+// bump to 0.1 V from the low one) are inside the hysteresis, so none of them is an edge and none
+// changes a timing measurement.
 TEST_F(TimingMeasurementTest, SpikesAndShallowGlitchesAreNotEdges) {
   session.send("SOUR1:FUNC SQU");
   instrument.advance(1250);  // A quarter into a cycle: the high level.
   session.send("SOUR1:FAUL GLIT,2.5");
   instrument.advance(100);
-  session.send("SOUR1:FAUL GLIT,-1.2,20");
+  session.send("SOUR1:FAUL GLIT,-1.1,20");
   instrument.advance(500);  // The low level.
   session.send("SOUR1:FAUL GLIT,-2.5");
   instrument.advance(100);
-  session.send("SOUR1:FAUL GLIT,1.2,20");
+  session.send("SOUR1:FAUL GLIT,1.1,20");
   instrument.advance(kResetRecordLength - 1950);
 
   EXPECT_EQ(session.send("MEAS:FREQ? CHAN1;DUTY? CHAN1;RIS? CHAN1;FALL? CHAN1"),
@@ -224,12 +318,22 @@ TEST_F(TimingMeasurementTest, SpikesAndShallowGlitchesAreNotEdges) {
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 
+// FR-13: a dip from the high level to -0.3 V (35%) crosses 40% but not 30%, so it may be a cycle
+// whose low level was not reached or a glitch; the whole cycles are not known and every timing
+// measurement of cycles is Too few cycles. The dip does not reach 10%, so rise and fall time are
+// unchanged. A dip to -0.5 V (25%) is an edge pair and a cycle of its own.
+TEST(DoubtfulCyclesTest, AMoveThatMayBeACycleIsTooFewCycles) {
+  EXPECT_EQ(after_square_wave_glitch(-1.3),
+            std::format("{0};{0};{0};8E-07;8E-07;{1}", scpi::kNotANumber, kTooFewCyclesReply));
+  EXPECT_THAT(after_square_wave_glitch(-1.5), testing::EndsWith(kNoErrorReply));
+}
+
 TEST_F(TimingMeasurementTest, ClippedSignalReturnsTheValueWithAWarning) {
   session.send("SOUR1:FUNC SQU;:CHAN1:SCAL 0.2");
   instrument.advance(kResetRecordLength);
 
   EXPECT_EQ(session.send(kTimingQueries), "1000;0.001;50;8E-07;8E-07");
-  for (int entry = 0; entry < 5; ++entry) {
+  for (std::ptrdiff_t entry = 0; entry < kTimingQueryCount; ++entry) {
     EXPECT_EQ(session.next_error(), kClippedReply) << entry;
   }
   EXPECT_EQ(session.next_error(), kNoErrorReply);
@@ -248,14 +352,13 @@ TEST_F(TimingMeasurementTest, NoCompleteEdgeIsTooFewCycles) {
 }
 
 // A 1 kHz sine from phase zero: 1500 samples hold its falling and rising 50% crossings at 500 and
-// 1000 but not the falling one at 1500, which the signal confirms only on reaching its 10% level
-// at about 1648. The first crossing at 0 does not count: the capture never saw the signal below
-// 10% before it.
+// 1000 but not the falling one at 1500, which the signal confirms only on reaching its 30% level
+// at about 1566. The first crossing at 0 does not count: the capture never saw the signal below
+// 30% before it.
 TEST_F(TimingMeasurementTest, UnderOneWholeCycleIsTooFewCycles) {
   session.send("ACQ:POIN 1500");
   instrument.advance(1500);
-  EXPECT_EQ(session.send("MEAS:FREQ? CHAN1;PER? CHAN1;DUTY? CHAN1"),
-            std::format("{0};{0};{0}", scpi::kNotANumber));
+  EXPECT_EQ(session.send(kCycleQueries), std::format("{0};{0};{0}", scpi::kNotANumber));
   for (int entry = 0; entry < 3; ++entry) {
     EXPECT_EQ(session.next_error(), kTooFewCyclesReply) << entry;
   }
@@ -276,6 +379,21 @@ TEST_F(TimingMeasurementTest, FrequencyStepShowsInTheNextCapture) {
   session.send("SOUR1:FAUL FST,500,20000");
   instrument.advance(kResetRecordLength);
   EXPECT_THAT(number(session.send("MEAS:FREQ? CHAN1")), DoubleNear(1500.0, 1.5));
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+// A step injected part-way through a capture: that capture spans the step and reads between the
+// two frequencies, and the next one, wholly inside the step, reads the stepped frequency.
+TEST_F(TimingMeasurementTest, FrequencyStepPartWayThroughACaptureShowsInTheNextOne) {
+  instrument.advance(4321);
+  session.send("SOUR1:FAUL FST,777,30000");
+  instrument.advance(kResetRecordLength - 4321);
+  const double spanning = number(session.send("MEAS:FREQ? CHAN1"));
+  EXPECT_GT(spanning, 1000.0);
+  EXPECT_LT(spanning, 1777.0);
+
+  instrument.advance(kResetRecordLength);
+  EXPECT_THAT(number(session.send("MEAS:FREQ? CHAN1")), DoubleNear(1777.0, 1.777));
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 
@@ -336,6 +454,14 @@ INSTANTIATE_TEST_SUITE_P(NarrowAndWidePulses, DutyCycleTest,
                          testing::Values(Pulses{25, 0}, Pulses{25, 60}, Pulses{75, 0},
                                          Pulses{75, 10}, Pulses{2, 0}, Pulses{98, 0}));
 
+// The shared helper: low then high each period; a delay up to the high samples starts on the high
+// level, a longer one on the low level.
+TEST(PulseTrainTest, DelayShiftsThePeriods) {
+  EXPECT_THAT(pulse_train(6, 4, 2), testing::ElementsAre(0.0F, 0.0F, 1.0F, 1.0F, 0.0F, 0.0F));
+  EXPECT_THAT(pulse_train(6, 4, 2, 1), testing::ElementsAre(1.0F, 0.0F, 0.0F, 1.0F, 1.0F, 0.0F));
+  EXPECT_THAT(pulse_train(6, 4, 2, 3), testing::ElementsAre(0.0F, 1.0F, 1.0F, 0.0F, 0.0F, 1.0F));
+}
+
 // One whole cycle runs from a 50% crossing to the next one in the same direction. A square wave
 // low for 50 samples, high for 50, low for 50: its crossings at 49.5 and 99.5 are less than one
 // whole cycle; one more high sample adds the crossing at 149.5 and so the cycle.
@@ -370,7 +496,7 @@ TEST(TooFewCyclesTest, EdgeCountsOnceItIsComplete) {
   EXPECT_THAT(measure("FALLtime", samples).value, testing::Optional(DoubleNear(0.8, 1e-9)));
 }
 
-/// Appends `samples` stepping from 0 V to 1 V in `steps` equal steps, then held at 1 V for 50
+/// Appends to `samples` a rise from 0 V to 1 V in `steps` equal steps, then 1 V for 50
 /// samples and back at 0 V for 50: an edge of 0.8 `steps` sample periods from 10% to 90%.
 void append_rise(std::vector<float>& samples, std::size_t steps) {
   for (std::size_t step = 1; step <= steps; ++step) {

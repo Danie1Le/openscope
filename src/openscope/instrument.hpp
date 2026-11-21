@@ -1,10 +1,12 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -12,6 +14,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "openscope/acquired_block.hpp"
 #include "openscope/capture.hpp"
 #include "openscope/channel.hpp"
 #include "openscope/generator.hpp"
@@ -28,15 +31,22 @@ namespace openscope {
 enum class SessionId : std::uint64_t {};
 
 /// Receives the reply to one line when the line ends: the replies of its queries joined with `;`,
-/// or nullopt when no query replied. The line may end after `execute` returns, inside `advance`
-/// (which may run on another thread) or inside another Session's `execute`. So a ReplyHandler
-/// must not call back into the Instrument; it only hands the reply to the transport.
+/// or nullopt when no query replied. The line may end after `execute` returns, inside `advance` or
+/// `process` (which may run on another thread) or inside another Session's `execute`. It runs
+/// while the Instrument holds its mutex, so a ReplyHandler must not call back into the
+/// Instrument; it only hands the reply to the transport.
 using ReplyHandler = std::function<void(std::optional<std::string> reply)>;
 
 /// The single entry point for instrument behaviour. It owns every Session and the instrument-wide
 /// state (generators, channels, acquisition and trigger settings, the run state, the sample clock,
 /// the latest capture and its measurements), and executes SCPI text on a Session's behalf, so
 /// transports and tests all reach the instrument through the same path.
+///
+/// The sample clock runs in one of two ways, never both on one Instrument. In test mode one thread
+/// steps it with `advance`. In live mode an acquisition thread calls `acquire` and a processing
+/// thread calls `process` on the blocks it acquired (#8). Either way any thread may call
+/// `open_session`, `close_session`, `execute`, `sample_rate`, `latest_capture` and
+/// `discarded_captures` at the same time.
 class Instrument {
  public:
   /// The longest line, in bytes without its terminator, that `execute` runs (4 KB).
@@ -87,8 +97,38 @@ class Instrument {
   /// and replies as any split of it into smaller calls.
   void advance(std::size_t samples);
 
-  /// The latest capture, or null before the first capture completes.
-  [[nodiscard]] std::shared_ptr<const Capture> latest_capture() const { return captures_.latest(); }
+  /// Live mode's acquisition half: takes the next `count` sample indexes on the sample clock and
+  /// returns them sampled, with a snapshot of the settings `process` needs. While Stopped it
+  /// still takes them, but samples nothing and returns nullopt. It holds the mutex that commands
+  /// take only to take the indexes and the snapshot, not while it samples, so a command never
+  /// waits for a block to be sampled. Throws std::invalid_argument when `count` exceeds
+  /// kMaxBlockLength.
+  [[nodiscard]] std::optional<AcquiredBlock> acquire(std::size_t count);
+
+  /// Live mode's processing half: assembles `block`, from `acquire`, into captures without the
+  /// mutex that commands take; it takes it only to publish a capture or end a Single, which
+  /// happens about once a capture. A capture completes into the latest capture only when no
+  /// command has discarded the capture in progress since the block was acquired, so it never
+  /// holds settings older than a command that has already returned. A Single's capture stops the
+  /// instrument and ends the lines held on it, on this thread; when `RUN` has ended the Single
+  /// since the block was acquired, the rest of the block, and every later block acquired while
+  /// the Single was armed, is captured as Running, with the trigger restarted at the Single's
+  /// capture as after any Single. Blocks must come in the order they were acquired; a block that
+  /// never arrives is a dropped block, and the capture that would span it is discarded and
+  /// counted.
+  void process(const AcquiredBlock& block);
+
+  /// Samples per second on the sample clock (`ACQuire:SRATe`), which live mode paces against.
+  [[nodiscard]] double sample_rate() const;
+
+  /// The latest capture, or null before the first capture completes. It never waits on the mutex
+  /// that commands and capture processing take, so any thread may read it as often as it likes.
+  [[nodiscard]] std::shared_ptr<const Capture> latest_capture() const { return latest_.load(); }
+
+  /// How many captures have been discarded because they would have spanned a dropped block.
+  [[nodiscard]] std::uint64_t discarded_captures() const {
+    return discarded_captures_.load(std::memory_order_relaxed);
+  }
 
  private:
   /// The `*RST` timebase scale in seconds per division.
@@ -111,6 +151,24 @@ class Instrument {
     scpi::Execution execution;
     ReplyHandler on_reply;
   };
+
+  /// Samples `count` indexes from the sample clock's next one, without taking them, under the
+  /// current settings; nullopt while Stopped. Needs mutex_.
+  std::optional<AcquiredBlock> sample(std::size_t count);
+  /// A block of no samples with the current settings and the next sequence number, to sample
+  /// into; nullopt while Stopped. Needs mutex_.
+  std::optional<AcquiredBlock> snapshot();
+  /// Feeds `block` to the capture assembler. Touches the processing state only, so it needs no
+  /// lock.
+  Pushed assemble(const AcquiredBlock& block);
+  /// Publishes what assembling `block` produced and ends a Single its capture completes, unless a
+  /// command has discarded the capture in progress since `block` was acquired. Returns true when
+  /// the block's Single capture ended inside it but `RUN` had already ended the Single, so the
+  /// samples after `pushed.end` are still to be captured as Running. Needs mutex_.
+  bool conclude(const AcquiredBlock& block, const Pushed& pushed);
+  /// Discards the capture in progress: the blocks acquired from now on start a new generation,
+  /// and a capture never mixes two generations.
+  void discard_capture() { ++generation_; }
 
   /// `RUN`, `STOP`, `SINGle`, and the `*OPC?` and `*WAI` that wait on a Single.
   void add_run_control_commands();
@@ -198,6 +256,9 @@ class Instrument {
   /// Whether an operation is pending: a Single is armed (GLOSSARY: Pending operation).
   [[nodiscard]] bool pending() const { return run_state_ == RunState::kArmedSingle; }
 
+  /// Guards the Sessions and every setting, the sample clock and the run state: everything down
+  /// to the processing state below.
+  mutable std::mutex mutex_;
   scpi::CommandTree commands_;
   std::unordered_map<SessionId, Session> sessions_;
   std::uint64_t next_session_id_ = 0;
@@ -212,10 +273,28 @@ class Instrument {
   double timebase_scale_ = kDefaultTimebaseScale;
   TriggerSettings trigger_;
   RunState run_state_ = RunState::kRunning;
-  CaptureAssembler captures_;
   MeasurementEngine measurements_;
   /// At most one per Session: a Session with a held line sends no other.
   std::vector<HeldLine> held_;
+  /// The generation of the blocks acquired from now on (AcquiredBlock::generation).
+  std::uint64_t generation_ = 0;
+  /// The sequence number of the next block acquired.
+  std::uint64_t next_sequence_ = 0;
+
+  // The processing state: only the thread that processes blocks (`advance`'s caller in test mode,
+  // `process`'s in live mode) touches it.
+  CaptureAssembler captures_;
+  /// The generation of the capture in progress, and the sequence number of the block expected
+  /// next.
+  std::uint64_t assembled_generation_ = 0;
+  std::uint64_t expected_sequence_ = 0;
+  /// The generation whose Single `RUN` ended before all its Armed-single blocks were processed;
+  /// the rest of them are captured as Running. Generations are never reused.
+  std::optional<std::uint64_t> run_generation_;
+
+  // Read without the Instrument's mutex, so readers never wait on commands or capture processing.
+  std::atomic<std::shared_ptr<const Capture>> latest_;
+  std::atomic<std::uint64_t> discarded_captures_ = 0;
 };
 
 }  // namespace openscope

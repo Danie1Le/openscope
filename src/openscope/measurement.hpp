@@ -32,7 +32,7 @@ enum class MeasurementStatus : std::uint8_t {
 /// One measurement of one channel of a capture.
 struct MeasurementResult {
   /// Whether the value is valid, questionable (Clipped) or missing.
-  MeasurementStatus status;
+  MeasurementStatus status = MeasurementStatus::kOk;
   /// The measured value in the measurement's unit; present for OK and Clipped only.
   std::optional<double> value;
 };
@@ -63,7 +63,7 @@ struct MeasuredSignal {
   /// The levels of those samples.
   SignalLevels levels;
   /// Samples per second the capture was taken at, which turns sample counts into seconds.
-  double sample_rate;
+  double sample_rate = 1.0;
 };
 
 /// One automatic measurement: the SCPI mnemonic it is queried by and how it is computed. The
