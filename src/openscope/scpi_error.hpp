@@ -47,7 +47,7 @@ inline const ScpiError kNoSignal{.code = -200, .message = "Execution error;No si
 inline const ScpiError kTooFewCycles{.code = -200, .message = "Execution error;Too few cycles"};
 
 /// A query on a channel that is not in the latest capture, because it was not enabled when the
-/// capture was taken.
+/// capture was taken; or a fault injected into a Generator that already holds as many as it can.
 inline const ScpiError kSettingsConflict{.code = -221, .message = "Settings conflict"};
 
 /// A numeric parameter outside the range the command accepts.
