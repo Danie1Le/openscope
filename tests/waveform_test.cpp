@@ -22,18 +22,17 @@ namespace {
 
 using test::captured;
 using test::decode_float32_block;
+using test::kDataStaleReply;
 using test::kDataTypeErrorReply;
 using test::kIllegalParameterValueReply;
 using test::kMissingParameterReply;
 using test::kNoErrorReply;
 using test::kParameterNotAllowedReply;
 using test::kResetRecordLength;
+using test::kSettingsConflictReply;
 using test::ScpiSession;
 using testing::Optional;
 using testing::StartsWith;
-
-constexpr auto kSettingsConflictReply = R"(-221,"Settings conflict")";
-constexpr auto kDataStaleReply = R"(-230,"Data corrupt or stale")";
 
 /// Parses comma-separated floats, as a client reading `WAV:FORM ASC` does.
 std::vector<float> parse_csv(std::string_view text) {

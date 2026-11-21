@@ -14,6 +14,7 @@
 #include "openscope/capture.hpp"
 #include "openscope/channel.hpp"
 #include "openscope/generator.hpp"
+#include "openscope/measurement.hpp"
 #include "openscope/sample_clock.hpp"
 #include "openscope/scpi/command_tree.hpp"
 #include "openscope/session.hpp"
@@ -24,9 +25,9 @@ namespace openscope {
 enum class SessionId : std::uint32_t {};
 
 /// The single entry point for instrument behaviour. It owns every Session and the instrument-wide
-/// state (generators, channels, acquisition settings, the sample clock and the latest capture),
-/// and executes SCPI text on a Session's behalf, so transports and tests all reach the instrument
-/// through the same path.
+/// state (generators, channels, acquisition settings, the sample clock, the latest capture and its
+/// measurements), and executes SCPI text on a Session's behalf, so transports and tests all reach
+/// the instrument through the same path.
 class Instrument {
  public:
   /// The longest line, in bytes without its terminator, that `execute` runs (4 KB).
@@ -74,13 +75,14 @@ class Instrument {
   void add_acquisition_commands();
   void add_timebase_commands();
   void add_waveform_commands();
+  void add_measurement_commands();
 
-  /// Replies what `reply` writes from the latest capture and the caller's `WAV:SOUR` channel in
-  /// it. Before the first capture completes it reports -230; when the source channel is not in
-  /// the latest capture, -221 (a query never reads a channel that was not captured).
-  scpi::HandlerResult reply_with_source(
-      Session& caller,
-      const std::function<std::string(const Capture&, const CapturedChannel&)>& reply) const;
+  /// Replies what `reply` writes from the latest capture and its channel `channel` (1 to 4).
+  /// Before the first capture completes it reports -230; when the channel is not in the latest
+  /// capture, -221 (a query never reads a channel that was not captured).
+  scpi::HandlerResult reply_with_channel(
+      std::size_t channel, const std::function<std::string(const std::shared_ptr<const Capture>&,
+                                                           const CapturedChannel&)>& reply) const;
 
   /// Registers `<header> <parameter>`, which runs `set`, and `<header>?`, which replies what `get`
   /// returns. Both receive the calling Session, for the settings a Session owns (ADR 0002).
@@ -129,6 +131,7 @@ class Instrument {
   /// Seconds per division of the display viewport. It never changes what is captured (ADR 0004).
   double timebase_scale_ = kDefaultTimebaseScale;
   CaptureAssembler captures_;
+  MeasurementEngine measurements_;
 };
 
 }  // namespace openscope

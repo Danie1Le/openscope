@@ -2,6 +2,7 @@ add_library(openscope
   openscope/capture.cpp
   openscope/generator.cpp
   openscope/instrument.cpp
+  openscope/measurement.cpp
   openscope/sample_block.cpp
   openscope/scpi/command_tree.cpp
   openscope/scpi/parser.cpp

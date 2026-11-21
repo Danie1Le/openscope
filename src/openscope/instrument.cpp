@@ -18,6 +18,7 @@
 #include "openscope/capture.hpp"
 #include "openscope/channel.hpp"
 #include "openscope/generator.hpp"
+#include "openscope/measurement.hpp"
 #include "openscope/sample_block.hpp"
 #include "openscope/scpi/command_tree.hpp"
 #include "openscope/scpi/response.hpp"
@@ -78,6 +79,24 @@ Value value_of(const Arguments& arguments) {
   return std::get<Value>(arguments.values.at(0));
 }
 
+/// A parameter naming a channel: `CHANnel<1-4>`.
+scpi::KeywordParameter channel_parameter() { return {.choices = {"CHANnel<1-4>"}}; }
+
+/// The error queue entry that reports a measurement's `status`, or nullopt for OK.
+std::optional<ScpiError> status_entry(MeasurementStatus status) {
+  switch (status) {
+    case MeasurementStatus::kOk:
+      break;
+    case MeasurementStatus::kNoSignal:
+      return kNoSignal;
+    case MeasurementStatus::kClipped:
+      return kClipped;
+    case MeasurementStatus::kTooFewCycles:
+      return kTooFewCycles;
+  }
+  return std::nullopt;
+}
+
 }  // namespace
 
 Instrument::Instrument(std::uint64_t seed)
@@ -113,6 +132,7 @@ Instrument::Instrument(std::uint64_t seed)
   add_acquisition_commands();
   add_timebase_commands();
   add_waveform_commands();
+  add_measurement_commands();
 }
 
 void Instrument::add_generator_commands() {
@@ -190,7 +210,7 @@ void Instrument::add_timebase_commands() {
 void Instrument::add_waveform_commands() {
   // ADR 0002: the source and format belong to the calling Session.
   add_setting(
-      "WAVeform:SOURce", scpi::KeywordParameter{.choices = {"CHANnel<1-4>"}},
+      "WAVeform:SOURce", channel_parameter(),
       [](Session& caller, const Arguments& arguments) {
         caller.waveform().source = value_of<scpi::Choice>(arguments).suffix;
       },
@@ -208,40 +228,66 @@ void Instrument::add_waveform_commands() {
   commands_.add({.header = "WAVeform:DATA?",
                  .parameters = {},
                  .handler = [this](Session& caller, const Arguments&) {
-                   return reply_with_source(
-                       caller, [&caller](const Capture&, const CapturedChannel& channel) {
+                   return reply_with_channel(
+                       caller.waveform().source, [&caller](const std::shared_ptr<const Capture>&,
+                                                           const CapturedChannel& channel) {
                          return caller.waveform().format == WaveformFormat::kReal
                                     ? scpi::float32_block(channel.samples)
                                     : ascii_values(channel.samples);
                        });
                  }});
-  commands_.add({.header = "WAVeform:PREamble?",
-                 .parameters = {},
-                 .handler = [this](Session& caller, const Arguments&) {
-                   return reply_with_source(
-                       caller, [](const Capture& capture, const CapturedChannel& channel) {
-                         return std::format(
-                             "{},{},{},{},{},{}", scpi::format_real(capture.sample_rate),
-                             capture.record_length, scpi::format_real(channel.settings.scale),
-                             scpi::format_real(channel.settings.offset), capture.trigger_position,
-                             capture.untriggered ? 1 : 0);
-                       });
-                 }});
+  commands_.add(
+      {.header = "WAVeform:PREamble?",
+       .parameters = {},
+       .handler = [this](Session& caller, const Arguments&) {
+         return reply_with_channel(
+             caller.waveform().source,
+             [](const std::shared_ptr<const Capture>& capture, const CapturedChannel& channel) {
+               return std::format("{},{},{},{},{},{}", scpi::format_real(capture->sample_rate),
+                                  capture->record_length, scpi::format_real(channel.settings.scale),
+                                  scpi::format_real(channel.settings.offset),
+                                  capture->trigger_position, capture->untriggered ? 1 : 0);
+             });
+       }});
 }
 
-scpi::HandlerResult Instrument::reply_with_source(
-    Session& caller,
-    const std::function<std::string(const Capture&, const CapturedChannel&)>& reply) const {
+void Instrument::add_measurement_commands() {
+  const std::span<const Measurement> all = measurements();
+  for (std::size_t measurement = 0; measurement < all.size(); ++measurement) {
+    commands_.add(
+        {.header = std::format("MEASure:{}?", all[measurement].mnemonic),
+         .parameters = {channel_parameter()},
+         .handler = [this, measurement](Session& caller, const Arguments& arguments) {
+           const std::size_t channel = value_of<scpi::Choice>(arguments).suffix;
+           return reply_with_channel(channel, [&](const std::shared_ptr<const Capture>& capture,
+                                                  const CapturedChannel&) {
+             const MeasurementResult result = measurements_.measure(capture, channel, measurement);
+             // The status entry reports on a reply that was given, so unlike an execution
+             // error it goes on the queue without stopping the line.
+             if (std::optional<ScpiError> entry = status_entry(result.status)) {
+               caller.push_error(std::move(*entry));
+             }
+             // Written as float32, the precision of the samples the value comes from.
+             return result.value ? scpi::format_real(static_cast<float>(*result.value))
+                                 : std::string(scpi::kNotANumber);
+           });
+         }});
+  }
+}
+
+scpi::HandlerResult Instrument::reply_with_channel(
+    std::size_t channel,
+    const std::function<std::string(const std::shared_ptr<const Capture>&, const CapturedChannel&)>&
+        reply) const {
   const std::shared_ptr<const Capture> capture = captures_.latest();
   if (capture == nullptr) {
     return kDataCorruptOrStale;
   }
-  const std::optional<CapturedChannel>& channel =
-      capture->channels.at(caller.waveform().source - 1);
-  if (!channel) {
+  const std::optional<CapturedChannel>& captured = capture->channels.at(channel - 1);
+  if (!captured) {
     return kSettingsConflict;
   }
-  return std::optional<std::string>(reply(*capture, *channel));
+  return std::optional<std::string>(reply(capture, *captured));
 }
 
 void Instrument::add_setting(std::string_view header, scpi::ParameterSpec parameter,
