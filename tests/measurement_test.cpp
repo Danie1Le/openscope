@@ -1,6 +1,7 @@
 // Amplitude measurements (MEAS:VPP?, VMIN?, VMAX?, VAV?, VRMS?), the measurement status each
-// result carries (OK, Clipped, or No signal for a measurement that needs edges or cycles; Too few
-// cycles comes with the timing measurements) and the top and base levels the statuses start from.
+// result carries (OK, Clipped, or No signal for a measurement that needs edges or cycles; the
+// timing measurements and Too few cycles are in timing_measurement_test.cpp) and the top and base
+// levels the statuses start from.
 
 #include "openscope/measurement.hpp"
 
@@ -9,11 +10,9 @@
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <format>
-#include <memory>
 #include <numbers>
 #include <optional>
 #include <random>
@@ -22,6 +21,7 @@
 #include <vector>
 
 #include "instrument_fixture.hpp"
+#include "measurement_fixture.hpp"
 #include "openscope/capture.hpp"
 #include "openscope/instrument.hpp"
 #include "openscope/scpi/response.hpp"
@@ -31,46 +31,23 @@ namespace openscope {
 namespace {
 
 using test::captured;
+using test::kClippedReply;
 using test::kDataStaleReply;
 using test::kDataTypeErrorReply;
 using test::kIllegalParameterValueReply;
 using test::kMissingParameterReply;
 using test::kNoErrorReply;
+using test::kNoSignalReply;
 using test::kParameterNotAllowedReply;
 using test::kResetRecordLength;
 using test::kSettingsConflictReply;
+using test::kUntriggeredCaptures;
+using test::MeasurementTest;
+using test::number;
 using test::ScpiSession;
 using testing::DoubleNear;
 using testing::Optional;
 using testing::StartsWith;
-
-constexpr auto kClippedReply = R"(-231,"Data questionable;Clipped")";
-
-/// Every amplitude measurement query, short form.
-constexpr std::array<std::string_view, 5> kAmplitudeQueries{"MEAS:VPP?", "MEAS:VMIN?", "MEAS:VMAX?",
-                                                            "MEAS:VAV?", "MEAS:VRMS?"};
-
-/// The number a measurement query replied, as a client parses it. Fails the test and returns NaN
-/// when the reply is missing or not one number.
-double number(const std::optional<std::string>& reply) {
-  const std::string text = reply.value_or("");
-  double value = std::nan("");
-  const char* const end = std::to_address(text.cend());
-  if (text.empty() || std::from_chars(text.data(), end, value).ptr != end) {
-    ADD_FAILURE() << "not a number: " << text;
-  }
-  return value;
-}
-
-/// Trigger settings under which Auto takes untriggered captures back to back from sample 0: time
-/// zero on the first sample and a level no signal reaches. Measurements read the whole capture, so
-/// these tests need each capture to complete one record length after the last.
-constexpr auto kUntriggeredCaptures = "TRIG:POS 0;LEV 100";
-
-class MeasurementTest : public test::InstrumentFixture {
- protected:
-  void SetUp() override { session.send(kUntriggeredCaptures); }
-};
 
 TEST_F(MeasurementTest, CleanSineHasTheGeneratorsPeaks) {
   instrument.advance(kResetRecordLength);
@@ -251,8 +228,9 @@ TEST_F(MeasurementTest, LongFormsAreAccepted) {
 TEST_F(MeasurementTest, DisabledChannelIsASettingsConflict) {
   instrument.advance(kResetRecordLength);
 
-  for (const std::string_view query : kAmplitudeQueries) {
-    EXPECT_EQ(session.send(std::string(query) + " CHAN2"), std::nullopt) << query;
+  for (const Measurement& measurement : measurements()) {
+    const std::string query = std::format("MEAS:{}? CHAN2", measurement.mnemonic);
+    EXPECT_EQ(session.send(query), std::nullopt) << query;
     EXPECT_EQ(session.next_error(), kSettingsConflictReply) << query;
   }
   EXPECT_EQ(session.send("*IDN?;:MEAS:VPP? CHAN3;*IDN?"), session.send("*IDN?"));
@@ -365,35 +343,19 @@ TEST_F(MeasurementTest, LongestRecordIsMeasuredWhole) {
   EXPECT_THAT(number(session.send("MEAS:VRMS? CHAN1")), DoubleNear(rms, 1e-6 * rms));
 }
 
-/// A measurement that needs a signal, as the timing measurements do; its value is top minus base.
-constexpr Measurement kNeedsSignal{
-    .mnemonic = "TEST",
-    .measure = [](const MeasuredSignal& signal) -> std::optional<double> {
-      return signal.levels.top - signal.levels.base;
-    },
-    .needs_signal = true};
-
-/// kNeedsSignal of channel 1 of `instrument`'s latest capture.
-MeasurementResult measure_needing_signal(const Instrument& instrument) {
-  const CapturedChannel channel = captured(instrument, 1);
-  if (channel.samples.empty()) {
-    return {.status = MeasurementStatus::kOk, .value = std::nullopt};  // captured() failed.
-  }
-  return evaluate(kNeedsSignal, channel, find_levels(channel.samples));
-}
-
 // No signal is top minus base under 0.2 vertical divisions: at 1.25 V/div that is 0.25 V, which
 // a square wave of exactly 0.25 Vpp reaches.
 TEST_F(MeasurementTest, NoSignalBelowTwoTenthsOfADivision) {
   session.send("CHAN1:SCAL 1.25;:SOUR1:FUNC SQU;AMPL 0.25");
   instrument.advance(kResetRecordLength);
-  EXPECT_EQ(measure_needing_signal(instrument).status, MeasurementStatus::kOk);
+  EXPECT_EQ(session.send("MEAS:FREQ? CHAN1"), "1000");
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
 
   session.send("SOUR1:AMPL 0.2499");
   instrument.advance(kResetRecordLength);
-  const MeasurementResult result = measure_needing_signal(instrument);
-  EXPECT_EQ(result.status, MeasurementStatus::kNoSignal);
-  EXPECT_EQ(result.value, std::nullopt);
+  EXPECT_EQ(session.send("MEAS:FREQ? CHAN1"), scpi::kNotANumber);
+  EXPECT_EQ(session.next_error(), kNoSignalReply);
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 
 // Top and base are the most common levels, not the extremes: noise alone spreads the samples over
@@ -405,7 +367,8 @@ TEST_F(MeasurementTest, NoiseAloneIsNoSignal) {
   const auto [lowest, highest] = std::ranges::minmax(samples);
   ASSERT_GT(highest - lowest, 0.2F);
 
-  EXPECT_EQ(measure_needing_signal(instrument).status, MeasurementStatus::kNoSignal);
+  EXPECT_EQ(session.send("MEAS:FREQ? CHAN1"), scpi::kNotANumber);
+  EXPECT_EQ(session.next_error(), kNoSignalReply);
 }
 
 // A signal held flat at a limit has no edges or cycles, so No signal wins over Clipped.
@@ -413,24 +376,24 @@ TEST_F(MeasurementTest, SignalClippedFlatIsNoSignalForAMeasurementThatNeedsASign
   session.send("SOUR1:FUNC DC;OFFS 10");
   instrument.advance(kResetRecordLength);
 
-  EXPECT_EQ(measure_needing_signal(instrument).status, MeasurementStatus::kNoSignal);
+  EXPECT_EQ(session.send("MEAS:FREQ? CHAN1"), scpi::kNotANumber);
+  EXPECT_EQ(session.next_error(), kNoSignalReply);
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 
-TEST_F(MeasurementTest, NoAmplitudeMeasurementNeedsASignal) {
+TEST_F(MeasurementTest, OnlyTheTimingMeasurementsNeedASignal) {
+  constexpr std::array<std::string_view, 5> kTiming{"FREQuency", "PERiod", "RISetime", "FALLtime",
+                                                    "DUTYcycle"};
   for (const Measurement& measurement : measurements()) {
-    EXPECT_FALSE(measurement.needs_signal) << measurement.mnemonic;
+    EXPECT_EQ(measurement.needs_signal,
+              std::ranges::find(kTiming, measurement.mnemonic) != kTiming.end())
+        << measurement.mnemonic;
   }
 }
 
 /// `length` samples of a square wave between 0 V and 1 V with a period of 100 samples: low for
 /// samples 0 to 49 of each period, high for 50 to 99.
-std::vector<float> square_wave(std::size_t length) {
-  std::vector<float> samples(length);
-  for (std::size_t index = 0; index < length; ++index) {
-    samples[index] = index % 100 < 50 ? 0.0F : 1.0F;
-  }
-  return samples;
-}
+std::vector<float> square_wave(std::size_t length) { return test::pulse_train(length, 100, 50); }
 
 /// The length of the hand-built captures that top and base are checked on.
 constexpr std::size_t kLength = 10'000;

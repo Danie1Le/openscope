@@ -3,7 +3,6 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <memory>
@@ -102,9 +101,7 @@ TEST_F(CaptureTest, CaptureDoesNotDependOnHowTheClockWasStepped) {
   instrument.advance(kSamples);
 
   Instrument stepped;
-  for (std::size_t done = 0; done < kSamples; done += 999) {
-    stepped.advance(std::min<std::size_t>(999, kSamples - done));
-  }
+  test::advance_in_steps(stepped, kSamples, 999);
 
   const std::shared_ptr<const Capture> whole = instrument.latest_capture();
   const std::shared_ptr<const Capture> pieces = stepped.latest_capture();
