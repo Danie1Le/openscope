@@ -17,10 +17,10 @@
 
 namespace openscope {
 
-std::optional<std::size_t> CaptureAssembler::push(
-    const SampleBlock& block, const AcquisitionSettings& acquisition,
-    std::span<const ChannelSettings, kChannelCount> channels, const TriggerSettings& trigger,
-    CaptureLimit limit, const CaptureSink& on_completed) {
+Pushed CaptureAssembler::push(const SampleBlock& block, const AcquisitionSettings& acquisition,
+                              std::span<const ChannelSettings, kChannelCount> channels,
+                              const TriggerSettings& trigger, CaptureLimit limit,
+                              const CaptureSink& on_completed) {
   if (acquisition.record_length == 0) {
     throw std::logic_error("record length of zero");  // No sample would ever fill a capture.
   }
@@ -39,33 +39,33 @@ std::optional<std::size_t> CaptureAssembler::push(
   const std::uint64_t holdoff = trigger.holdoff_samples(acquisition.sample_rate);
   const std::size_t pre_trigger = trigger.pre_trigger_samples(acquisition.record_length);
 
+  completed_.reset();
   for (std::size_t used = 0; used < block.count;) {
     const SampleIndex index = block.first_index + used;
     Capture& capture = building_ ? *building_ : start(index, acquisition, channels, pre_trigger);
-    const std::size_t published_before = published_;
     used = placed_ ? fill(capture, block, used)
                    : collect(capture, block, used, next_event, events.end(), trigger.mode, holdoff);
-    if (published_ == published_before) {
-      continue;
+    if (building_) {
+      continue;  // Still collecting: only complete() ends the capture in progress here.
     }
     // Each step completes at most one capture, and it is handed on before the next one exists, so
     // a block's captures never pile up however many it completes.
     if (on_completed) {
-      on_completed(*latest_);
+      on_completed(*completed_);
     }
     if (limit == CaptureLimit::kFirst) {
       discard();  // The trigger has seen the samples after `used`, which the caller pushes again.
-      return used;
+      return {.capture = std::move(completed_), .end = used};
     }
   }
-  return std::nullopt;
+  return {.capture = std::move(completed_), .end = std::nullopt};
 }
 
 std::size_t CaptureAssembler::fill(Capture& capture, const SampleBlock& block, std::size_t used) {
   const std::size_t to = std::min(block.count, used + (capture.record_length - filled_));
   append(capture, block, used, to);
   if (filled_ == capture.record_length) {
-    publish(capture);
+    complete(capture);
   }
   return to;
 }
@@ -96,18 +96,17 @@ std::size_t CaptureAssembler::collect(Capture& capture, const SampleBlock& block
     holdoff_end_ = block.first_index + to + holdoff;
   } else if (filled_ == limit && mode == TriggerMode::kAuto) {
     drop_oldest(capture, pre_trigger_);  // The latest record becomes an untriggered capture.
-    publish(capture);
+    complete(capture);
   } else if (filled_ == limit) {
     drop_oldest(capture, capture.record_length);  // Normal keeps what may precede an event.
   }
   return to;
 }
 
-void CaptureAssembler::publish(Capture& capture) {
+void CaptureAssembler::complete(Capture& capture) {
   capture.trigger_position = pre_trigger_;
   capture.untriggered = !placed_;
-  latest_ = std::make_shared<const Capture>(std::move(capture));
-  ++published_;
+  completed_ = std::make_shared<const Capture>(std::move(capture));
   building_.reset();
 }
 

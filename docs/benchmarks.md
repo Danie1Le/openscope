@@ -7,6 +7,7 @@ Measured numbers for the performance claims in the spec. CI runs the same benchm
 ```sh
 CC=gcc-14 CXX=g++-14 cmake --preset benchmark && cmake --build --preset benchmark
 build/benchmark/bench/fft_benchmark --benchmark_repetitions=10 --benchmark_enable_random_interleaving=true --benchmark_report_aggregates_only=true
+build/benchmark/bench/ring_buffer_benchmark --benchmark_repetitions=10 --benchmark_enable_random_interleaving=true --benchmark_report_aggregates_only=true
 ```
 
 The `benchmark` preset is a Release build with the vcpkg `benchmarks` feature, which adds Google Benchmark. KissFFT is a reference for comparison only; OpenScope never links it outside `bench/`.
@@ -58,3 +59,51 @@ Not measured, so only hypotheses: that KissFFT's radix-4 butterflies need fewer 
 ### Against NFR-4
 
 The whole `FFT:DATA?` spectrum on a 1M-sample capture took 126 ms (median of 10 repetitions; no p95 was measured), well above the 20 ms p95 target NFR-4 sets for measurement queries. KissFFT's transform alone took 98 ms at that size, so swapping the transform would not reach the target. What would bring it closer has not been measured: ideas are a real-input FFT (half the work), twiddles and window cached per record length, and less memory traffic. Nobody has tried them yet.
+
+## SPSC ring buffer throughput
+
+`bench/ring_buffer_benchmark.cpp` passes `std::uint64_t` items from a producer thread to a consumer thread through the ring buffer the live pipeline uses (`openscope::SpscRingBuffer`), with queues of 16, 256 and 4096 slots. The producer tries again whenever it finds the queue full, so the rate is the sustained hand-over rate between two cores; `full_per_item` is how many of those retries there were per item.
+
+Measured 2026-11-21 on the machine above (Intel Core i7-9700F, `openscope-dev:24.04` on Docker Desktop, g++-14 `-O3 -DNDEBUG`), shared with other builds and tests. Median of 10 repetitions with random interleaving, wall time per item:
+
+| Queue slots | Time per item | Items per second | `full_per_item` | CV of the rate |
+|---|---|---|---|---|
+| 16 | 34 ns | 29 M/s | 0.52 | 9 % |
+| 256 | 28 ns | 36 M/s | 0.28 | 9 % |
+| 4096 | 21 ns | 48 M/s | 0.12 | 5 % |
+
+What the table shows: a hand-over took 21 to 34 ns, and fewer pushes found the queue full as it grew. The live pipeline is meant to hand over one sample block per millisecond at 1 MS/s, about 1000 blocks per second, so the queue is tens of thousands of times faster than it needs to be: the cost of a block is generating and assembling its samples, not passing it on.
+
+Not measured, so only a hypothesis: that most of each hand-over is the two cores passing the indexes' and the slot's cache lines back and forth.
+
+## Live mode at 4 channels x 1 MS/s (NFR-1)
+
+`bench/live_run.cpp` runs the instrument live (`openscope::LivePipeline`) with all four channels enabled, each a 1 kHz sine with 10 mV RMS noise, at the record length of 10 000 and the `*RST` 1 MS/s or the sample rate given second. Once a second it prints how far the latest capture reaches on the sample clock against the samples the wall clock has released, the skipped samples (released by the wall clock but never acquired, because acquisition fell more than one round behind), the dropped-block and discarded-capture counts, and the slowest `*IDN?` of that second, sent every 5 ms from the main thread while the pipeline runs:
+
+```sh
+build/benchmark/bench/live_run 60        # 1 MS/s
+build/benchmark/bench/live_run 10 1E7    # 10 MS/s
+```
+
+Measured 2026-11-21 on the machine above (same container and build flags as the ring buffer), while other builds and tests shared the machine. Three 60-second runs at 1 MS/s:
+
+| | Run 1 | Run 2 | Run 3 |
+|---|---|---|---|
+| Skipped samples | 0 | 0 | 0 |
+| Dropped blocks | 0 | 1 (at about 35 s) | 0 |
+| Captures discarded for spanning a dropped block | 0 | 1 | 0 |
+| Latest capture's end behind the wall clock, sampled each second | 899 to 12 010 samples | 1 387 to 12 774 samples | 1 023 to 23 399 samples |
+| Slowest `*IDN?` in any second | 0.08 ms | 0.51 ms | 2.39 ms |
+
+What the table shows: NFR-1's target of zero dropped blocks at 4 channels x 1 MS/s held for runs 1 and 3 and missed by one block in run 2, all while other builds shared the machine; the capture that block would have split was discarded and counted, never published with a gap. Captures complete every 10 000 samples, so the latest capture's end trails the wall clock by up to one record length (10 ms) plus the time to acquire and process the block that completes it. Most seconds stayed under 13.1 ms; run 3 saw 21.0 and 23.4 ms in two separate seconds, and the lag did not grow over any run, so live mode kept pace with real time. These are three 60-second runs, not a soak test.
+
+### Above what the machine sustains
+
+Ten seconds at each sample rate, same setup:
+
+| `ACQ:SRAT` | Wall-clock samples | Latest capture ends at | Skipped samples | Dropped blocks | Slowest `*IDN?` in any second |
+|---|---|---|---|---|---|
+| 1E7 | 100 017 000 | 43 919 977 | 47 409 383 | 0 | 0.06 ms |
+| 1E8 | 1 000 436 604 | 44 619 675 | 870 357 048 | 0 | 0.06 ms |
+
+What the table shows: this machine acquires about 4.4 M sample indexes per second on four noisy channels, so at 1E7 and above acquisition falls behind the wall clock every round. The pacer then skips what is over a round and counts it: at 1E8, 87 % of the samples the wall clock released were skipped, and the skipped count says so where the dropped-block count alone (0) would not. `*IDN?` stayed under 0.1 ms at these rates and under 2.4 ms in every run, because `Instrument::acquire` holds the Instrument's mutex only to take the indexes and a settings snapshot and samples outside it.

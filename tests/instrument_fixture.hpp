@@ -25,6 +25,11 @@ inline constexpr std::size_t kResetAutoTimeout = 15'000;
 /// their tests need each capture to complete one record length after the last.
 inline constexpr auto kUntriggeredCaptures = "TRIG:POS 0;LEV 100";
 
+/// Makes CH1 a DC signal that never triggers, with time zero on the first sample, so Auto takes
+/// an untriggered capture every record length from where a capture starts: the sample indexes of
+/// each capture show exactly when it started.
+inline constexpr auto kUntriggeredDc = "SOUR1:FUNC DC;:TRIG:POS 0";
+
 /// `instrument`'s latest capture. Fails the test and returns an empty capture when there is none,
 /// so a test can read its fields without crashing the test binary.
 inline std::shared_ptr<const Capture> latest(const Instrument& instrument) {
@@ -68,6 +73,12 @@ class InstrumentFixture : public testing::Test {
  protected:
   Instrument instrument;
   ScpiSession session{instrument};
+};
+
+/// InstrumentFixture set up with kUntriggeredDc, for tests that check when captures start.
+class UntriggeredDcFixture : public InstrumentFixture {
+ protected:
+  UntriggeredDcFixture() { session.send(kUntriggeredDc); }
 };
 
 }  // namespace openscope::test
