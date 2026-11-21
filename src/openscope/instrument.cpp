@@ -2,12 +2,14 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <format>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -16,6 +18,7 @@
 #include <utility>
 #include <vector>
 
+#include "openscope/acquired_block.hpp"
 #include "openscope/capture.hpp"
 #include "openscope/channel.hpp"
 #include "openscope/fault.hpp"
@@ -379,7 +382,7 @@ void Instrument::add_fft_commands() {
 scpi::HandlerResult Instrument::reply_with_source(
     std::size_t source,
     const std::function<std::string(const Capture&, const CapturedChannel&)>& reply) const {
-  const std::shared_ptr<const Capture> capture = captures_.latest();
+  const std::shared_ptr<const Capture> capture = latest_capture();
   if (capture == nullptr) {
     return kDataCorruptOrStale;
   }
@@ -508,13 +511,13 @@ void Instrument::change_generator(const Arguments& arguments,
   GeneratorSettings settings = generator.settings();
   change(settings);
   generator.configure(settings, acquisition_.sample_rate, clock_.now());
-  captures_.discard();
+  discard_capture();
 }
 
 void Instrument::change_channel(const Arguments& arguments,
                                 const std::function<void(ChannelSettings&)>& change) {
   change(channels_.at(channel_of(arguments)));
-  captures_.discard();
+  discard_capture();
 }
 
 void Instrument::change_acquisition(const std::function<void(AcquisitionSettings&)>& change) {
@@ -522,12 +525,12 @@ void Instrument::change_acquisition(const std::function<void(AcquisitionSettings
   for (Generator& generator : generators_) {
     generator.configure(generator.settings(), acquisition_.sample_rate, clock_.now());
   }
-  captures_.discard();
+  discard_capture();
 }
 
 void Instrument::change_trigger(const std::function<void(TriggerSettings&)>& change) {
   change(trigger_);
-  captures_.discard();
+  discard_capture();
 }
 
 void Instrument::reset() {
@@ -538,14 +541,15 @@ void Instrument::reset() {
   // Fresh Generators rather than reconfigured ones: phase continuity would carry the phase built
   // up by earlier settings past *RST, so the output would depend on the commands sent before it.
   generators_ = make_generators(seed_, acquisition_.sample_rate);
-  captures_ = {};
+  discard_capture();
+  latest_.store(nullptr);
   run_state_ = RunState::kRunning;
 }
 
 void Instrument::enter(RunState state) {
   run_state_ = state;
   if (state != RunState::kRunning) {
-    captures_.discard();
+    discard_capture();
   }
 }
 
@@ -566,12 +570,14 @@ void Instrument::resume_held() {
 }
 
 SessionId Instrument::open_session() {
+  const std::scoped_lock lock(mutex_);
   const SessionId id{next_session_id_++};
   sessions_.try_emplace(id);
   return id;
 }
 
 void Instrument::close_session(SessionId session) {
+  const std::scoped_lock lock(mutex_);
   if (sessions_.erase(session) == 0) {
     throw std::out_of_range("unknown Session");
   }
@@ -579,6 +585,7 @@ void Instrument::close_session(SessionId session) {
 }
 
 void Instrument::execute(SessionId session, std::string_view line, ReplyHandler on_reply) {
+  const std::scoped_lock lock(mutex_);
   Session& caller = sessions_.at(session);
   if (std::ranges::any_of(held_, of_session(session))) {
     throw std::logic_error("Session sent a line while its previous line is held");
@@ -599,29 +606,97 @@ void Instrument::execute(SessionId session, std::string_view line, ReplyHandler 
 }
 
 void Instrument::advance(std::size_t samples) {
+  const std::scoped_lock lock(mutex_);
   while (samples > 0) {
     std::size_t count = std::min(samples, kMaxBlockLength);
-    std::optional<std::size_t> single_end;
-    // Stopped samples nothing: Generators are pure functions of the sample index (ADR 0003), and
-    // the capture in progress was dropped when the instrument stopped.
-    if (run_state_ != RunState::kStopped) {
-      const SampleBlock block =
-          sample_channels(generators_, channels_, trigger_.source, clock_.now(), count);
-      single_end = captures_.push(block, acquisition_, channels_, trigger_,
-                                  pending() ? CaptureLimit::kFirst : CaptureLimit::kEvery);
+    const std::optional<AcquiredBlock> block = sample(count);
+    Pushed pushed;
+    if (block) {
+      pushed = assemble(*block);
       // The Single's capture ends the operation at its last sample: the lines it resumes run with
       // the clock there, and the next block starts there under whatever they changed, so how
       // `advance` is chunked never changes a capture or a reply (ADR 0003).
-      if (single_end) {
-        count = *single_end;
-      }
+      count = pushed.end.value_or(count);
     }
     clock_.take(count);
     samples -= count;
-    if (single_end) {
-      enter(RunState::kStopped);
-      resume_held();
+    if (block) {
+      conclude(*block, pushed);
     }
+  }
+}
+
+std::optional<AcquiredBlock> Instrument::acquire(std::size_t count) {
+  if (count > kMaxBlockLength) {
+    throw std::invalid_argument("sample block longer than kMaxBlockLength");
+  }
+  const std::scoped_lock lock(mutex_);
+  std::optional<AcquiredBlock> block = sample(count);
+  clock_.take(count);
+  return block;
+}
+
+void Instrument::process(const AcquiredBlock& block) {
+  const Pushed pushed = assemble(block);
+  if (pushed.capture != nullptr || pushed.end) {
+    const std::scoped_lock lock(mutex_);
+    conclude(block, pushed);
+  }
+}
+
+double Instrument::sample_rate() const {
+  const std::scoped_lock lock(mutex_);
+  return acquisition_.sample_rate;
+}
+
+std::optional<AcquiredBlock> Instrument::sample(std::size_t count) {
+  // Stopped samples nothing: Generators are pure functions of the sample index (ADR 0003), and
+  // the capture in progress was dropped when the instrument stopped.
+  if (run_state_ == RunState::kStopped) {
+    return std::nullopt;
+  }
+  return AcquiredBlock{
+      .samples = sample_channels(generators_, channels_, trigger_.source, clock_.now(), count),
+      .acquisition = acquisition_,
+      .channels = channels_,
+      .trigger = trigger_,
+      .limit = pending() ? CaptureLimit::kFirst : CaptureLimit::kEvery,
+      .generation = generation_,
+      .sequence = next_sequence_++};
+}
+
+Pushed Instrument::assemble(const AcquiredBlock& block) {
+  const bool follows_drop = block.sequence != expected_sequence_;
+  expected_sequence_ = block.sequence + 1;
+  const bool new_generation = block.generation != assembled_generation_;
+  // A new generation was acquired under changed settings or run state. After a dropped block the
+  // trigger restarts too: it never sees an edge across the samples that are missing.
+  if (new_generation || follows_drop) {
+    const bool split = captures_.discard();
+    // A capture of an older generation would have been discarded with or without the gap.
+    if (split && !new_generation) {
+      discarded_captures_.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+  assembled_generation_ = block.generation;
+  return captures_.push(block.samples, block.acquisition, block.channels, block.trigger,
+                        block.limit);
+}
+
+void Instrument::conclude(const AcquiredBlock& block, const Pushed& pushed) {
+  // A command since the block was acquired has discarded what it belongs to: its capture would
+  // show settings older than that command, and the Single it would end was restarted or ended.
+  if (block.generation != generation_) {
+    return;
+  }
+  if (pushed.capture != nullptr) {
+    latest_.store(pushed.capture);
+  }
+  // RUN leaves Armed-single without discarding, so a block acquired while the Single was armed
+  // may complete a capture after it: that capture is kept, but there is no Single left to end.
+  if (pushed.end && pending()) {
+    enter(RunState::kStopped);
+    resume_held();
   }
 }
 

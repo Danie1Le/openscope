@@ -27,6 +27,7 @@ namespace {
 using test::first_index;
 using test::kNoErrorReply;
 using test::kResetRecordLength;
+using test::kUntriggeredDc;
 using test::LineReply;
 using test::ScpiSession;
 using testing::Each;
@@ -36,16 +37,8 @@ using testing::Eq;
 /// `WAV:PRE?` for a capture of the DC signal below: untriggered, time zero on the first sample.
 constexpr auto kUntriggeredPreamble = "1E+06,10000,1,0,0,1";
 
-/// Makes CH1 a DC signal that never triggers, with time zero on the first sample, so Auto takes
-/// an untriggered capture every record length from where a capture starts: the sample indexes of
-/// each capture show exactly when it started.
-constexpr auto kUntriggeredDc = "SOUR1:FUNC DC;:TRIG:POS 0";
-
-/// An instrument set up with kUntriggeredDc.
-class RunControlTest : public test::InstrumentFixture {
+class RunControlTest : public test::UntriggeredDcFixture {
  protected:
-  RunControlTest() { session.send(kUntriggeredDc); }
-
   /// Starts `line` on `client` and expects it to be held.
   static std::shared_ptr<const LineReply> start_held(ScpiSession& client, std::string_view line) {
     std::shared_ptr<const LineReply> reply = client.start(line);

@@ -151,7 +151,6 @@ TEST(CaptureAssemblerTest, RecordLengthOfZeroIsALogicError) {
 
   EXPECT_THROW(assembler.push(block, {.sample_rate = 1.0, .record_length = 0}, channels, {}),
                std::logic_error);
-  EXPECT_EQ(assembler.latest(), nullptr);
 }
 
 }  // namespace

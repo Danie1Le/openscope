@@ -17,10 +17,9 @@
 
 namespace openscope {
 
-std::optional<std::size_t> CaptureAssembler::push(
-    const SampleBlock& block, const AcquisitionSettings& acquisition,
-    std::span<const ChannelSettings, kChannelCount> channels, const TriggerSettings& trigger,
-    CaptureLimit limit) {
+Pushed CaptureAssembler::push(const SampleBlock& block, const AcquisitionSettings& acquisition,
+                              std::span<const ChannelSettings, kChannelCount> channels,
+                              const TriggerSettings& trigger, CaptureLimit limit) {
   if (acquisition.record_length == 0) {
     throw std::logic_error("record length of zero");  // No sample would ever fill a capture.
   }
@@ -39,18 +38,18 @@ std::optional<std::size_t> CaptureAssembler::push(
   const std::uint64_t holdoff = trigger.holdoff_samples(acquisition.sample_rate);
   const std::size_t pre_trigger = trigger.pre_trigger_samples(acquisition.record_length);
 
-  const std::size_t published_before = published_;
+  completed_.reset();
   for (std::size_t used = 0; used < block.count;) {
     const SampleIndex index = block.first_index + used;
     Capture& capture = building_ ? *building_ : start(index, acquisition, channels, pre_trigger);
     used = placed_ ? fill(capture, block, used)
                    : collect(capture, block, used, next_event, events.end(), trigger.mode, holdoff);
-    if (limit == CaptureLimit::kFirst && published_ != published_before) {
+    if (limit == CaptureLimit::kFirst && completed_ != nullptr) {
       discard();  // The trigger has seen the samples after `used`, which the caller pushes again.
-      return used;
+      return {.capture = std::move(completed_), .end = used};
     }
   }
-  return std::nullopt;
+  return {.capture = std::move(completed_), .end = std::nullopt};
 }
 
 std::size_t CaptureAssembler::fill(Capture& capture, const SampleBlock& block, std::size_t used) {
@@ -98,8 +97,7 @@ std::size_t CaptureAssembler::collect(Capture& capture, const SampleBlock& block
 void CaptureAssembler::publish(Capture& capture) {
   capture.trigger_position = pre_trigger_;
   capture.untriggered = !placed_;
-  latest_ = std::make_shared<const Capture>(std::move(capture));
-  ++published_;
+  completed_ = std::make_shared<const Capture>(std::move(capture));
   building_.reset();
 }
 
