@@ -68,9 +68,10 @@ class Instrument {
   /// The `*RST` timebase scale in seconds per division.
   static constexpr double kDefaultTimebaseScale = 1e-3;
 
-  void add_source_commands();
+  void add_generator_commands();
   void add_channel_commands();
   void add_acquisition_commands();
+  void add_timebase_commands();
 
   /// Registers `<header> <parameter>`, which runs `set`, and `<header>?`, which replies what `get`
   /// returns. Both receive the calling Session, for the settings a Session owns (ADR 0002).

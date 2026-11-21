@@ -87,12 +87,13 @@ Instrument::Instrument(std::uint64_t seed)
                    const ScpiError error = caller.pop_error();
                    return std::format(R"({},"{}")", error.code, error.message);
                  }});
-  add_source_commands();
+  add_generator_commands();
   add_channel_commands();
   add_acquisition_commands();
+  add_timebase_commands();
 }
 
-void Instrument::add_source_commands() {
+void Instrument::add_generator_commands() {
   add_setting(
       "SOURce<1-4>:FUNCtion",
       scpi::KeywordParameter{.choices = {kFunctionKeywords.begin(), kFunctionKeywords.end()}},
@@ -154,6 +155,9 @@ void Instrument::add_acquisition_commands() {
         set_acquisition(settings);
       },
       [this](Session&, const Arguments&) { return std::to_string(acquisition_.record_length); });
+}
+
+void Instrument::add_timebase_commands() {
   // ADR 0004: the timebase only zooms the display, so it neither discards nor reshapes captures.
   add_setting(
       "TIMebase:SCALe", NumericParameter{.min = 1e-9, .max = 100.0, .unit = "S"},
