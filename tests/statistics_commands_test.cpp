@@ -18,6 +18,7 @@
 
 #include "binary_block.hpp"
 #include "instrument_fixture.hpp"
+#include "openscope/acquired_block.hpp"
 #include "openscope/instrument.hpp"
 #include "reply_numbers.hpp"
 #include "scpi_session.hpp"
@@ -184,29 +185,37 @@ TEST_F(StatisticsTest, UntriggeredCapturesCount) {
   EXPECT_EQ(count_of(session.send("MEAS:STAT? VPP,CHAN1")), 4.0);
 }
 
+/// How a test drives the sample clock: test::advance_in_steps, or test::acquire_and_process as
+/// live mode's two threads do.
+using Driver = void (*)(Instrument& instrument, std::size_t samples, std::size_t step);
+
 /// MEAS:STAT? of every measurement on `instrument`, seed 7 with noise, after `samples` samples
-/// taken `step` at a time.
-std::optional<std::string> stepped_statistics(std::size_t samples, std::size_t step) {
+/// that `drive` takes `step` at a time.
+std::optional<std::string> stepped_statistics(std::size_t samples, std::size_t step, Driver drive) {
   Instrument instrument(7);
   ScpiSession session(instrument);
   session.send(kUntriggeredCaptures);
   session.send(short_records());
   session.send("SOUR1:FREQ 1234;NOIS 0.2");
-  test::advance_in_steps(instrument, samples, step);
+  drive(instrument, samples, step);
   return session.send(
       "MEAS:STAT? VPP,CHAN1;STAT? VMIN,CHAN1;STAT? VMAX,CHAN1;STAT? VAV,CHAN1;"
       "STAT? VRMS,CHAN1;:SYST:ERR?");
 }
 
 // More captures than one sample block holds, so the whole run completes many captures per block
-// and spans two blocks; stepping one sample at a time completes at most one per call.
+// and spans two blocks; stepping one sample at a time completes at most one per call. Live mode's
+// acquire and process count the same captures as advance.
 TEST(StatisticsSteppingTest, HowTheClockIsSteppedNeverChangesTheStatistics) {
   constexpr std::size_t kSamples = (70 * kRecord) + 500;
-  const std::optional<std::string> whole = stepped_statistics(kSamples, kSamples);
+  const std::optional<std::string> whole =
+      stepped_statistics(kSamples, kSamples, &test::advance_in_steps);
   EXPECT_THAT(whole.value_or(""), testing::EndsWith(std::string(",70;") + kNoErrorReply));
-  for (const std::size_t step : {std::size_t{1}, std::size_t{997}, kRecord - 1, kRecord,
-                                 kRecord + 1, Instrument::kMaxBlockLength}) {
-    EXPECT_EQ(stepped_statistics(kSamples, step), whole) << "step " << step;
+  for (const Driver drive : {&test::advance_in_steps, &test::acquire_and_process}) {
+    for (const std::size_t step : {std::size_t{1}, std::size_t{997}, kRecord - 1, kRecord,
+                                   kRecord + 1, Instrument::kMaxBlockLength}) {
+      EXPECT_EQ(stepped_statistics(kSamples, step, drive), whole) << "step " << step;
+    }
   }
 }
 
@@ -231,8 +240,8 @@ std::string stepped_single(std::size_t step) {
 TEST(StatisticsSteppingTest, HowTheClockIsSteppedAcrossASingleNeverChangesTheStatistics) {
   const std::string whole = stepped_single(Instrument::kMaxBlockLength);
   EXPECT_THAT(whole, testing::EndsWith(",31"));  // 30 captures, then the Single's.
-  for (const std::size_t step : {std::size_t{1}, std::size_t{299}, kRecord - 1, kRecord,
-                                 kRecord + 1}) {
+  for (const std::size_t step :
+       {std::size_t{1}, std::size_t{299}, kRecord - 1, kRecord, kRecord + 1}) {
     EXPECT_EQ(stepped_single(step), whole) << "step " << step;
   }
 }
@@ -310,12 +319,13 @@ INSTANTIATE_TEST_SUITE_P(
                     StatisticsCase{"CHAN1:DISP ON", true}, StatisticsCase{"CHAN1:SCAL 1", true},
                     StatisticsCase{"CHAN1:OFFS 0", true}, StatisticsCase{"CHAN2:DISP OFF", true},
                     StatisticsCase{"ACQ:SRAT 1E6", true}, StatisticsCase{"ACQ:POIN 1000", true},
-                    StatisticsCase{"TIM:SCAL 0.001", false}, StatisticsCase{"TRIG:SOUR CHAN1", true},
-                    StatisticsCase{"TRIG:LEV 100", true}, StatisticsCase{"TRIG:SLOP POS", true},
-                    StatisticsCase{"TRIG:MODE AUTO", true}, StatisticsCase{"TRIG:HOLD 0", true},
-                    StatisticsCase{"TRIG:POS 0", true}, StatisticsCase{"*RST", true},
-                    StatisticsCase{"WAV:SOUR CHAN1", false}, StatisticsCase{"WAV:FORM REAL", false},
-                    StatisticsCase{"FFT:SOUR CHAN1", false}, StatisticsCase{"FFT:WIND HANN", false},
+                    StatisticsCase{"TIM:SCAL 0.001", false},
+                    StatisticsCase{"TRIG:SOUR CHAN1", true}, StatisticsCase{"TRIG:LEV 100", true},
+                    StatisticsCase{"TRIG:SLOP POS", true}, StatisticsCase{"TRIG:MODE AUTO", true},
+                    StatisticsCase{"TRIG:HOLD 0", true}, StatisticsCase{"TRIG:POS 0", true},
+                    StatisticsCase{"*RST", true}, StatisticsCase{"WAV:SOUR CHAN1", false},
+                    StatisticsCase{"WAV:FORM REAL", false}, StatisticsCase{"FFT:SOUR CHAN1", false},
+                    StatisticsCase{"FFT:WIND HANN", false},
                     StatisticsCase{"SOUR1:FAUL GLIT,0", false}, StatisticsCase{"RUN", false},
                     StatisticsCase{"STOP", false}, StatisticsCase{"SINGle", false},
                     StatisticsCase{"*CLS", false}, StatisticsCase{"*IDN?", false},
@@ -446,6 +456,41 @@ TEST_F(StatisticsTest, LineHeldOnASingleReadsTheSinglesCapture) {
   EXPECT_EQ(reply->text, "1;0.25,0.25,0.25,0.25,0,1");
   capture(1);  // Stopped: nothing more is counted.
   EXPECT_EQ(count_of(session.send("MEAS:STAT? VAV,CHAN1")), 1.0);
+}
+
+// Live mode (#8): a block acquired before a setting change holds the old signal, so its capture is
+// neither published nor counted.
+TEST_F(StatisticsTest, BlockAcquiredBeforeASettingChangeIsNotCounted) {
+  test::acquire_and_process(instrument, 2 * kRecord, kRecord);
+  const AcquiredBlock before = test::acquired(instrument, kRecord);
+
+  session.send("CHAN1:OFFS 0");
+  instrument.process(before);
+
+  EXPECT_EQ(session.send("MEAS:STAT? VPP,CHAN1"), std::nullopt);
+  EXPECT_EQ(session.next_error(), kDataStaleReply);
+}
+
+// STOP keeps the statistics but discards what was on its way, which is not counted either.
+TEST_F(StatisticsTest, BlockAcquiredBeforeStopIsNotCounted) {
+  test::acquire_and_process(instrument, 2 * kRecord, kRecord);
+  const AcquiredBlock before = test::acquired(instrument, kRecord);
+
+  session.send("STOP");
+  instrument.process(before);
+
+  EXPECT_EQ(count_of(session.send("MEAS:STAT? VPP,CHAN1")), 2.0);
+}
+
+// The processing thread counts the Single's capture before the lines held on it carry on.
+TEST_F(StatisticsTest, LineHeldOnASingleInLiveModeReadsTheSinglesCapture) {
+  session.send("SOUR1:FUNC DC;OFFS 0.25");
+
+  const auto reply = session.start("SINGle;*OPC?;:MEAS:STAT? VAV,CHAN1");
+  instrument.process(test::acquired(instrument, kRecord));
+
+  EXPECT_TRUE(reply->ended);
+  EXPECT_EQ(reply->text, "1;0.25,0.25,0.25,0.25,0,1");
 }
 
 }  // namespace

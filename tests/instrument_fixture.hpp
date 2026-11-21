@@ -5,7 +5,10 @@
 #include <algorithm>
 #include <cstddef>
 #include <memory>
+#include <optional>
+#include <utility>
 
+#include "openscope/acquired_block.hpp"
 #include "openscope/capture.hpp"
 #include "openscope/instrument.hpp"
 #include "openscope/sample_clock.hpp"
@@ -24,6 +27,11 @@ inline constexpr std::size_t kResetAutoTimeout = 15'000;
 /// zero on the first sample and a level no signal reaches. Measurements read the whole capture, so
 /// their tests need each capture to complete one record length after the last.
 inline constexpr auto kUntriggeredCaptures = "TRIG:POS 0;LEV 100";
+
+/// Makes CH1 a DC signal that never triggers, with time zero on the first sample, so Auto takes
+/// an untriggered capture every record length from where a capture starts: the sample indexes of
+/// each capture show exactly when it started.
+inline constexpr auto kUntriggeredDc = "SOUR1:FUNC DC;:TRIG:POS 0";
 
 /// `instrument`'s latest capture. Fails the test and returns an empty capture when there is none,
 /// so a test can read its fields without crashing the test binary.
@@ -62,12 +70,37 @@ inline void advance_in_steps(Instrument& instrument, std::size_t samples, std::s
   }
 }
 
+/// The next `count` sample indexes of `instrument`, acquired as live mode's acquisition thread
+/// does. Fails the test when the instrument acquired nothing (it is Stopped).
+inline AcquiredBlock acquired(Instrument& instrument, std::size_t count) {
+  std::optional<AcquiredBlock> block = instrument.acquire(count);
+  if (!block) {
+    ADD_FAILURE() << "nothing acquired";
+    return {};
+  }
+  return std::move(*block);
+}
+
+/// Acquires `samples` sample indexes in blocks of at most `step` and processes each, as live
+/// mode's two threads do, on the calling thread.
+inline void acquire_and_process(Instrument& instrument, std::size_t samples, std::size_t step) {
+  for (std::size_t done = 0; done < samples; done += step) {
+    instrument.process(acquired(instrument, std::min(step, samples - done)));
+  }
+}
+
 /// An Instrument at its `*RST` settings with one Session on it: the starting point of facade
 /// tests.
 class InstrumentFixture : public testing::Test {
  protected:
   Instrument instrument;
   ScpiSession session{instrument};
+};
+
+/// InstrumentFixture set up with kUntriggeredDc, for tests that check when captures start.
+class UntriggeredDcFixture : public InstrumentFixture {
+ protected:
+  UntriggeredDcFixture() { session.send(kUntriggeredDc); }
 };
 
 }  // namespace openscope::test
