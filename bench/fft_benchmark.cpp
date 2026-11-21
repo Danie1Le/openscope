@@ -37,10 +37,9 @@ std::vector<std::complex<double>> complex_test_signal(std::size_t points) {
   return {samples.begin(), samples.end()};
 }
 
-/// Reports points per second and the point count for the N log N fit.
+/// Reports points per second.
 void set_counters(benchmark::State& state) {
   state.SetItemsProcessed(state.iterations() * state.range(0));
-  state.SetComplexityN(state.range(0));
 }
 
 // Google Benchmark's `for (auto _ : state)` loop never reads its variable by design.
@@ -111,8 +110,7 @@ void BM_MagnitudeSpectrum(benchmark::State& state) {
 void four_k_to_one_m_points(benchmark::Benchmark* family) {
   family->RangeMultiplier(4)
       ->Range(std::int64_t{1} << 12U, std::int64_t{1} << 20U)
-      ->Unit(benchmark::kMicrosecond)
-      ->Complexity(benchmark::oNLogN);
+      ->Unit(benchmark::kMicrosecond);
 }
 
 BENCHMARK(BM_OpenScopeFft)->Apply(four_k_to_one_m_points);

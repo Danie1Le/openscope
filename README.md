@@ -44,9 +44,9 @@ New inputs go to `fuzz-corpus`, the first directory; `fuzz/corpus` holds the com
 
 ## Benchmarks
 
-The `benchmark` preset (Release) installs the vcpkg `benchmarks` feature (Google Benchmark, and KissFFT as a reference only) and builds `fft_benchmark`, which times our FFT against KissFFT from 4K to 1M points. CI runs it on every pull request and reports the numbers without gating on them. `docs/benchmarks.md` records measured results.
+The `benchmark` preset (Release) installs the vcpkg `benchmarks` feature (Google Benchmark), fetches KissFFT as a reference only, and builds `fft_benchmark`, which times our FFT against KissFFT, compiled with the same compiler and flags, from 4K to 1M points. CI runs it on every pull request and reports the numbers without gating on them; a crash fails the step. `docs/benchmarks.md` records measured results.
 
 ```sh
-cmake --preset benchmark && cmake --build --preset benchmark
+CC=gcc-14 CXX=g++-14 cmake --preset benchmark && cmake --build --preset benchmark
 build/benchmark/bench/fft_benchmark
 ```
