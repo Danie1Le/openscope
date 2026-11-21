@@ -2,23 +2,12 @@
 
 #include <complex>
 #include <cstddef>
-#include <cstdint>
 #include <span>
 #include <vector>
 
-namespace openscope {
+#include "openscope/fft_window.hpp"
 
-/// The window applied to the samples before the FFT (`FFT:WINDow`). The order matches the SCPI
-/// keywords. Each trades frequency resolution against leakage: rectangular has the narrowest main
-/// lobe and the most leakage, Blackman-Harris the widest lobe and the least.
-enum class FftWindow : std::uint8_t {
-  /// No window: every sample weighs the same.
-  kRectangular,
-  /// The periodic Hann window, 0.5 - 0.5 cos(2 pi n / N).
-  kHann,
-  /// The periodic 4-term Blackman-Harris window with sidelobes below -92 dB (Harris 1978).
-  kBlackmanHarris,
-};
+namespace openscope {
 
 /// A radix-2 complex FFT of one fixed power-of-two length. Construction computes the twiddle
 /// factors and every transform reuses them, as a KissFFT plan does, so the two time the same work.

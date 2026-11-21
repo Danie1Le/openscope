@@ -19,7 +19,7 @@ using Complex = std::complex<double>;
 
 constexpr double kTwoPi = 2.0 * std::numbers::pi;
 
-/// The coefficients b_m of a cosine-sum window, w[n] = sum b_m cos(2 pi m n / N). b_0 is the
+/// The coefficients a_m of a cosine-sum window, w[n] = sum a_m cos(2 pi m n / N). a_0 is the
 /// window's coherent gain: its mean over N points whenever N > m for every term, which holds from
 /// kMinWindowedLength on.
 std::span<const double> window_coefficients(FftWindow window) {
@@ -115,7 +115,7 @@ std::vector<float> magnitude_spectrum_db(std::span<const float> samples, FftWind
   }
   Fft(length).transform(data);
 
-  // |X[k]| / (N b0) is the peak amplitude a bin-centred tone contributes to each of its two
+  // |X[k]| / (N a_0) is the peak amplitude a bin-centred tone contributes to each of its two
   // mirrored bins. Bins 1 to N/2 - 1 fold both halves, so their RMS is twice that over sqrt 2; DC
   // and N/2 have no mirror and their RMS is the amplitude itself. Levels come from |X|^2 with
   // 10 log10, which needs no square root.

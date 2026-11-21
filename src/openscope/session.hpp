@@ -5,7 +5,7 @@
 #include <deque>
 #include <utility>
 
-#include "openscope/fft.hpp"
+#include "openscope/fft_window.hpp"
 #include "openscope/scpi_error.hpp"
 
 namespace openscope {
