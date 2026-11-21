@@ -29,6 +29,32 @@ CXX=clang++-18 cmake --fresh --preset debug -DCMAKE_CXX_CLANG_TIDY=clang-tidy-18
 
 With Clang, the sanitizer and coverage presets need the compiler runtime (`libclang-rt-18-dev` on Ubuntu).
 
+## Running the engine
+
+`openscope-engine` runs the instrument live (4 channels on a 1 MS/s sample clock at `*RST`) and serves SCPI over TCP until Ctrl+C or SIGTERM. Every build preset builds it into `build/<preset>/src/`.
+
+```sh
+build/release/src/openscope-engine            # 127.0.0.1:5025
+build/release/src/openscope-engine --port 0   # a free port, named in the "listening" log line
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--address <ip>` | `127.0.0.1` | Local IP address to listen on. Any other address exposes the instrument, which has no authentication, to the network. Host names are not resolved. |
+| `--port <0-65535>` | `5025` | TCP port; `0` picks a free one. |
+| `--idle-timeout <1-86400>` | `300` | Seconds a client may send no command and get no reply before it is disconnected. A client waiting on `*OPC?` is never idle. |
+| `--seed <n>` | `0` | Seed of the generators' noise: the same seed and the same commands give the same signals. |
+| `-h`, `--help` | | Print the options and exit. |
+
+Logs go to standard error, one JSON object per line with `time` and `event` (`listening`, `connect`, `refuse`, `disconnect`, `error`, `stopping`). An invalid option exits with status 2; a failure to start, such as a port in use, logs an `error` event and exits with status 1.
+
+```console
+$ printf '*IDN?\n' | nc -q 1 127.0.0.1 5025
+OpenScope,OS-4,000001,0.1.0
+```
+
+See `docs/scpi-reference.md` for the connection rules (one Session per connection, 4 KB lines, 8 clients) and the commands.
+
 ## Fuzzing
 
 The `fuzz` preset (always Clang) builds a libFuzzer target that feeds raw bytes, split into lines, to the instrument's execute-line entry point under ASan and UBSan. Each line goes to one of two Sessions, picked by the low bit of its first byte, so cross-Session paths are fuzzed too. CI runs it for 60 seconds on every pull request; run it longer locally:
