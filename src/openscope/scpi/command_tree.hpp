@@ -66,7 +66,8 @@ struct Hold {
 
 /// What a handler returns: its reply (nullopt for a command without one), the execution error
 /// (such as -221) that stopped it, which the tree queues before discarding the rest of the line,
-/// or Hold.
+/// or Hold. A handler that replies but must also report something, as a measurement reports its
+/// status, puts that entry on the Session's queue itself, so the line carries on.
 using HandlerResult = std::variant<std::optional<std::string>, ScpiError, Hold>;
 
 /// Runs a matched command for the calling Session.
