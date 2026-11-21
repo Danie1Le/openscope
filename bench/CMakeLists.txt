@@ -1,6 +1,7 @@
 # Google Benchmark targets. Built only by the `benchmark` preset, which installs the vcpkg
 # `benchmarks` feature (Google Benchmark).
 find_package(benchmark CONFIG REQUIRED)
+find_package(Threads REQUIRED)
 
 # KissFFT is the reference our FFT is measured against. It is compiled here, from the same release
 # vcpkg packages, with the compiler and flags the build type gives our own code (Release: -O3
@@ -22,3 +23,11 @@ target_compile_definitions(kissfft_reference PUBLIC kiss_fft_scalar=double)
 add_executable(fft_benchmark fft_benchmark.cpp)
 target_link_libraries(fft_benchmark PRIVATE openscope openscope_warnings benchmark::benchmark_main
   kissfft_reference)
+
+add_executable(ring_buffer_benchmark ring_buffer_benchmark.cpp)
+target_link_libraries(ring_buffer_benchmark PRIVATE openscope openscope_warnings
+  benchmark::benchmark_main Threads::Threads)
+
+# Not a Google Benchmark: runs the live pipeline in real time and prints its drop counts.
+add_executable(live_run live_run.cpp)
+target_link_libraries(live_run PRIVATE openscope openscope_warnings)
