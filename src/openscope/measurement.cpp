@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <memory>
 #include <numeric>
@@ -165,6 +166,19 @@ SignalLevels find_levels(std::span<const float> samples) {
 
 namespace {
 
+/// The mean of `samples`, summed in order so the result never depends on the platform.
+double mean(std::span<const float> samples) {
+  return std::accumulate(samples.begin(), samples.end(), 0.0) / static_cast<double>(samples.size());
+}
+
+/// The root mean square of `samples`: DC included, as a true-RMS meter reads it.
+double root_mean_square(std::span<const float> samples) {
+  const double sum_of_squares = std::accumulate(
+      samples.begin(), samples.end(), 0.0,
+      [](double sum, float sample) { return sum + (static_cast<double>(sample) * sample); });
+  return std::sqrt(sum_of_squares / static_cast<double>(samples.size()));
+}
+
 constexpr std::array kMeasurements{
     Measurement{.mnemonic = "VPP",
                 .measure = [](const MeasuredSignal& signal) -> std::optional<double> {
@@ -177,6 +191,14 @@ constexpr std::array kMeasurements{
     Measurement{.mnemonic = "VMAX",
                 .measure = [](const MeasuredSignal& signal) -> std::optional<double> {
                   return signal.levels.maximum;
+                }},
+    Measurement{.mnemonic = "VAVerage",
+                .measure = [](const MeasuredSignal& signal) -> std::optional<double> {
+                  return mean(signal.samples);
+                }},
+    Measurement{.mnemonic = "VRMS",
+                .measure = [](const MeasuredSignal& signal) -> std::optional<double> {
+                  return root_mean_square(signal.samples);
                 }},
 };
 
