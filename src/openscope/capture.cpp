@@ -33,14 +33,13 @@ void CaptureAssembler::push(const SampleBlock& block, const AcquisitionSettings&
   }
   // The trigger sees every sample, whatever the captures do with its events.
   const std::vector<std::size_t> events = trigger_->find(trigger_samples);
-  EventIterator next_event = events.begin();
+  auto next_event = events.begin();
   const std::uint64_t holdoff = trigger.holdoff_samples(acquisition.sample_rate);
+  const std::size_t pre_trigger = trigger.pre_trigger_samples(acquisition.record_length);
 
   for (std::size_t used = 0; used < block.count;) {
-    Capture& capture =
-        building_ ? *building_
-                  : start(block.first_index + used, acquisition, channels,
-                          trigger.pre_trigger_samples(acquisition.record_length));
+    const SampleIndex index = block.first_index + used;
+    Capture& capture = building_ ? *building_ : start(index, acquisition, channels, pre_trigger);
     used = capture.untriggered
                ? collect(capture, block, used, next_event, events.end(), trigger.mode, holdoff)
                : fill(capture, block, used);

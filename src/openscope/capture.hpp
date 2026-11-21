@@ -90,8 +90,7 @@ class CaptureAssembler {
 
   /// Starts collecting a capture at sample index `first` and returns it.
   Capture& start(SampleIndex first, const AcquisitionSettings& acquisition,
-                 std::span<const ChannelSettings, kChannelCount> channels,
-                 std::size_t pre_trigger);
+                 std::span<const ChannelSettings, kChannelCount> channels, std::size_t pre_trigger);
   /// Completes `capture`, already placed, with `block`'s samples from offset `used` on; returns the
   /// offset it stopped at.
   std::size_t fill(Capture& capture, const SampleBlock& block, std::size_t used);
