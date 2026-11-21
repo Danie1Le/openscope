@@ -21,7 +21,6 @@ inline constexpr auto kUndefinedHeaderReply = R"(-113,"Undefined header")";
 inline constexpr auto kSettingsConflictReply = R"(-221,"Settings conflict")";
 inline constexpr auto kIllegalParameterValueReply = R"(-224,"Illegal parameter value")";
 inline constexpr auto kDataStaleReply = R"(-230,"Data corrupt or stale")";
-inline constexpr auto kClippedReply = R"(-231,"Data questionable;Clipped")";
 inline constexpr auto kInvalidSuffixReply = R"(-131,"Invalid suffix")";
 inline constexpr auto kSuffixOutOfRangeReply = R"(-114,"Header suffix out of range")";
 inline constexpr auto kOutOfRangeReply = R"(-222,"Data out of range")";
