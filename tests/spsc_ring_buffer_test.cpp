@@ -103,9 +103,8 @@ TEST(SpscRingBufferTest, CapacityOfZeroIsRejected) {
 // The spare slot must fit: SIZE_MAX + 1 would wrap to an empty vector that the first push
 // overruns.
 TEST(SpscRingBufferTest, CapacityWithNoRoomForTheSpareSlotIsRejected) {
-  EXPECT_THROW(SpscRingBuffer<int>(std::numeric_limits<std::size_t>::max()),
-               std::invalid_argument);
-  EXPECT_THROW(SpscRingBuffer<int>(std::vector<int>().max_size()), std::invalid_argument);
+  EXPECT_THROW(SpscRingBuffer<int>{std::numeric_limits<std::size_t>::max()}, std::invalid_argument);
+  EXPECT_THROW(SpscRingBuffer<int>{std::vector<int>().max_size()}, std::invalid_argument);
 }
 
 TEST(SpscRingBufferTest, EmptyQueuePopsNothing) {

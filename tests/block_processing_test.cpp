@@ -236,8 +236,8 @@ TEST_F(BlockProcessingTest, BlockFromASingleCompletedAfterRunKeepsTheInstrumentR
   EXPECT_EQ(first_index(instrument), kResetRecordLength);
 }
 
-// The rest of that block, after the Single's capture, is captured as Running: captures follow on
-// with no gap, as when the instrument had been Running all along.
+// The rest of that block, after the Single's capture, is captured too: the next capture starts
+// where the Single's ended, with no gap.
 TEST_F(BlockProcessingTest, RunDuringASinglesBlockCapturesTheRestOfTheBlock) {
   session.send("ACQ:POIN 10;:SINGle");
   const AcquiredBlock armed = acquired(instrument, 25);
@@ -249,6 +249,30 @@ TEST_F(BlockProcessingTest, RunDuringASinglesBlockCapturesTheRestOfTheBlock) {
 
   EXPECT_EQ(first_index(instrument), 40U);
   EXPECT_EQ(instrument.discarded_captures(), 0U);
+}
+
+// The Single still ends at its capture, so the trigger restarts there as after any Single: the
+// holdoff from the Single's trigger event does not hold off the rest of the block. CH1's 1 kHz
+// sine rises through 0 V at samples 1000 and 2000; a 2.5 ms holdoff would skip the second.
+TEST(BlockProcessingTriggerTest, RestOfASinglesBlockStartsWithTheTriggerRestarted) {
+  constexpr auto kNormalTenSamples = "TRIG:MODE NORM;POS 0;HOLD 0.0025;:ACQ:POIN 10";
+  Instrument reference;
+  ScpiSession(reference).send(kNormalTenSamples);
+  reference.advance(1500);
+  const std::size_t first_event = first_index(reference);
+  ScpiSession(reference).send("SINGle");
+  reference.advance(600);
+  const std::size_t second_event = first_index(reference);
+  ASSERT_LT(first_event, second_event);
+  Instrument instrument;
+  ScpiSession session(instrument);
+  session.send(std::string(kNormalTenSamples) + ";:SINGle");
+  const AcquiredBlock armed = acquired(instrument, 2100);
+  session.send("RUN");
+
+  instrument.process(armed);
+
+  EXPECT_EQ(first_index(instrument), second_event);
 }
 
 TEST_F(BlockProcessingTest, ResetDropsTheLatestCaptureAndTheBlocksAcquiredBeforeIt) {
