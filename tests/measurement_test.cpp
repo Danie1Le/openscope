@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <format>
 #include <memory>
+#include <numbers>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -339,13 +340,27 @@ TEST_F(MeasurementTest, ChannelParameterIsRequiredAndChecked) {
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 
-// A record longer than one sample block is measured as a whole.
+// A record longer than one sample block is measured as a whole. It ends part-way through a cycle
+// (10.48576 cycles), so the expected mean and RMS are summed from the sine itself. The tolerance
+// is far above the float samples' rounding but below what summing the 2^20 samples in float
+// instead of double costs (whole cycles would hide that: their rounding errors cancel).
 TEST_F(MeasurementTest, LongestRecordIsMeasuredWhole) {
+  constexpr std::size_t kLongest = 1'048'576;
   session.send("ACQ:POIN 1048576;:SOUR1:FREQ 10");
-  instrument.advance(1'048'576);
+  instrument.advance(kLongest);
 
+  double sum = 0.0;
+  double sum_of_squares = 0.0;
+  for (std::size_t index = 0; index < kLongest; ++index) {
+    const double volts = std::sin(2.0 * std::numbers::pi * 10.0 * static_cast<double>(index) / 1e6);
+    sum += volts;
+    sum_of_squares += volts * volts;
+  }
+  const double mean = sum / static_cast<double>(kLongest);
+  const double rms = std::sqrt(sum_of_squares / static_cast<double>(kLongest));
   EXPECT_EQ(session.send("MEAS:VMAX? CHAN1;VMIN? CHAN1"), "1;-1");
-  EXPECT_THAT(number(session.send("MEAS:VRMS? CHAN1")), DoubleNear(std::sqrt(0.5), 0.01));
+  EXPECT_THAT(number(session.send("MEAS:VAV? CHAN1")), DoubleNear(mean, 1e-6 * rms));
+  EXPECT_THAT(number(session.send("MEAS:VRMS? CHAN1")), DoubleNear(rms, 1e-6 * rms));
 }
 
 /// A measurement that needs a signal, as the timing measurements do; its value is top minus base.
