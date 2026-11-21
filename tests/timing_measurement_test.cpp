@@ -1,6 +1,6 @@
 // Timing measurements: MEAS:FREQ?, PER? and DUTY? from 50% reference-level crossings with
-// hysteresis, averaged over the whole cycles in a capture; Too few cycles when there is less than
-// one.
+// hysteresis, averaged over the whole cycles in a capture; MEAS:RIS? and FALL? from 10% to 90% and
+// back, averaged over the complete edges; Too few cycles when there is less than one of either.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -41,7 +41,7 @@ using testing::DoubleNear;
 using TimingMeasurementTest = MeasurementTest;
 
 /// Every timing measurement of channel 1, short form, in one line.
-constexpr auto kTimingQueries = "MEAS:FREQ? CHAN1;PER? CHAN1;DUTY? CHAN1";
+constexpr auto kTimingQueries = "MEAS:FREQ? CHAN1;PER? CHAN1;DUTY? CHAN1;RIS? CHAN1;FALL? CHAN1";
 
 TEST_F(TimingMeasurementTest, SquareWaveRepliesAreExact) {
   session.send("SOUR1:FUNC SQU;:CHAN2:DISP ON;:SOUR2:FUNC SQU;FREQ 2.5KHZ");
@@ -52,10 +52,36 @@ TEST_F(TimingMeasurementTest, SquareWaveRepliesAreExact) {
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 
+// The Generator's square wave steps from base to top between two samples, so linear interpolation
+// puts its 10% and 90% crossings 0.8 sample periods apart.
+TEST_F(TimingMeasurementTest, SquareWaveEdgesTakeEightTenthsOfASample) {
+  session.send("SOUR1:FUNC SQU");
+  instrument.advance(kResetRecordLength);
+
+  EXPECT_EQ(session.send("MEAS:RIS? CHAN1;FALL? CHAN1"), "8E-07;8E-07");
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+// A ramp rises from base to top over its whole cycle (here its highest sample is one step short of
+// 1 V: 0.998 V) and drops back in one sample; a triangle rises and falls over half a cycle each.
+TEST_F(TimingMeasurementTest, RampAndTriangleEdgesFollowTheirSlopes) {
+  session.send("SOUR1:FUNC RAMP");
+  instrument.advance(kResetRecordLength);
+  EXPECT_THAT(number(session.send("MEAS:RIS? CHAN1")), DoubleNear(0.8 * 0.999e-3, 1e-9));
+  EXPECT_THAT(number(session.send("MEAS:FALL? CHAN1")), DoubleNear(0.8e-6, 1e-12));
+
+  session.send("SOUR1:FUNC TRI");
+  instrument.advance(kResetRecordLength);
+  EXPECT_THAT(number(session.send("MEAS:RIS? CHAN1")), DoubleNear(0.4e-3, 1e-9));
+  EXPECT_THAT(number(session.send("MEAS:FALL? CHAN1")), DoubleNear(0.4e-3, 1e-9));
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
 TEST_F(TimingMeasurementTest, LongFormsAreAccepted) {
   instrument.advance(kResetRecordLength);
 
-  EXPECT_EQ(session.send("MEASure:FREQuency? CHANnel1;PERiod? CHANnel1;DUTYcycle? CHANnel1"),
+  EXPECT_EQ(session.send("MEASure:FREQuency? CHANnel1;PERiod? CHANnel1;DUTYcycle? CHANnel1;"
+                         "RISetime? CHANnel1;FALLtime? CHANnel1"),
             session.send(kTimingQueries));
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
@@ -164,6 +190,19 @@ TEST(NoisySquareTimingTest, DutyCycleIsHalf) {
   }
 }
 
+// NFR-6: rise and fall times within 2 sample periods (2 us) of the Generator's, whose square wave
+// steps in no time at all. A slow edge has no such bound: noise at 1% of the amplitude alone moves
+// its 10% and 90% crossings by several samples.
+TEST(NoisySquareTimingTest, EdgesAreWithinTwoSamplePeriods) {
+  for (std::uint64_t seed = 1; seed <= kNoiseSeeds; ++seed) {
+    for (const std::string_view query : {"MEAS:RIS?", "MEAS:FALL?"}) {
+      const auto [seconds, error] = measure_noisy(seed, kNoisySquare, query);
+      EXPECT_THAT(seconds, DoubleNear(0.0, 2e-6)) << query << " seed " << seed;
+      EXPECT_EQ(error, kNoErrorReply) << query << " seed " << seed;
+    }
+  }
+}
+
 // Spec story 57: spikes past top and base move no reference level and cross none, and glitches
 // that cross the 50% level without reaching the far reference level (a dip to -0.2 V from the
 // high level, a bump to 0.2 V from the low one) are inside the hysteresis, so none of them is an
@@ -180,7 +219,8 @@ TEST_F(TimingMeasurementTest, SpikesAndShallowGlitchesAreNotEdges) {
   session.send("SOUR1:FAUL GLIT,1.2,20");
   instrument.advance(kResetRecordLength - 1950);
 
-  EXPECT_EQ(session.send("MEAS:FREQ? CHAN1;DUTY? CHAN1"), "1000;50");
+  EXPECT_EQ(session.send("MEAS:FREQ? CHAN1;DUTY? CHAN1;RIS? CHAN1;FALL? CHAN1"),
+            "1000;50;8E-07;8E-07");
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 
@@ -188,10 +228,22 @@ TEST_F(TimingMeasurementTest, ClippedSignalReturnsTheValueWithAWarning) {
   session.send("SOUR1:FUNC SQU;:CHAN1:SCAL 0.2");
   instrument.advance(kResetRecordLength);
 
-  EXPECT_EQ(session.send(kTimingQueries), "1000;0.001;50");
-  for (int entry = 0; entry < 3; ++entry) {
+  EXPECT_EQ(session.send(kTimingQueries), "1000;0.001;50;8E-07;8E-07");
+  for (int entry = 0; entry < 5; ++entry) {
     EXPECT_EQ(session.next_error(), kClippedReply) << entry;
   }
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+// A 1 kHz square wave is high for its first 500 samples, so 1000 samples hold one falling edge
+// and no rising one.
+TEST_F(TimingMeasurementTest, NoCompleteEdgeIsTooFewCycles) {
+  session.send("ACQ:POIN 1000;:SOUR1:FUNC SQU");
+  instrument.advance(1000);
+
+  EXPECT_EQ(session.send("MEAS:RIS? CHAN1;FALL? CHAN1"),
+            std::format("{};8E-07", scpi::kNotANumber));
+  EXPECT_EQ(session.next_error(), kTooFewCyclesReply);
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 
@@ -305,6 +357,37 @@ TEST(TooFewCyclesTest, CrossingFromAnUnseenLevelIsNoEdge) {
   std::fill_n(samples.begin(), 50, 0.5F);
 
   EXPECT_EQ(measure("PERiod", samples).status, MeasurementStatus::kTooFewCycles);
+}
+
+// An edge is complete once the signal is past its far reference level: a square wave low for 50
+// samples and high for 50 has no falling edge until one low sample follows.
+TEST(TooFewCyclesTest, EdgeCountsOnceItIsComplete) {
+  std::vector<float> samples = pulse_train(100, 100, 50);
+  EXPECT_THAT(measure("RISetime", samples).value, testing::Optional(DoubleNear(0.8, 1e-9)));
+  EXPECT_EQ(measure("FALLtime", samples).status, MeasurementStatus::kTooFewCycles);
+
+  samples.push_back(0.0F);
+  EXPECT_THAT(measure("FALLtime", samples).value, testing::Optional(DoubleNear(0.8, 1e-9)));
+}
+
+/// Appends `samples` stepping from 0 V to 1 V in `steps` equal steps, then held at 1 V for 50
+/// samples and back at 0 V for 50: an edge of 0.8 `steps` sample periods from 10% to 90%.
+void append_rise(std::vector<float>& samples, std::size_t steps) {
+  for (std::size_t step = 1; step <= steps; ++step) {
+    samples.push_back(static_cast<float>(step) / static_cast<float>(steps));
+  }
+  samples.insert(samples.end(), 50, 1.0F);
+  samples.insert(samples.end(), 50, 0.0F);
+}
+
+// Rise time is the mean over every complete rising edge: here edges of 6.4 and 12.8 samples.
+TEST(RiseTimeTest, IsTheMeanOverTheEdges) {
+  std::vector<float> samples(50, 0.0F);
+  append_rise(samples, 8);
+  append_rise(samples, 16);
+
+  EXPECT_THAT(measure("RISetime", samples).value, testing::Optional(DoubleNear(9.6, 1e-9)));
+  EXPECT_THAT(measure("FALLtime", samples).value, testing::Optional(DoubleNear(0.8, 1e-9)));
 }
 
 // A pulse's high level held by fewer than 1/128 of the samples is set aside like a glitch (top and
