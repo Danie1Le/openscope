@@ -21,7 +21,7 @@ A sample that fell outside its channel's input range and was held at the range l
 _Avoid_: Saturated, overrange
 
 **Generator**:
-The simulated signal producer feeding one channel; Channel n is always fed by Generator n. Its output depends only on its seed, its settings and the sample index.
+The simulated signal producer feeding one channel; Channel n is always fed by Generator n. Its output depends only on its seed, the sample index and the settings applied since the last `*RST`, with the sample indexes they took effect at (changes are phase-continuous).
 _Avoid_: SignalSource, source (alone), signal generator
 
 **Fault**:

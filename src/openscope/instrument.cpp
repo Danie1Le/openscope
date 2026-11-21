@@ -59,12 +59,13 @@ std::array<ChannelSettings, kChannelCount> default_channels() {
   return channels;
 }
 
-/// One Generator per channel, each with its own seed derived from the instrument's, so the four
-/// channels never share noise.
-template <std::size_t... N>
-std::array<Generator, kChannelCount> make_generators(std::uint64_t seed, double sample_rate,
-                                                     std::index_sequence<N...> /*channels*/) {
-  return {Generator{(seed * kChannelCount) + N, sample_rate}...};
+/// One fresh Generator per channel, each with its own seed derived from the instrument's, so the
+/// four channels never share noise.
+std::array<Generator, kChannelCount> make_generators(std::uint64_t seed, double sample_rate) {
+  return [&]<std::size_t... N>(std::index_sequence<N...> /*channels*/) {
+    return std::array<Generator, kChannelCount>{
+        Generator{(seed * kChannelCount) + N, sample_rate}...};
+  }(std::make_index_sequence<kChannelCount>{});
 }
 
 /// The channel, and so the Generator, that a `CHANnel<n>` or `SOURce<n>` header names, counted
@@ -82,8 +83,7 @@ Value value_of(const Arguments& arguments) {
 Instrument::Instrument(std::uint64_t seed)
     : seed_(seed),
       channels_(default_channels()),
-      generators_(make_generators(seed, acquisition_.sample_rate,
-                                  std::make_index_sequence<kChannelCount>{})) {
+      generators_(make_generators(seed, acquisition_.sample_rate)) {
   commands_.add({.header = "*IDN?",
                  .parameters = {},
                  .handler = [](Session&, const Arguments&) -> std::optional<std::string> {
@@ -336,8 +336,7 @@ void Instrument::reset() {
   timebase_scale_ = kDefaultTimebaseScale;
   // Fresh Generators rather than reconfigured ones: phase continuity would carry the phase built
   // up by earlier settings past *RST, so the output would depend on the commands sent before it.
-  generators_ =
-      make_generators(seed_, acquisition_.sample_rate, std::make_index_sequence<kChannelCount>{});
+  generators_ = make_generators(seed_, acquisition_.sample_rate);
   captures_ = {};
 }
 
