@@ -64,6 +64,10 @@ _Avoid_: Real-time mode, free-run
 What releases sample indexes at wall-clock speed in live mode. It decides only when samples are taken; time on the instrument stays the sample index.
 _Avoid_: Timer, scheduler
 
+**Skipped samples**:
+Samples the pacer released that live mode never acquired, because acquisition fell more than one round behind the wall clock. No capture has a gap: the sample clock just runs behind the wall clock. Counted apart from dropped blocks.
+_Avoid_: Lost samples, dropped samples
+
 **Sample rate**:
 Samples per second on the sample clock, shared by all channels.
 

@@ -101,16 +101,17 @@ TEST(PacerTest, CallerTooFarBehindSkipsAndCountsWhatIsOverTheLimit) {
 // A sample rate the caller never sustains: each call is over the limit, and every sample that
 // fell due is either released or counted as skipped, across a rate change too.
 TEST(PacerTest, ReleasedAndSkippedAddUpToEverySampleDue) {
+  constexpr std::uint64_t kMost = 65536;  // Each call is due 100 000 or more.
   Pacer pacer(kStart);
   std::uint64_t released = 0;
   for (int ms = 1; ms <= 100; ++ms) {
-    released += pacer.release(kStart + milliseconds(ms), 1e8, 65536);
+    released += pacer.release(kStart + milliseconds(ms), 1e8, kMost);
   }
   for (int ms = 101; ms <= 200; ++ms) {
-    released += pacer.release(kStart + milliseconds(ms), 1e9, 65536);
+    released += pacer.release(kStart + milliseconds(ms), 1e9, kMost);
   }
 
-  EXPECT_EQ(released, 200U * 65536U);
+  EXPECT_EQ(released, 200 * kMost);
   EXPECT_EQ(released + pacer.skipped(), 10'000'000U + 100'000'000U);
 }
 
