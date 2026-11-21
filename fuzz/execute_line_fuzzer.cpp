@@ -25,7 +25,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     const std::size_t end = std::min(input.find('\n'), input.size());
     const std::string_view line = input.substr(0, end);
     const std::size_t pick = line.empty() ? 0 : static_cast<unsigned char>(line.front()) & 1U;
-    instrument.execute(sessions.at(pick), line);
+    instrument.execute(sessions.at(pick), line, [](const auto&) {});
     instrument.advance(kSamplesPerLine);
     if (end == input.size()) {
       return 0;

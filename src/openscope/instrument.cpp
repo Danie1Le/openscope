@@ -473,13 +473,20 @@ SessionId Instrument::open_session() {
   return id;
 }
 
-std::optional<std::string> Instrument::execute(SessionId session, std::string_view line) {
+void Instrument::close_session(SessionId session) {
+  if (sessions_.erase(session) == 0) {
+    throw std::out_of_range("unknown Session");
+  }
+}
+
+void Instrument::execute(SessionId session, std::string_view line, const ReplyHandler& on_reply) {
   Session& caller = sessions_.at(session);
   if (line.size() > kMaxLineLength) {
     caller.push_error(kInputBufferOverrun);
-    return std::nullopt;
+    on_reply(std::nullopt);
+    return;
   }
-  return commands_.execute(caller, line).reply();
+  on_reply(commands_.execute(caller, line).reply());
 }
 
 void Instrument::advance(std::size_t samples) {

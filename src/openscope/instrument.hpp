@@ -24,6 +24,10 @@ namespace openscope {
 /// Identifies one Session opened on an Instrument.
 enum class SessionId : std::uint32_t {};
 
+/// Receives the reply to one line when the line ends: the replies of its queries joined with `;`,
+/// or nullopt when no query replied.
+using ReplyHandler = std::function<void(std::optional<std::string> reply)>;
+
 /// The single entry point for instrument behaviour. It owns every Session and the instrument-wide
 /// state (generators, channels, acquisition and trigger settings, the sample clock and the latest
 /// capture), and executes SCPI text on a Session's behalf, so transports and tests all reach the
@@ -51,12 +55,16 @@ class Instrument {
   /// Opens a new Session with an empty error queue.
   SessionId open_session();
 
-  /// Executes one line of SCPI text for `session` and returns its reply, if it has one.
-  /// `line` excludes its terminator: the transport strips the trailing `\n` and an optional `\r`
-  /// before calling. A line longer than kMaxLineLength only queues -363. Errors are pushed onto
-  /// that Session's error queue, not returned. Throws std::out_of_range for a SessionId this
-  /// Instrument did not open.
-  std::optional<std::string> execute(SessionId session, std::string_view line);
+  /// Closes `session` when its client disconnects; its SessionId is never valid again. Throws
+  /// std::out_of_range for a SessionId this Instrument did not open or already closed.
+  void close_session(SessionId session);
+
+  /// Executes one line of SCPI text for `session` and passes its reply to `on_reply`, once, when
+  /// the line ends. `line` excludes its terminator: the transport strips the trailing `\n` and an
+  /// optional `\r` before calling. A line longer than kMaxLineLength only queues -363. Errors are
+  /// pushed onto that Session's error queue, not replied. Throws std::out_of_range for a SessionId
+  /// this Instrument did not open or already closed.
+  void execute(SessionId session, std::string_view line, const ReplyHandler& on_reply);
 
   /// Advances the sample clock by `samples` sample indexes with no wall-clock pacing, as tests do
   /// (ADR 0003): every enabled channel is sampled and each capture that fills becomes the latest
