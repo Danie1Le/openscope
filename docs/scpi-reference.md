@@ -102,8 +102,10 @@ The queue holds 20 entries. When it is full, the newest entry is replaced by `-3
 | `-113` | Undefined header | No command matches the header, including a suffix on a mnemonic that takes none |
 | `-114` | Header suffix out of range | The header matches a command except that a mnemonic's suffix is outside its range (`CHAN5`) |
 | `-131` | Invalid suffix | A number's suffix is not the parameter's unit with an optional multiplier |
+| `-221` | Settings conflict | A query reads a channel that is not in the latest capture (it was not enabled when the capture was taken) |
 | `-222` | Data out of range | A number outside the command's range or beyond a double's range |
 | `-224` | Illegal parameter value | A keyword that is not one of the parameter's choices |
+| `-230` | Data corrupt or stale | A query reads capture data before the first capture has completed (or since `*RST`) |
 | `-350` | Queue overflow | The error queue was full |
 | `-363` | Input buffer overrun | The line is longer than 4096 bytes; nothing on it runs |
 
@@ -158,3 +160,34 @@ Over one cycle, with A half the peak-to-peak amplitude and the offset added on t
 A channel's input range is its offset plus or minus four vertical divisions (four times its scale). A sample outside it is clipped: held at the nearer limit. The sample rate and record length alone define a capture. Captures are taken back to back, each spanning one record length of sample indexes, and only the latest capture is kept.
 
 A capture takes its settings from its first sample, so changing a channel setting (`CHAN<n>:DISP`, `SCAL`, `OFFS`) or an acquisition setting (`ACQ:SRAT`, `POIN`) drops the capture in progress, and the next capture starts at the next sample index. The latest capture already completed stays as it was. Generator and timebase changes do not drop the capture in progress.
+
+### Waveform transfer
+
+| Command | Values | New Session | Notes |
+|---|---|---|---|
+| `WAVeform:SOURce` | `CHANnel<n>` | `CHAN1` | The channel `WAV:DATA?` and `WAV:PRE?` read. The query replies `CHAN<n>` |
+| `WAVeform:FORMat` | `ASCii`, `REAL` | `ASC` | How `WAV:DATA?` writes samples |
+| `WAVeform:DATA?` | | | The source channel's samples in the latest capture, in volts |
+| `WAVeform:PREamble?` | | | `<sample rate>,<points>,<scale>,<offset>,<trigger position>,<untriggered>` |
+
+`WAV:SOUR` and `WAV:FORM` belong to each Session (ADR 0002): another client's settings never change what this Session reads. A new Session starts at `CHAN1` and `ASC`, and `*RST` leaves both alone, as it leaves the error queue.
+
+`WAV:DATA?` and `WAV:PRE?` read the latest capture at the moment they run. Before any capture has completed, or after `*RST` until the next one does, they reply nothing and report `-230,"Data corrupt or stale"`. When the source channel is not in the latest capture (it was not enabled when the capture was taken), they reply nothing and report `-221,"Settings conflict"`. Enabling or disabling a channel does not change the latest capture: a channel disabled since can still be read, a channel enabled since cannot until the next capture.
+
+`WAV:DATA?` writes one value per sample index of the capture, oldest first:
+
+- `ASC`: decimal values separated by `,`, each the shortest form that reads back as the same float32 (`0.75,0.75,-0.25,-0.25`).
+- `REAL`: an IEEE 488.2 definite-length block of IEEE 754 float32 values: `#`, one digit n, n digits giving the byte count, then 4 bytes per sample, least significant byte first. 100 points are `#3400` followed by 400 bytes. This is the layout PyVISA's `query_binary_values` reads with its defaults (`datatype='f'`, little-endian). The reply line still ends with `\n` after the block.
+
+`WAV:PRE?` describes the latest capture with the settings it was taken with, which may differ from the current ones:
+
+| Field | Meaning |
+|---|---|
+| sample rate | Samples per second, as `ACQ:SRAT?` writes it |
+| points | The record length: values `WAV:DATA?` returns |
+| scale | The source channel's vertical scale in volts per division |
+| offset | The source channel's offset in volts |
+| trigger position | The sample (counting from 0) where time zero sits; sample k is at (k - trigger position) / sample rate seconds |
+| untriggered | `1` for an untriggered capture, `0` for one placed by a trigger event |
+
+Every capture is untriggered until the trigger is added, so the trigger position is 0 and the flag is 1.

@@ -6,6 +6,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -72,12 +73,26 @@ class Instrument {
   void add_channel_commands();
   void add_acquisition_commands();
   void add_timebase_commands();
+  void add_waveform_commands();
+
+  /// Replies what `reply` writes from the latest capture and the caller's `WAV:SOUR` channel in
+  /// it. Before the first capture completes it reports -230; when the source channel is not in
+  /// the latest capture, -221 (a query never reads a channel that was not captured).
+  scpi::HandlerResult reply_with_source(
+      Session& caller,
+      const std::function<std::string(const Capture&, const CapturedChannel&)>& reply) const;
 
   /// Registers `<header> <parameter>`, which runs `set`, and `<header>?`, which replies what `get`
   /// returns. Both receive the calling Session, for the settings a Session owns (ADR 0002).
   void add_setting(std::string_view header, scpi::ParameterSpec parameter,
                    std::function<void(Session&, const scpi::Arguments&)> set,
                    std::function<std::string(Session&, const scpi::Arguments&)> get);
+  /// add_setting for a choice of `keywords`, which must outlive the Instrument: `set` receives the
+  /// index of the keyword sent, and the query replies the short form of the keyword at the index
+  /// `get` returns.
+  void add_keyword_setting(std::string_view header, std::span<const std::string_view> keywords,
+                           std::function<void(Session&, const scpi::Arguments&, std::size_t)> set,
+                           std::function<std::size_t(Session&, const scpi::Arguments&)> get);
   /// add_setting for one numeric field of the Generator a `SOURce<n>` header names.
   void add_generator_number(std::string_view header, scpi::NumericParameter range,
                             double GeneratorSettings::*field);

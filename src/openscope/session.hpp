@@ -1,12 +1,29 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <utility>
 
 #include "openscope/scpi_error.hpp"
 
 namespace openscope {
+
+/// How `WAVeform:DATA?` writes samples (`WAVeform:FORMat`). The order matches the SCPI keywords.
+enum class WaveformFormat : std::uint8_t {
+  /// Comma-separated decimal values.
+  kAscii,
+  /// An IEEE 488.2 definite-length block of float32.
+  kReal,
+};
+
+/// One Session's waveform-transfer settings. The defaults are a new Session's.
+struct WaveformSettings {
+  /// The channel (1 to 4) `WAV:DATA?` and `WAV:PRE?` read (`WAVeform:SOURce`).
+  std::size_t source = 1;
+  /// How `WAV:DATA?` writes the samples (`WAVeform:FORMat`).
+  WaveformFormat format = WaveformFormat::kAscii;
+};
 
 /// The state one connected client owns (ADR 0002): its error queue and its waveform-transfer
 /// settings (`WAV:SOUR`, `WAV:FORM`). Everything that changes the signal or acquisition is
@@ -40,8 +57,13 @@ class Session {
   /// Empties the error queue, as `*CLS` does for the calling Session only.
   void clear_errors() { errors_.clear(); }
 
+  /// This Session's `WAV:SOUR` and `WAV:FORM`, which no other Session sees and `*RST` leaves
+  /// alone.
+  WaveformSettings& waveform() { return waveform_; }
+
  private:
   std::deque<ScpiError> errors_;
+  WaveformSettings waveform_;
 };
 
 }  // namespace openscope

@@ -7,7 +7,10 @@
 #include <cstdint>
 #include <format>
 #include <functional>
+#include <memory>
 #include <optional>
+#include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -31,6 +34,23 @@ using scpi::NumericParameter;
 constexpr std::array<std::string_view, 6> kFunctionKeywords{"SINusoid", "SQUare", "TRIangle",
                                                             "RAMP",     "DC",     "NOISe"};
 static_assert(kFunctionKeywords.size() == static_cast<std::size_t>(GeneratorFunction::kNoise) + 1);
+
+/// The `WAVeform:FORMat` keywords, in WaveformFormat order.
+constexpr std::array<std::string_view, 2> kFormatKeywords{"ASCii", "REAL"};
+static_assert(kFormatKeywords.size() == static_cast<std::size_t>(WaveformFormat::kReal) + 1);
+
+/// Samples as comma-separated values, each in the shortest form that reads back as the same float.
+std::string ascii_values(std::span<const float> samples) {
+  std::string text;
+  text.reserve(samples.size() * 16);  // A typical value plus its comma.
+  for (const float sample : samples) {
+    if (!text.empty()) {
+      text += ',';
+    }
+    text += scpi::format_real(sample);
+  }
+  return text;
+}
 
 /// The `*RST` channel settings: CH1 enabled, the others disabled.
 std::array<ChannelSettings, kChannelCount> default_channels() {
@@ -92,23 +112,19 @@ Instrument::Instrument(std::uint64_t seed)
   add_channel_commands();
   add_acquisition_commands();
   add_timebase_commands();
+  add_waveform_commands();
 }
 
 void Instrument::add_generator_commands() {
-  add_setting(
-      "SOURce<1-4>:FUNCtion",
-      scpi::KeywordParameter{.choices = {kFunctionKeywords.begin(), kFunctionKeywords.end()}},
-      [this](Session&, const Arguments& arguments) {
-        change_generator(arguments, [&](GeneratorSettings& settings) {
-          settings.function =
-              static_cast<GeneratorFunction>(value_of<scpi::Choice>(arguments).index);
+  add_keyword_setting(
+      "SOURce<1-4>:FUNCtion", kFunctionKeywords,
+      [this](Session&, const Arguments& arguments, std::size_t keyword) {
+        change_generator(arguments, [keyword](GeneratorSettings& settings) {
+          settings.function = static_cast<GeneratorFunction>(keyword);
         });
       },
       [this](Session&, const Arguments& arguments) {
-        const GeneratorFunction function =
-            generators_.at(channel_of(arguments)).settings().function;
-        return std::string(
-            scpi::short_form(kFunctionKeywords.at(static_cast<std::size_t>(function))));
+        return static_cast<std::size_t>(generators_.at(channel_of(arguments)).settings().function);
       });
   add_generator_number("SOURce<1-4>:FREQuency", {.min = 1e-3, .max = 1e9, .unit = "HZ"},
                        &GeneratorSettings::frequency);
@@ -171,6 +187,63 @@ void Instrument::add_timebase_commands() {
       [this](Session&, const Arguments&) { return scpi::format_real(timebase_scale_); });
 }
 
+void Instrument::add_waveform_commands() {
+  // ADR 0002: the source and format belong to the calling Session.
+  add_setting(
+      "WAVeform:SOURce", scpi::KeywordParameter{.choices = {"CHANnel<1-4>"}},
+      [](Session& caller, const Arguments& arguments) {
+        caller.waveform().source = value_of<scpi::Choice>(arguments).suffix;
+      },
+      [](Session& caller, const Arguments&) {
+        return std::format("CHAN{}", caller.waveform().source);
+      });
+  add_keyword_setting(
+      "WAVeform:FORMat", kFormatKeywords,
+      [](Session& caller, const Arguments&, std::size_t keyword) {
+        caller.waveform().format = static_cast<WaveformFormat>(keyword);
+      },
+      [](Session& caller, const Arguments&) {
+        return static_cast<std::size_t>(caller.waveform().format);
+      });
+  commands_.add({.header = "WAVeform:DATA?",
+                 .parameters = {},
+                 .handler = [this](Session& caller, const Arguments&) {
+                   return reply_with_source(
+                       caller, [&caller](const Capture&, const CapturedChannel& channel) {
+                         return caller.waveform().format == WaveformFormat::kReal
+                                    ? scpi::float32_block(channel.samples)
+                                    : ascii_values(channel.samples);
+                       });
+                 }});
+  commands_.add({.header = "WAVeform:PREamble?",
+                 .parameters = {},
+                 .handler = [this](Session& caller, const Arguments&) {
+                   return reply_with_source(
+                       caller, [](const Capture& capture, const CapturedChannel& channel) {
+                         return std::format(
+                             "{},{},{},{},{},{}", scpi::format_real(capture.sample_rate),
+                             capture.record_length, scpi::format_real(channel.settings.scale),
+                             scpi::format_real(channel.settings.offset), capture.trigger_position,
+                             capture.untriggered ? 1 : 0);
+                       });
+                 }});
+}
+
+scpi::HandlerResult Instrument::reply_with_source(
+    Session& caller,
+    const std::function<std::string(const Capture&, const CapturedChannel&)>& reply) const {
+  const std::shared_ptr<const Capture> capture = captures_.latest();
+  if (capture == nullptr) {
+    return kDataCorruptOrStale;
+  }
+  const std::optional<CapturedChannel>& channel =
+      capture->channels.at(caller.waveform().source - 1);
+  if (!channel) {
+    return kSettingsConflict;
+  }
+  return std::optional<std::string>(reply(*capture, *channel));
+}
+
 void Instrument::add_setting(std::string_view header, scpi::ParameterSpec parameter,
                              std::function<void(Session&, const Arguments&)> set,
                              std::function<std::string(Session&, const Arguments&)> get) {
@@ -187,6 +260,24 @@ void Instrument::add_setting(std::string_view header, scpi::ParameterSpec parame
        .parameters = {},
        .handler = [get = std::move(get)](Session& caller, const Arguments& arguments)
            -> scpi::HandlerResult { return std::optional<std::string>(get(caller, arguments)); }});
+}
+
+void Instrument::add_keyword_setting(
+    std::string_view header, std::span<const std::string_view> keywords,
+    std::function<void(Session&, const Arguments&, std::size_t)> set,
+    std::function<std::size_t(Session&, const Arguments&)> get) {
+  add_setting(
+      header, scpi::KeywordParameter{.choices = {keywords.begin(), keywords.end()}},
+      [set = std::move(set)](Session& caller, const Arguments& arguments) {
+        set(caller, arguments, value_of<scpi::Choice>(arguments).index);
+      },
+      [keywords, get = std::move(get)](Session& caller, const Arguments& arguments) {
+        const std::size_t index = get(caller, arguments);
+        if (index >= keywords.size()) {
+          throw std::out_of_range("setting has no keyword");  // An enum value without a keyword.
+        }
+        return std::string(scpi::short_form(keywords[index]));
+      });
 }
 
 void Instrument::add_generator_number(std::string_view header, NumericParameter range,
