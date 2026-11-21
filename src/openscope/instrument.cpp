@@ -479,7 +479,7 @@ std::optional<std::string> Instrument::execute(SessionId session, std::string_vi
     caller.push_error(kInputBufferOverrun);
     return std::nullopt;
   }
-  return commands_.execute(caller, line).reply();
+  return commands_.execute(caller, line).take_reply();
 }
 
 void Instrument::advance(std::size_t samples) {

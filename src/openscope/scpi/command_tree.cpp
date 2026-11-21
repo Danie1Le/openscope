@@ -465,7 +465,8 @@ void CommandTree::resume(Session& session, Execution& execution) const {
     }
     add_reply(std::move(std::get<std::optional<std::string>>(result)));
   }
-  execution.next_ = commands.size();  // An error discards the rest of the line.
+  // The line has ended; after an error this discards the rest of it.
+  execution.next_ = commands.size();
 }
 
 }  // namespace openscope::scpi

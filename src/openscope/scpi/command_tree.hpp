@@ -126,6 +126,14 @@ using ParameterRule = std::variant<NumericParameter, BooleanParameter, KeywordRu
 /// where it stopped, so `CommandTree::resume` can carry it on.
 class Execution {
  public:
+  /// Move-only: a copy of a held line could be resumed twice and run its rest twice.
+  Execution() = default;
+  Execution(const Execution&) = delete;
+  Execution& operator=(const Execution&) = delete;
+  Execution(Execution&&) = default;
+  Execution& operator=(Execution&&) = default;
+  ~Execution() = default;
+
   /// True while a handler holds the line (it returned Hold); false once the line has ended.
   [[nodiscard]] bool held() const { return hold_.has_value(); }
 
