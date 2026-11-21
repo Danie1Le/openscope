@@ -47,7 +47,8 @@ inline const ScpiError kDataOutOfRange{.code = -222, .message = "Data out of ran
 /// A keyword the parameter does not accept.
 inline const ScpiError kIllegalParameterValue{.code = -224, .message = "Illegal parameter value"};
 
-/// A query for capture data before the first capture has completed.
+/// A query for capture data when there is no latest capture: before the first completes, or after
+/// *RST until the next does.
 inline const ScpiError kDataCorruptOrStale{.code = -230, .message = "Data corrupt or stale"};
 
 /// Recorded in place of the newest error when a Session's error queue is full.
