@@ -44,7 +44,15 @@ constexpr auto kClippedReply = R"(-231,"Data questionable;Clipped")";
 constexpr std::array<std::string_view, 3> kAmplitudeQueries{"MEAS:VPP?", "MEAS:VMIN?",
                                                             "MEAS:VMAX?"};
 
-using MeasurementTest = test::InstrumentFixture;
+/// Trigger settings under which Auto takes untriggered captures back to back from sample 0: time
+/// zero on the first sample and a level no signal reaches. Measurements read the whole capture, so
+/// these tests need each capture to complete one record length after the last.
+constexpr auto kUntriggeredCaptures = "TRIG:POS 0;LEV 100";
+
+class MeasurementTest : public test::InstrumentFixture {
+ protected:
+  void SetUp() override { session.send(kUntriggeredCaptures); }
+};
 
 TEST_F(MeasurementTest, CleanSineHasTheGeneratorsPeaks) {
   instrument.advance(kResetRecordLength);
@@ -239,6 +247,7 @@ TEST_F(MeasurementTest, ResultsFollowTheLatestCapture) {
   EXPECT_EQ(session.send("MEAS:VPP? CHAN1"), "1");
 
   session.send("*RST");
+  session.send(kUntriggeredCaptures);
   instrument.advance(kResetRecordLength);
   EXPECT_EQ(session.send("MEAS:VPP? CHAN1"), "2");
 }
