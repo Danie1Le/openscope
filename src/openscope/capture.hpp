@@ -10,6 +10,7 @@
 #include "openscope/channel.hpp"
 #include "openscope/sample_block.hpp"
 #include "openscope/sample_clock.hpp"
+#include "openscope/trigger.hpp"
 
 namespace openscope {
 
@@ -42,8 +43,7 @@ struct Capture {
   /// Sample indexes in the capture: the length of every channel's samples.
   std::size_t record_length = 0;
   /// The sample of the capture where time zero sits: the trigger event, or for an untriggered
-  /// capture the pre-trigger position. Until the trigger and its pre-trigger setting exist (#6)
-  /// every capture is untriggered with time zero at its first sample.
+  /// capture the pre-trigger position. Either way it is the trigger's pre-trigger sample count.
   std::size_t trigger_position = 0;
   /// True when no trigger event placed time zero (an untriggered capture).
   bool untriggered = true;
@@ -52,28 +52,54 @@ struct Capture {
   std::array<std::optional<CapturedChannel>, kChannelCount> channels;
 };
 
-/// Assembles sample blocks into untriggered captures that follow each other back to back, and
-/// keeps the latest capture.
+/// Assembles sample blocks into captures placed by the edge trigger, and keeps the latest
+/// capture. A capture starts collecting samples as soon as the one before completes. A trigger
+/// event places its time zero once it holds the pre-trigger samples and the holdoff since the
+/// last capture's trigger event has passed. In Auto trigger mode, one record length of samples
+/// after the pre-trigger samples have filled without such an event makes the latest record length
+/// of samples an untriggered capture.
 class CaptureAssembler {
  public:
-  /// Appends `block`, taken under `acquisition` and `channels`. A capture takes its settings from
-  /// the block that starts it, so the caller discards the capture in progress whenever it changes
-  /// a setting. Each capture that fills becomes the latest capture; a block may fill several.
-  /// Throws std::logic_error when `acquisition` has a record length of zero, or when `block` lacks
-  /// samples for a channel of the capture in progress, which means a channel was enabled or
-  /// disabled without a discard.
+  /// Appends `block`, taken under `acquisition`, `channels` and `trigger`. A capture takes its
+  /// settings from the block that starts it, and the trigger keeps its state from block to block,
+  /// so the caller discards the capture in progress whenever it changes a setting. Each capture
+  /// that completes becomes the latest capture; a block may complete several. Throws
+  /// std::logic_error when `acquisition` has a record length of zero, when `block` lacks the
+  /// trigger channel's samples, or when it lacks samples for a channel of the capture in
+  /// progress, which means a channel was enabled or disabled without a discard.
   void push(const SampleBlock& block, const AcquisitionSettings& acquisition,
-            std::span<const ChannelSettings, kChannelCount> channels);
+            std::span<const ChannelSettings, kChannelCount> channels,
+            const TriggerSettings& trigger);
 
-  /// Drops the capture in progress; the next block starts a new one. The latest capture stays.
-  void discard() { building_.reset(); }
+  /// Drops the capture in progress and restarts the trigger, unarmed and with no holdoff
+  /// running; the next block starts a new capture. The latest capture stays.
+  void discard() {
+    building_.reset();
+    trigger_.reset();
+    holdoff_end_ = 0;
+  }
 
   /// The most recently completed capture, or null before the first one completes. It never
   /// changes once published, so readers may keep it as long as they like.
   [[nodiscard]] std::shared_ptr<const Capture> latest() const { return latest_; }
 
  private:
-  /// The capture being filled, and how many of its sample indexes are filled so far.
+  /// Starts collecting a capture at sample index `first`.
+  void start(SampleIndex first, const AcquisitionSettings& acquisition,
+             std::span<const ChannelSettings, kChannelCount> channels, std::size_t pre_trigger);
+  /// Appends `block`'s samples at offsets [from, to) to every channel of the capture in progress.
+  void append(const SampleBlock& block, std::size_t from, std::size_t to);
+  /// Drops the `count` oldest samples of the capture in progress.
+  void drop_oldest(std::size_t count);
+  /// Makes the capture in progress the latest capture.
+  void publish();
+
+  /// The trigger since the last discard (created by the first block after it), and the first
+  /// sample index its holdoff lets place a capture.
+  std::optional<EdgeTrigger> trigger_;
+  SampleIndex holdoff_end_ = 0;
+  /// The capture being collected, and how many samples it holds. It stays untriggered until a
+  /// trigger event places it.
   std::optional<Capture> building_;
   std::size_t filled_ = 0;
   std::shared_ptr<const Capture> latest_;

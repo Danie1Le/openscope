@@ -27,6 +27,10 @@ enum class TriggerMode : std::uint8_t {
 
 /// The edge trigger's settings. The defaults are the `*RST` values.
 struct TriggerSettings {
+  /// The hysteresis band, in vertical divisions of the trigger channel, that the signal must pass
+  /// on the far side of the level before the next trigger event (spec #1: fixed, not a setting).
+  static constexpr double kHysteresisDivisions = 0.1;
+
   /// The trigger channel (1 to 4), which need not be enabled (`TRIGger:SOURce`).
   std::size_t source = 1;
   /// The trigger level in volts (`TRIGger:LEVel`).
@@ -41,6 +45,12 @@ struct TriggerSettings {
   /// How far into the capture time zero sits, as a percentage of the record
   /// (`TRIGger:POSition`): the share of the capture taken before the trigger event.
   double position = 50.0;
+
+  /// The sample of a `record_length` capture (at least 1) where time zero sits: `position`
+  /// percent of the way from the first sample to the last, rounded to the nearest sample.
+  [[nodiscard]] std::size_t pre_trigger_samples(std::size_t record_length) const;
+  /// `holdoff` as a count of samples at `sample_rate`, rounded to the nearest sample.
+  [[nodiscard]] std::uint64_t holdoff_samples(double sample_rate) const;
 };
 
 /// Finds trigger events on the trigger channel: sample indexes where the signal reaches the level

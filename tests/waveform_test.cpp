@@ -203,7 +203,7 @@ TEST_F(WaveformTest, AsciiDataOfAOnePointCaptureHasNoComma) {
 
 TEST_F(WaveformTest, AsciiDataReadsBackAsExactlyTheCapturedSamples) {
   session.send("SOUR1:NOIS 0.1");
-  instrument.advance(kResetRecordLength);
+  instrument.advance(2 * kResetRecordLength);  // Noise moves the trigger event off index 5000.
 
   const std::optional<std::string> reply = session.send("WAV:DATA?");
 
@@ -213,7 +213,8 @@ TEST_F(WaveformTest, AsciiDataReadsBackAsExactlyTheCapturedSamples) {
 
 TEST_F(WaveformTest, RealDataIsAFloat32BlockOfTheCapturedSamples) {
   session.send("ACQ:POIN 100;:SOUR1:NOIS 0.1;:WAV:FORM REAL");
-  instrument.advance(100);
+  // Within 200 samples a capture has completed: triggered by the noise, or Auto's at 150.
+  instrument.advance(200);
 
   const std::string reply = session.send("WAV:DATA?").value_or("");
 
@@ -222,7 +223,9 @@ TEST_F(WaveformTest, RealDataIsAFloat32BlockOfTheCapturedSamples) {
 }
 
 TEST_F(WaveformTest, RealDataOfTheLongestRecordFitsOneBlock) {
-  session.send("ACQ:POIN 1048576;:WAV:FORM REAL");
+  // The ramp never reaches the 2 V level, and time zero on the first sample means no pre-trigger
+  // samples to wait for: Auto takes the first record as it fills.
+  session.send("ACQ:POIN 1048576;:WAV:FORM REAL;:SOUR1:FUNC RAMP;FREQ 1;:TRIG:LEV 2;POS 0");
   instrument.advance(1'048'576);
 
   const std::string reply = session.send("WAV:DATA?").value_or("");
@@ -231,8 +234,10 @@ TEST_F(WaveformTest, RealDataOfTheLongestRecordFitsOneBlock) {
   EXPECT_EQ(decode_float32_block(reply), captured(instrument, 1).samples);
 }
 
+// Time zero on the first sample: Auto takes the first 2 samples, and the ramp's trigger event at
+// index 2 places the next capture.
 TEST_F(WaveformTest, DataReadsTheLatestCaptureWhenTheQueryRuns) {
-  session.send("ACQ:POIN 2;:SOUR1:FUNC RAMP;FREQ 250KHZ");
+  session.send("ACQ:POIN 2;:SOUR1:FUNC RAMP;FREQ 250KHZ;:TRIG:POS 0");
   instrument.advance(2);
   EXPECT_EQ(session.send("WAV:DATA?"), "-1,-0.5");
 
@@ -243,23 +248,23 @@ TEST_F(WaveformTest, DataReadsTheLatestCaptureWhenTheQueryRuns) {
 TEST_F(WaveformTest, PreambleDescribesTheLatestCapture) {
   instrument.advance(kResetRecordLength);
 
-  EXPECT_EQ(session.send("WAV:PRE?"), "1E+06,10000,1,0,0,1");
+  EXPECT_EQ(session.send("WAV:PRE?"), "1E+06,10000,1,0,5000,0");
 }
 
 TEST_F(WaveformTest, PreambleReportsTheSettingsTheCaptureWasTakenWith) {
   session.send("CHAN3:DISP ON;SCAL 0.5;OFFS -1.25;:ACQ:SRAT 2E6;POIN 100;:WAV:SOUR CHAN3");
-  instrument.advance(100);
+  instrument.advance(150);  // No trigger event: Auto's capture after 50 pre-trigger samples.
 
   session.send("CHAN3:SCAL 2;OFFS 0;:ACQ:SRAT 5;POIN 7");
 
-  EXPECT_EQ(session.send("WAVeform:PREamble?"), "2E+06,100,0.5,-1.25,0,1");
+  EXPECT_EQ(session.send("WAVeform:PREamble?"), "2E+06,100,0.5,-1.25,50,1");
 }
 
 TEST_F(WaveformTest, PreambleAndDataShareOneLine) {
   session.send("ACQ:POIN 2;:SOUR1:FUNC DC;OFFS 1");
-  instrument.advance(2);
+  instrument.advance(3);  // One pre-trigger sample, then Auto's record.
 
-  EXPECT_EQ(session.send("WAV:PRE?;DATA?"), "1E+06,2,1,0,0,1;1,1");
+  EXPECT_EQ(session.send("WAV:PRE?;DATA?"), "1E+06,2,1,0,1,1;1,1");
 }
 
 TEST_F(WaveformTest, DataAndPreambleTakeNoParameters) {
