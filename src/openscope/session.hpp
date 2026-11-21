@@ -5,6 +5,7 @@
 #include <deque>
 #include <utility>
 
+#include "openscope/fft_window.hpp"
 #include "openscope/scpi_error.hpp"
 
 namespace openscope {
@@ -25,9 +26,17 @@ struct WaveformSettings {
   WaveformFormat format = WaveformFormat::kAscii;
 };
 
-/// The state one connected client owns (ADR 0002): its error queue and its waveform-transfer
-/// settings (`WAV:SOUR`, `WAV:FORM`). Everything that changes the signal or acquisition is
-/// instrument-wide and lives in the Instrument.
+/// One Session's FFT settings. The defaults are a new Session's.
+struct FftSettings {
+  /// The channel (1 to 4) `FFT:DATA?` and `FFT:SPAC?` read (`FFT:SOURce`).
+  std::size_t source = 1;
+  /// The window applied before the transform (`FFT:WINDow`).
+  FftWindow window = FftWindow::kHann;
+};
+
+/// The state one connected client owns (ADR 0002): its error queue, its waveform-transfer
+/// settings (`WAV:SOUR`, `WAV:FORM`) and its FFT settings (`FFT:SOUR`, `FFT:WIND`). Everything
+/// that changes the signal or acquisition is instrument-wide and lives in the Instrument.
 class Session {
  public:
   /// The most errors the queue holds, the -350 entry included.
@@ -61,9 +70,14 @@ class Session {
   /// alone.
   WaveformSettings& waveform() { return waveform_; }
 
+  /// This Session's `FFT:SOUR` and `FFT:WIND`, which no other Session sees and `*RST` leaves
+  /// alone.
+  FftSettings& fft() { return fft_; }
+
  private:
   std::deque<ScpiError> errors_;
   WaveformSettings waveform_;
+  FftSettings fft_;
 };
 
 }  // namespace openscope
