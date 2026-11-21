@@ -89,8 +89,8 @@ TEST(MeasureAllTest, ResultsCarryTheirStatus) {
 TEST(MeasureAllTest, TimingMeasurementsUseTheCapturesSampleRate) {
   Capture capture;
   capture.sample_rate = 1000.0;
-  capture.channels.at(0).emplace(CapturedChannel{.settings = {.enabled = true},
-                                                 .samples = test::pulse_train(100, 10, 5)});
+  capture.channels.at(0).emplace(
+      CapturedChannel{.settings = {.enabled = true}, .samples = test::pulse_train(100, 10, 5)});
 
   const CaptureResults results = measure_all(capture);
 
