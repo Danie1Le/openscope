@@ -95,6 +95,12 @@ class Instrument {
   void add_keyword_setting(std::string_view header, std::span<const std::string_view> keywords,
                            std::function<void(Session&, const scpi::Arguments&, std::size_t)> set,
                            std::function<std::size_t(Session&, const scpi::Arguments&)> get);
+  /// add_setting for the `double` `field` of a settings struct: the setter runs `change(arguments,
+  /// fn)`, which applies `fn` to the settings the command names, and the query replies the field of
+  /// `lookup(arguments)`.
+  template <typename Settings, typename Change, typename Lookup>
+  void add_number_setting(std::string_view header, scpi::NumericParameter range,
+                          double Settings::*field, Change change, Lookup lookup);
   /// add_setting for one numeric field of the Generator a `SOURce<n>` header names.
   void add_generator_number(std::string_view header, scpi::NumericParameter range,
                             double GeneratorSettings::*field);

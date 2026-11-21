@@ -304,31 +304,42 @@ void Instrument::add_keyword_setting(
       });
 }
 
-void Instrument::add_generator_number(std::string_view header, NumericParameter range,
-                                      double GeneratorSettings::*field) {
+template <typename Settings, typename Change, typename Lookup>
+void Instrument::add_number_setting(std::string_view header, NumericParameter range,
+                                    double Settings::*field, Change change, Lookup lookup) {
   add_setting(
       header, std::move(range),
-      [this, field](Session&, const Arguments& arguments) {
-        change_generator(arguments, [&](GeneratorSettings& settings) {
+      [field, change = std::move(change)](Session&, const Arguments& arguments) {
+        change(arguments, [&](Settings& settings) {
           settings.*field = value_of<double>(arguments);
         });
       },
-      [this, field](Session&, const Arguments& arguments) {
-        return scpi::format_real(generators_.at(channel_of(arguments)).settings().*field);
+      [field, lookup = std::move(lookup)](Session&, const Arguments& arguments) {
+        return scpi::format_real(lookup(arguments).*field);
+      });
+}
+
+void Instrument::add_generator_number(std::string_view header, NumericParameter range,
+                                      double GeneratorSettings::*field) {
+  add_number_setting(
+      header, std::move(range), field,
+      [this](const Arguments& arguments, const std::function<void(GeneratorSettings&)>& change) {
+        change_generator(arguments, change);
+      },
+      [this](const Arguments& arguments) -> const GeneratorSettings& {
+        return generators_.at(channel_of(arguments)).settings();
       });
 }
 
 void Instrument::add_channel_number(std::string_view header, NumericParameter range,
                                     double ChannelSettings::*field) {
-  add_setting(
-      header, std::move(range),
-      [this, field](Session&, const Arguments& arguments) {
-        change_channel(arguments, [&](ChannelSettings& settings) {
-          settings.*field = value_of<double>(arguments);
-        });
+  add_number_setting(
+      header, std::move(range), field,
+      [this](const Arguments& arguments, const std::function<void(ChannelSettings&)>& change) {
+        change_channel(arguments, change);
       },
-      [this, field](Session&, const Arguments& arguments) {
-        return scpi::format_real(channels_.at(channel_of(arguments)).*field);
+      [this](const Arguments& arguments) -> const ChannelSettings& {
+        return channels_.at(channel_of(arguments));
       });
 }
 
@@ -347,13 +358,12 @@ void Instrument::add_channel_choice(std::string_view header,
 
 void Instrument::add_trigger_number(std::string_view header, NumericParameter range,
                                     double TriggerSettings::*field) {
-  add_setting(
-      header, std::move(range),
-      [this, field](Session&, const Arguments& arguments) {
-        change_trigger(
-            [&](TriggerSettings& settings) { settings.*field = value_of<double>(arguments); });
+  add_number_setting(
+      header, std::move(range), field,
+      [this](const Arguments&, const std::function<void(TriggerSettings&)>& change) {
+        change_trigger(change);
       },
-      [this, field](Session&, const Arguments&) { return scpi::format_real(trigger_.*field); });
+      [this](const Arguments&) -> const TriggerSettings& { return trigger_; });
 }
 
 template <typename Keyword>

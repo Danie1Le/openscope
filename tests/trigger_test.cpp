@@ -72,6 +72,27 @@ TEST(EdgeTriggerTest, ReachingTheBandEdgeArmsIt) {
   EXPECT_THAT(find(trigger, {0.5F, 1.0F}), ElementsAre(1));
 }
 
+// Samples are float, so a level such as 0.7 V is compared as the float nearest to it: a sample at
+// the level fires and a sample at the band edge arms, whichever way the literal rounds.
+TEST(EdgeTriggerTest, LevelAndBandEdgeAreInclusiveForLevelsInexactInBinary) {
+  struct Case {
+    double level;
+    float below_band;  // The sample at level - kHysteresis.
+    float above_band;  // The sample at level + kHysteresis.
+  };
+
+  for (const auto& [level, below_band, above_band] :
+       {Case{0.7, 0.6F, 0.8F}, Case{0.3, 0.2F, 0.4F}}) {
+    SCOPED_TRACE(level);
+    const auto at_level = static_cast<float>(level);
+    EdgeTrigger rising{level, TriggerSlope::kPositive, kHysteresis};
+    EdgeTrigger falling{level, TriggerSlope::kNegative, kHysteresis};
+
+    EXPECT_THAT(find(rising, {below_band, at_level}), ElementsAre(1));
+    EXPECT_THAT(find(falling, {above_band, at_level}), ElementsAre(1));
+  }
+}
+
 // Noise around the level re-crosses it many times; only a swing past the band re-arms.
 TEST(EdgeTriggerTest, CrossingsInsideTheBandAfterAnEventAreIgnored) {
   EdgeTrigger trigger{kLevel, TriggerSlope::kPositive, kHysteresis};
