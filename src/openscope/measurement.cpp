@@ -20,17 +20,25 @@ namespace {
 /// Bins in each histogram that top and base come from.
 constexpr std::size_t kHistogramBins = 256;
 
-/// A level is settled when its histogram bin holds at least this many times the average bin's
-/// share of the capture: 1/128 of all the samples. A level the signal dwells at (a square wave's
-/// high or low, a sine's peak) stands far above the average; a signal that sweeps evenly through
-/// its range (a triangle, a ramp) fills every bin about equally and has no such level. Samples cut
-/// off from the rest that add up to less than a settled level are outliers: a spike or a short
-/// glitch.
+/// A level is settled when it holds at least this many times the average bin's share of the
+/// capture (1/128 of all the samples) and this many times what as many bins of its half hold on
+/// average. A level the signal dwells at (a square wave's high or low, a sine's peak) stands far
+/// above the average; a signal that sweeps evenly through its range (a triangle, a ramp) fills
+/// every bin about equally and has no such level. Samples cut off from the rest that add up to
+/// less than a settled level are outliers: a spike or a short glitch.
 constexpr double kSettledLevelRatio = 2.0;
 
 /// The fewest samples a settled level holds, so that in a short capture, where one sample is
 /// already 1/128 of it, a single spike is still an outlier.
 constexpr double kFewestSettledSamples = 2.0;
+
+/// The fewest samples a level holds before it can stand out from the rest: in a capture of a few
+/// hundred samples a handful landing close together is chance, not a level.
+constexpr double kFewestLevelSamples = 24.0;
+
+/// How many bins either side of a level's fullest bin still count towards the level: noise of 1%
+/// of the signal's span spreads a level over about this many bins of 256.
+constexpr std::size_t kLevelBins = 4;
 
 /// The counts and sums of samples in kHistogramBins equal bins from `low` volts up.
 struct Histogram {
@@ -84,15 +92,28 @@ std::size_t outlier_bins(const std::ranges::input_range auto& counts, double set
   return outliers;
 }
 
-/// The mean of the samples in the fullest of `counts`' bins, whose sample sums are `sums`, when it
-/// holds at least `settled_samples` samples; otherwise `fallback`. Ties go to the first bin.
+/// The mean of the samples in the fullest of `counts`' bins, whose sample sums are `sums`, when
+/// that bin is a settled level; otherwise `fallback`. Ties go to the first bin. Noise spreads a
+/// level over a few bins, so the level is judged by the bins within kLevelBins of the fullest one:
+/// they must hold at least `settled_samples` samples (and kFewestLevelSamples), and
+/// kSettledLevelRatio times what as many bins hold on average. Without the last test, a signal that
+/// sweeps evenly but whose samples land in every second or third bin (a short triangle) would have
+/// a level wherever its bins happen to be fuller.
 double settled_level(std::span<const std::size_t> counts, std::span<const double> sums,
                      double settled_samples, double fallback) {
-  const auto fullest = std::ranges::max_element(counts);
-  if (static_cast<double>(*fullest) < settled_samples) {
+  const auto fullest = static_cast<std::size_t>(std::ranges::max_element(counts) - counts.begin());
+  const std::size_t first = fullest - std::min(fullest, kLevelBins);
+  const std::size_t last = std::min(fullest + kLevelBins, counts.size() - 1);
+  const std::span<const std::size_t> around = counts.subspan(first, last - first + 1);
+  const auto level = static_cast<double>(std::reduce(around.begin(), around.end()));
+  const auto all = static_cast<double>(std::reduce(counts.begin(), counts.end()));
+  const double as_many_on_average =
+      all * static_cast<double>(around.size()) / static_cast<double>(counts.size());
+  if (level < std::max(settled_samples, kFewestLevelSamples) ||
+      level < kSettledLevelRatio * as_many_on_average) {
     return fallback;
   }
-  return sums[static_cast<std::size_t>(fullest - counts.begin())] / static_cast<double>(*fullest);
+  return sums[fullest] / static_cast<double>(counts[fullest]);
 }
 
 }  // namespace
