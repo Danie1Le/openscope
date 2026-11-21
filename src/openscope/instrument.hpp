@@ -111,10 +111,11 @@ class Instrument {
   /// command has discarded the capture in progress since the block was acquired, so it never
   /// holds settings older than a command that has already returned. A Single's capture stops the
   /// instrument and ends the lines held on it, on this thread; when `RUN` has ended the Single
-  /// since the block was acquired, the rest of the block is captured as Running, with the trigger
-  /// restarted at the Single's capture as after any Single. Blocks must come
-  /// in the order they were acquired; a block that never arrives is a dropped block, and the
-  /// capture that would span it is discarded and counted.
+  /// since the block was acquired, the rest of the block, and every later block acquired while
+  /// the Single was armed, is captured as Running, with the trigger restarted at the Single's
+  /// capture as after any Single. Blocks must come in the order they were acquired; a block that
+  /// never arrives is a dropped block, and the capture that would span it is discarded and
+  /// counted.
   void process(const AcquiredBlock& block);
 
   /// Samples per second on the sample clock (`ACQuire:SRATe`), which live mode paces against.
@@ -287,6 +288,9 @@ class Instrument {
   /// next.
   std::uint64_t assembled_generation_ = 0;
   std::uint64_t expected_sequence_ = 0;
+  /// The generation whose Single `RUN` ended before all its Armed-single blocks were processed;
+  /// the rest of them are captured as Running. Generations are never reused.
+  std::optional<std::uint64_t> run_generation_;
 
   // Read without the Instrument's mutex, so readers never wait on commands or capture processing.
   std::atomic<std::shared_ptr<const Capture>> latest_;
