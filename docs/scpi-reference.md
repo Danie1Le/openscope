@@ -25,7 +25,7 @@ Commands on one line are separated by `;` and run in order.
 
 - **Paths.** A header that starts with `:` is resolved from the root. A header without the leading `:` continues from the path of the previous command on the line: that command's header minus its last node (SCPI-99 compound headers). So `SYST:ERR?;ERR?` reads two errors, while `SYST:ERR?;SYST:ERR?` means `SYST:ERR?` then `SYST:SYST:ERR?`, an undefined header; write `SYST:ERR?;:SYST:ERR?` instead. Each line starts at the root. Common commands neither use nor change the path: in `SYST:ERR?;*CLS;ERR?` the last command is `SYST:ERR?`.
 - **Replies.** The replies of all queries on a line are joined with `;` into one reply, in order: `*IDN?;SYST:ERR?` replies `OpenScope,OS-4,...;0,"No error"`.
-- **Errors.** The whole line is checked for syntax before any of it runs, so a syntax error anywhere on a line runs nothing on it. Any other error, including an execution error a command reports while running, stops the line at the command that caused it: the commands before it have run and their replies are returned; the command with the error and every command after it are discarded. A command rejected before it runs (a header, parameter or suffix error) never changes instrument state.
+- **Errors.** The whole line is checked for syntax before any of it runs, so a syntax error anywhere on a line runs nothing on it. Any other error, including an execution error a command reports while running, stops the line at the command that caused it: the commands before it have run and their replies are returned; the command with the error and every command after it are discarded. A command rejected before it runs (a header, parameter or suffix error) never changes instrument state. The entry a measurement query queues to report its [measurement status](#measurements) is not such an error: the query has replied, so the line carries on.
 
 ## White space
 
@@ -102,10 +102,13 @@ The queue holds 20 entries. When it is full, the newest entry is replaced by `-3
 | `-113` | Undefined header | No command matches the header, including a suffix on a mnemonic that takes none |
 | `-114` | Header suffix out of range | The header matches a command except that a mnemonic's suffix is outside its range (`CHAN5`) |
 | `-131` | Invalid suffix | A number's suffix is not the parameter's unit with an optional multiplier |
+| `-200` | Execution error;No signal | A measurement found top minus base under 0.2 vertical divisions; the query replied `9.91E37` (see [Measurements](#measurements)) |
+| `-200` | Execution error;Too few cycles | A measurement found under one whole cycle or no complete edge; the query replied `9.91E37` |
 | `-221` | Settings conflict | A query reads a channel that is not in the latest capture (it was not enabled when the capture was taken) |
 | `-222` | Data out of range | A number outside the command's range or beyond a double's range |
 | `-224` | Illegal parameter value | A keyword that is not one of the parameter's choices |
 | `-230` | Data corrupt or stale | A query reads capture data before the first capture has completed (or since `*RST`) |
+| `-231` | Data questionable;Clipped | A warning: a measurement replied its value, but a sample of the channel hit an input-range limit |
 | `-350` | Queue overflow | The error queue was full |
 | `-363` | Input buffer overrun | The line is longer than 4096 bytes; nothing on it runs |
 
@@ -191,3 +194,37 @@ A capture takes its settings from its first sample, so changing a channel settin
 | untriggered | `1` for an untriggered capture, `0` for one placed by a trigger event |
 
 Every capture is untriggered until the trigger is added, so the trigger position is 0 and the flag is 1.
+
+### Measurements
+
+| Command | Reply | Measures |
+|---|---|---|
+| `MEASure:VPP? CHANnel<n>` | volts | Peak to peak: maximum minus minimum |
+| `MEASure:VMIN? CHANnel<n>` | volts | The lowest sample |
+| `MEASure:VMAX? CHANnel<n>` | volts | The highest sample |
+| `MEASure:VAVerage? CHANnel<n>` | volts | The mean of the samples |
+| `MEASure:VRMS? CHANnel<n>` | volts | The root mean square of the samples, DC included |
+
+The channel parameter is required; `CHAN` alone means `CHAN1`. Each measurement reads every sample of the channel in the latest capture at the moment the query runs, so the timebase never changes it (ADR 0004). Like the waveform queries, a measurement before any capture has completed, or after `*RST` until the next one does, replies nothing and reports `-230`, and one on a channel not in the latest capture replies nothing and reports `-221`. Results are computed once per capture: asking again before the next capture completes returns the same result.
+
+Values are written like settings (shortest form, upper-case exponent) at float32 precision, the precision of the samples they come from: `1.6`, `-0.5`, `1.118034`.
+
+#### Measurement status
+
+Every result carries a measurement status, decided in this order:
+
+1. **No signal**: top minus base is under 0.2 vertical divisions of the channel's scale (the scale the capture was taken at). Top and base are the signal's settled high and low levels: the histogram of its samples has 256 equal bins from the minimum to the maximum, and the level of each half of it (128 bins) is the mean of the samples in that half's fullest bin, when that bin holds at least twice the half's average per bin. A half with no such bin (a triangle or ramp sweeps evenly through its range) takes the maximum or the minimum instead. A flat signal, noise alone, or a signal held flat at an input-range limit is No signal.
+2. **Too few cycles**: the measurement needs more of the signal than the capture holds (under one whole cycle, or no complete edge). The amplitude measurements above never report it.
+3. **Clipped**: a sample of the channel in the capture hit an input-range limit (offset plus or minus four divisions), so the value may be wrong.
+4. **OK**.
+
+A query reports its status every time it runs, to the calling Session only:
+
+| Status | Reply | Error queue entry |
+|---|---|---|
+| OK | the value | none |
+| Clipped | the value | `-231,"Data questionable;Clipped"` |
+| No signal | `9.91E37` (SCPI's not-a-number) | `-200,"Execution error;No signal"` |
+| Too few cycles | `9.91E37` | `-200,"Execution error;Too few cycles"` |
+
+The entry does not stop the line: `MEAS:VPP? CHAN1;VRMS? CHAN1` on a flat signal replies `9.91E37;9.91E37` and queues two `-200` entries.
