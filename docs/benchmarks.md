@@ -78,18 +78,32 @@ Not measured, so only a hypothesis: that most of each hand-over is the two cores
 
 ## Live mode at 4 channels x 1 MS/s (NFR-1)
 
-`bench/live_run.cpp` runs the instrument live (`openscope::LivePipeline`) with all four channels enabled, each a 1 kHz sine with 10 mV RMS noise, at the `*RST` 1 MS/s and record length of 10 000, and prints once a second how far the latest capture reaches on the sample clock against the samples the wall clock has released, with the dropped-block and discarded-capture counts:
+`bench/live_run.cpp` runs the instrument live (`openscope::LivePipeline`) with all four channels enabled, each a 1 kHz sine with 10 mV RMS noise, at the record length of 10 000 and the `*RST` 1 MS/s or the sample rate given second. Once a second it prints how far the latest capture reaches on the sample clock against the samples the wall clock has released, the skipped samples (released by the wall clock but never acquired, because acquisition fell more than one round behind), the dropped-block and discarded-capture counts, and the slowest `*IDN?` of that second, sent every 5 ms from the main thread while the pipeline runs:
 
 ```sh
-build/benchmark/bench/live_run 60
+build/benchmark/bench/live_run 60        # 1 MS/s
+build/benchmark/bench/live_run 10 1E7    # 10 MS/s
 ```
 
-Measured 2026-11-21 on the machine above (same container and build flags as the ring buffer), for 60 seconds while other builds and tests shared the machine:
+Measured 2026-11-21 on the machine above (same container and build flags as the ring buffer), while other builds and tests shared the machine. Two 60-second runs at 1 MS/s:
 
-| | Result |
-|---|---|
-| Dropped blocks | 0 |
-| Captures discarded for spanning a dropped block | 0 |
-| Latest capture's end behind the wall clock, sampled each second | 2 079 to 13 083 samples (2.1 to 13.1 ms) |
+| | Run 1 | Run 2 |
+|---|---|---|
+| Skipped samples | 0 | 0 |
+| Dropped blocks | 0 | 1 (at about 35 s) |
+| Captures discarded for spanning a dropped block | 0 | 1 |
+| Latest capture's end behind the wall clock, sampled each second | 899 to 12 010 samples | 1 387 to 12 774 samples |
+| Slowest `*IDN?` in any second | 0.08 ms | 0.51 ms |
 
-What the table shows: NFR-1's target of zero dropped blocks at 4 channels x 1 MS/s held for this run. Captures complete every 10 000 samples, so the latest capture's end trails the wall clock by up to one record length (10 ms) plus the time to acquire and process the block that completes it; the most seen was 13.1 ms, and it did not grow over the run, so live mode kept pace with real time. This is one 60-second run, not a soak test, and nothing was measured under heavier load than this shared machine.
+What the table shows: NFR-1's target of zero dropped blocks at 4 channels x 1 MS/s held for run 1 and missed by one block in run 2, which ran while another agent's build shared the machine; the capture that block would have split was discarded and counted, never published with a gap. Captures complete every 10 000 samples, so the latest capture's end trails the wall clock by up to one record length (10 ms) plus the time to acquire and process the block that completes it; the most seen was 12.8 ms, and it did not grow over either run, so live mode kept pace with real time. These are two 60-second runs, not a soak test.
+
+### Above what the machine sustains
+
+Ten seconds at each sample rate, same setup:
+
+| `ACQ:SRAT` | Wall-clock samples | Latest capture ends at | Skipped samples | Dropped blocks | Slowest `*IDN?` in any second |
+|---|---|---|---|---|---|
+| 1E7 | 100 017 000 | 43 919 977 | 47 409 383 | 0 | 0.06 ms |
+| 1E8 | 1 000 436 604 | 44 619 675 | 870 357 048 | 0 | 0.06 ms |
+
+What the table shows: this machine acquires about 4.4 M sample indexes per second on four noisy channels, so at 1E7 and above acquisition falls behind the wall clock every round. The pacer then skips what is over a round and counts it: at 1E8, 87 % of the samples the wall clock released were skipped, and the skipped count says so where the dropped-block count alone (0) would not. `*IDN?` stayed under 0.1 ms at every rate, because `Instrument::acquire` holds the Instrument's mutex only to take the indexes and a settings snapshot and samples outside it.
