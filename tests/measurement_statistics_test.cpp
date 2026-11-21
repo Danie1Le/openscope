@@ -1,4 +1,5 @@
-// measure_all and MeasurementStatistics on their own.
+// measure_all and MeasurementStatistics on their own. Statistics through SCPI (MEAS:STAT?) are in
+// statistics_commands_test.cpp.
 
 #include "openscope/measurement_statistics.hpp"
 

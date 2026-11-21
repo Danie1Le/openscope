@@ -307,12 +307,12 @@ void Instrument::add_acquisition_commands() {
 }
 
 void Instrument::add_timebase_commands() {
-  // ADR 0004: the timebase only zooms the display, so it neither discards nor reshapes captures.
+  // ADR 0004: the timebase only zooms the display, so it neither discards nor reshapes captures,
+  // and the statistics over them stay.
   add_setting(
       "TIMebase:SCALe", NumericParameter{.min = 1e-9, .max = 100.0, .unit = "S"},
       [this](Session&, const Arguments& arguments) {
         timebase_scale_ = value_of<double>(arguments);
-        setting_changed();
       },
       [this](Session&, const Arguments&) { return scpi::format_real(timebase_scale_); });
 }
@@ -626,11 +626,9 @@ void Instrument::change_trigger(const std::function<void(TriggerSettings&)>& cha
   capture_setting_changed();
 }
 
-void Instrument::setting_changed() { statistics_.reset(); }
-
 void Instrument::capture_setting_changed() {
   captures_.discard();
-  setting_changed();
+  statistics_.reset();
 }
 
 void Instrument::reset() {
@@ -642,7 +640,7 @@ void Instrument::reset() {
   // up by earlier settings past *RST, so the output would depend on the commands sent before it.
   generators_ = make_generators(seed_, acquisition_.sample_rate);
   captures_ = {};
-  setting_changed();
+  statistics_.reset();
   run_state_ = RunState::kRunning;
 }
 
@@ -711,13 +709,12 @@ void Instrument::advance(std::size_t samples) {
     if (run_state_ != RunState::kStopped) {
       const SampleBlock block =
           sample_channels(generators_, channels_, trigger_.source, clock_.now(), count);
-      single_end = captures_.push(block, acquisition_, channels_, trigger_,
-                                  pending() ? CaptureLimit::kFirst : CaptureLimit::kEvery);
       // Every capture counts, not only the last of the block, so the statistics do not depend on
       // how `advance` is chunked; and before held lines resume, so they see the Single's capture.
-      for (const std::shared_ptr<const Capture>& capture : captures_.take_completed()) {
-        statistics_.add(measure_all(*capture));
-      }
+      single_end = captures_.push(
+          block, acquisition_, channels_, trigger_,
+          pending() ? CaptureLimit::kFirst : CaptureLimit::kEvery,
+          [this](const Capture& capture) { statistics_.add(measure_all(capture)); });
       // The Single's capture ends the operation at its last sample: the lines it resumes run with
       // the clock there, and the next block starts there under whatever they changed, so how
       // `advance` is chunked never changes a capture or a reply (ADR 0003).

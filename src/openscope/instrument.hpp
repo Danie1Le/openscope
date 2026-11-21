@@ -188,11 +188,10 @@ class Instrument {
   /// Applies `change` to the trigger settings and discards the capture in progress, which restarts
   /// the trigger.
   void change_trigger(const std::function<void(TriggerSettings&)>& change);
-  /// What every change of an instrument-wide setting does: resets the statistics, so they never
-  /// mix data from two settings (spec #1, story 64). The timebase only does this (ADR 0004).
-  void setting_changed();
   /// What every change of a setting that shapes captures does: discards the capture in progress,
-  /// which no longer matches the settings, and runs setting_changed().
+  /// which no longer matches the settings, and resets the statistics, so they never mix data from
+  /// two settings (spec #1, story 64). The timebase shapes no capture (ADR 0004), so it does
+  /// neither.
   void capture_setting_changed();
   /// `*RST`: restores every instrument-wide setting and the Running run state, restarts every
   /// Generator as if it had run at its defaults since sample index 0 with no Faults, and drops the
@@ -224,7 +223,7 @@ class Instrument {
   RunState run_state_ = RunState::kRunning;
   CaptureAssembler captures_;
   MeasurementEngine measurements_;
-  /// Every capture published since the last setting change, `*RST` or `MEAS:STAT:RES`.
+  /// Every capture published since the last capture_setting_changed(), `*RST` or `MEAS:STAT:RES`.
   MeasurementStatistics statistics_;
   /// At most one per Session: a Session with a held line sends no other.
   std::vector<HeldLine> held_;
