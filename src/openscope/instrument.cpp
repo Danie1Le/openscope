@@ -559,19 +559,27 @@ void Instrument::execute(SessionId session, std::string_view line, ReplyHandler 
 void Instrument::advance(std::size_t samples) {
   while (samples > 0) {
     const std::size_t count = std::min(samples, kMaxBlockLength);
-    const SampleIndex first = clock_.take(count);
     // Stopped samples nothing: Generators are pure functions of the sample index (ADR 0003), and
     // the capture in progress was dropped when the instrument stopped.
     if (run_state_ != RunState::kStopped) {
-      const CaptureLimit limit = pending() ? CaptureLimit::kFirst : CaptureLimit::kEvery;
+      const bool single = pending();
       const SampleBlock block =
-          sample_channels(generators_, channels_, trigger_.source, first, count);
-      if (captures_.push(block, acquisition_, channels_, trigger_, limit) &&
-          limit == CaptureLimit::kFirst) {
+          sample_channels(generators_, channels_, trigger_.source, clock_.now(), count);
+      const std::optional<std::size_t> used =
+          captures_.push(block, acquisition_, channels_, trigger_,
+                         single ? CaptureLimit::kFirst : CaptureLimit::kEvery);
+      // The Single's capture ends the operation at its last sample: the lines it resumes run with
+      // the clock there, and the next block starts there under whatever they changed, so how
+      // `advance` is chunked never changes a capture or a reply (ADR 0003).
+      if (single && used) {
+        clock_.take(*used);
+        samples -= *used;
         enter(RunState::kStopped);
         resume_held();
+        continue;
       }
     }
+    clock_.take(count);
     samples -= count;
   }
 }

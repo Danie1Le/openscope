@@ -57,7 +57,7 @@ struct Capture {
 enum class CaptureLimit : std::uint8_t {
   /// Every one (the Running run state).
   kEvery,
-  /// The first; the samples after it are left out (the Armed-single run state).
+  /// The first; the samples after it are left for the caller (the Armed-single run state).
   kFirst,
 };
 
@@ -73,13 +73,15 @@ class CaptureAssembler {
   /// settings from the block that starts it, and the trigger keeps its state from block to block,
   /// so the caller discards the capture in progress whenever it changes a setting or skips
   /// samples. Each capture that completes becomes the latest capture; a block may complete
-  /// several, of which `limit` says how many to publish. Returns true when it published one.
-  /// Throws std::logic_error when `acquisition` has a record length of zero, when `block` lacks
-  /// the trigger channel's samples, or when it lacks samples for a channel of the capture in
-  /// progress, which means a channel was enabled or disabled without a discard.
-  bool push(const SampleBlock& block, const AcquisitionSettings& acquisition,
-            std::span<const ChannelSettings, kChannelCount> channels,
-            const TriggerSettings& trigger, CaptureLimit limit = CaptureLimit::kEvery);
+  /// several, of which `limit` says how many to publish. Returns the offset in `block` just past
+  /// the first capture it published (under kFirst, how many samples it used), or nullopt when it
+  /// published none. Throws std::logic_error when `acquisition` has a record length of zero, when
+  /// `block` lacks the trigger channel's samples, or when it lacks samples for a channel of the
+  /// capture in progress, which means a channel was enabled or disabled without a discard.
+  std::optional<std::size_t> push(const SampleBlock& block, const AcquisitionSettings& acquisition,
+                                  std::span<const ChannelSettings, kChannelCount> channels,
+                                  const TriggerSettings& trigger,
+                                  CaptureLimit limit = CaptureLimit::kEvery);
 
   /// Drops the capture in progress and restarts the trigger, unarmed and with no holdoff
   /// running; the next block starts a new capture. The latest capture stays.

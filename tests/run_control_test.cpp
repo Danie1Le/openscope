@@ -5,16 +5,21 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 #include "instrument_fixture.hpp"
 #include "openscope/capture.hpp"
 #include "openscope/instrument.hpp"
+#include "openscope/sample_clock.hpp"
 #include "scpi_session.hpp"
 
 namespace openscope {
@@ -32,12 +37,15 @@ using testing::Eq;
 /// `WAV:PRE?` for a capture of the DC signal below: untriggered, time zero on the first sample.
 constexpr auto kUntriggeredPreamble = "1E+06,10000,1,0,0,1";
 
-/// An instrument whose CH1 is a DC signal that never triggers, with time zero on the first sample,
-/// so Auto takes an untriggered capture every record length from where a capture starts: the
-/// sample indexes of each capture show exactly when it started.
+/// Makes CH1 a DC signal that never triggers, with time zero on the first sample, so Auto takes
+/// an untriggered capture every record length from where a capture starts: the sample indexes of
+/// each capture show exactly when it started.
+constexpr auto kUntriggeredDc = "SOUR1:FUNC DC;:TRIG:POS 0";
+
+/// An instrument set up with kUntriggeredDc.
 class RunControlTest : public test::InstrumentFixture {
  protected:
-  RunControlTest() { session.send("SOUR1:FUNC DC;:TRIG:POS 0"); }
+  RunControlTest() { session.send(kUntriggeredDc); }
 
   /// Starts `line` on `client` and expects it to be held.
   static std::shared_ptr<const LineReply> start_held(ScpiSession& client, std::string_view line) {
@@ -430,8 +438,71 @@ TEST_F(RunControlTest, ClosingTheSessionDropsItsHeldLine) {
   EXPECT_EQ(kept->text, "1");
 }
 
-// The ruling for #7: any setting change discards the capture in progress, even one that sets the
-// value already in place, and the capture restarts at the next sample index.
+// A Single that completes inside a block leaves the rest of the block to what the lines it
+// resumes start, as stepping one record at a time would.
+TEST_F(RunControlTest, SingleArmedByAResumedLineStartsAfterTheCaptureWithinOneAdvance) {
+  const auto reply = start_held("SINGle;*WAI;SINGle;*OPC?");
+
+  instrument.advance(2 * kResetRecordLength);
+
+  EXPECT_EQ(reply->text, "1");
+  EXPECT_EQ(first_index(instrument), kResetRecordLength);
+}
+
+TEST_F(RunControlTest, RunSentByAResumedLineStartsAfterTheCaptureWithinOneAdvance) {
+  start_held("SINGle;*WAI;RUN");
+
+  instrument.advance(3 * kResetRecordLength);
+
+  EXPECT_EQ(first_index(instrument), 2 * kResetRecordLength);
+}
+
+/// What a line and the captures leave once the sample clock has run: the line's reply, the latest
+/// capture's first sample index, and that capture as another Session's `WAV:PRE?;DATA?` reads it.
+using SteppedRun = std::tuple<std::string, SampleIndex, std::optional<std::string>>;
+
+/// Runs `line` on a fresh instrument set up with kUntriggeredDc and steps the sample clock
+/// `samples` sample indexes in `advance` calls of at most `step`.
+SteppedRun run_stepped(std::string_view line, std::size_t samples, std::size_t step) {
+  Instrument instrument;
+  ScpiSession session{instrument};
+  session.send(kUntriggeredDc);
+  const auto reply = session.start(line);
+  for (std::size_t done = 0; done < samples; done += step) {
+    instrument.advance(std::min(step, samples - done));
+  }
+  ScpiSession reader{instrument};
+  return {reply->ended ? reply->text.value_or("<no reply>") : "<held>", first_index(instrument),
+          reader.send("WAV:PRE?;DATA?")};
+}
+
+// ADR 0003: captures and replies do not depend on how `advance` is chunked, even when a line
+// resumed inside it arms a Single, runs, or changes a setting at the sample the Single ended.
+// Each parameter is a line and its reply when the clock is stepped one record at a time.
+class SteppingInvarianceTest : public testing::TestWithParam<std::pair<const char*, const char*>> {
+};
+
+TEST_P(SteppingInvarianceTest, OneAdvanceGivesWhatManySmallOnesGive) {
+  constexpr std::size_t kSamples = 3 * kResetRecordLength;
+  const auto [line, reply] = GetParam();
+  const SteppedRun by_record = run_stepped(line, kSamples, kResetRecordLength);
+  ASSERT_EQ(std::get<0>(by_record), reply);
+
+  for (const std::size_t step : {kSamples, std::size_t{1}, std::size_t{7}, std::size_t{3333},
+                                 kResetRecordLength - 1, kResetRecordLength + 1}) {
+    EXPECT_EQ(run_stepped(line, kSamples, step), by_record) << "step " << step;
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(ResumedLines, SteppingInvarianceTest,
+                         testing::Values(std::pair{"SINGle;*WAI;SINGle;*OPC?", "1"},
+                                         std::pair{"SINGle;*WAI;RUN;SYST:ERR?", kNoErrorReply},
+                                         std::pair{"SINGle;*WAI;SOUR1:OFFS 0.5;:RUN;SYST:ERR?",
+                                                   kNoErrorReply},
+                                         std::pair{"SINGle;*WAI;SINGle;*WAI;SINGle;*OPC?", "1"}));
+
+// Any setting change discards the capture in progress, even one that sets the value already in
+// place, and the capture restarts at the next sample index.
 class SettingChangeTest : public RunControlTest, public testing::WithParamInterface<const char*> {};
 
 TEST_P(SettingChangeTest, DiscardsTheCaptureInProgressWhileRunning) {
@@ -470,11 +541,12 @@ INSTANTIATE_TEST_SUITE_P(EverySetting, SettingChangeTest,
                                          "TRIG:SOUR CHAN1", "TRIG:LEV 0", "TRIG:SLOP POS",
                                          "TRIG:MODE AUTO", "TRIG:HOLD 0", "TRIG:POS 0"));
 
-// ADR 0004: the timebase only zooms the display, and WAV settings belong to one Session.
-TEST_F(RunControlTest, DisplayAndSessionSettingsKeepTheCaptureInProgress) {
+// ADR 0004: the timebase only zooms the display, and WAV settings belong to one Session. A Fault
+// is an event in the signal, which the capture is there to show.
+TEST_F(RunControlTest, DisplayAndSessionSettingsAndFaultsKeepTheCaptureInProgress) {
   instrument.advance(6000);
 
-  session.send("TIM:SCAL 1;:WAV:SOUR CHAN1;FORM REAL");
+  session.send("TIM:SCAL 1;:WAV:SOUR CHAN1;FORM REAL;:SOUR1:FAUL GLIT");
   instrument.advance(4000);
 
   EXPECT_EQ(session.next_error(), kNoErrorReply);

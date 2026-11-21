@@ -80,8 +80,10 @@ class Instrument {
 
   /// Advances the sample clock by `samples` sample indexes with no wall-clock pacing, as tests do
   /// (ADR 0003), in sample blocks of at most kMaxBlockLength. Unless the instrument is Stopped,
-  /// every enabled channel is sampled and each capture that fills becomes the latest capture; a
-  /// Single's capture stops the instrument and ends the lines held on it after its block.
+  /// every enabled channel is sampled and each capture that fills becomes the latest capture. A
+  /// Single's capture stops the instrument and ends the lines held on it at its last sample, and
+  /// the samples after it follow whatever those lines change. So one call gives the same captures
+  /// and replies as any split of it into smaller calls.
   void advance(std::size_t samples);
 
   /// The latest capture, or null before the first capture completes.
