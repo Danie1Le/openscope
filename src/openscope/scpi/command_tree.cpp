@@ -50,12 +50,12 @@ struct Overloaded : Lambdas... {
 MnemonicPattern parse_mnemonic_pattern(std::string_view text) {
   const std::size_t letters_end = std::min(text.find('<'), text.size());
   const std::string_view letters = text.substr(0, letters_end);
-  const auto short_end = static_cast<std::size_t>(
-      std::ranges::find_if_not(letters, ascii::is_upper) - letters.begin());
-  if (short_end == 0 || !std::ranges::all_of(letters.substr(short_end), ascii::is_lower)) {
+  const std::string_view short_letters = short_form(letters);
+  if (short_letters.empty() ||
+      !std::ranges::all_of(letters.substr(short_letters.size()), ascii::is_lower)) {
     reject_pattern(text);
   }
-  MnemonicPattern pattern{.short_form = std::string(letters.substr(0, short_end)),
+  MnemonicPattern pattern{.short_form = std::string(short_letters),
                           .long_form = ascii::to_upper(letters),
                           .max_suffix = 0};
 
@@ -370,6 +370,12 @@ std::optional<ScpiError> convert_all(const std::vector<ParameterRule>& rules, st
 }
 
 }  // namespace
+
+std::string_view short_form(std::string_view pattern) {
+  return pattern.substr(
+      0, static_cast<std::size_t>(std::ranges::find_if_not(pattern, ascii::is_upper) -
+                                  pattern.begin()));
+}
 
 void CommandTree::add(Command command) {
   if (!command.handler) {
