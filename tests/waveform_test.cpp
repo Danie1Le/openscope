@@ -22,12 +22,16 @@ namespace {
 
 using test::captured;
 using test::decode_float32_block;
+using test::kDataTypeErrorReply;
+using test::kIllegalParameterValueReply;
+using test::kMissingParameterReply;
+using test::kNoErrorReply;
+using test::kParameterNotAllowedReply;
 using test::kResetRecordLength;
 using test::ScpiSession;
 using testing::Optional;
 using testing::StartsWith;
 
-constexpr auto kNoErrorReply = R"(0,"No error")";
 constexpr auto kSettingsConflictReply = R"(-221,"Settings conflict")";
 constexpr auto kDataStaleReply = R"(-230,"Data corrupt or stale")";
 
@@ -76,11 +80,11 @@ TEST_F(WaveformTest, SourceRejectsAnythingButAChannel) {
   session.send("WAV:SOUR 1");
   session.send("WAV:SOUR");
 
-  EXPECT_EQ(session.next_error(), R"(-224,"Illegal parameter value")");
-  EXPECT_EQ(session.next_error(), R"(-224,"Illegal parameter value")");
-  EXPECT_EQ(session.next_error(), R"(-224,"Illegal parameter value")");
-  EXPECT_EQ(session.next_error(), R"(-104,"Data type error")");
-  EXPECT_EQ(session.next_error(), R"(-109,"Missing parameter")");
+  EXPECT_EQ(session.next_error(), kIllegalParameterValueReply);
+  EXPECT_EQ(session.next_error(), kIllegalParameterValueReply);
+  EXPECT_EQ(session.next_error(), kIllegalParameterValueReply);
+  EXPECT_EQ(session.next_error(), kDataTypeErrorReply);
+  EXPECT_EQ(session.next_error(), kMissingParameterReply);
   EXPECT_EQ(session.send("WAV:SOUR?"), "CHAN2");
 }
 
@@ -95,8 +99,8 @@ TEST_F(WaveformTest, FormatAcceptsAsciiAndReal) {
 
   session.send("WAV:FORM BYTE");
   session.send("WAV:FORM ASCI");
-  EXPECT_EQ(session.next_error(), R"(-224,"Illegal parameter value")");
-  EXPECT_EQ(session.next_error(), R"(-224,"Illegal parameter value")");
+  EXPECT_EQ(session.next_error(), kIllegalParameterValueReply);
+  EXPECT_EQ(session.next_error(), kIllegalParameterValueReply);
   EXPECT_EQ(session.send("WAV:FORM?"), "ASC");
 }
 
@@ -251,8 +255,8 @@ TEST_F(WaveformTest, DataAndPreambleTakeNoParameters) {
   session.send("WAV:DATA? 1");
   session.send("WAV:PRE? CHAN1");
 
-  EXPECT_EQ(session.next_error(), R"(-108,"Parameter not allowed")");
-  EXPECT_EQ(session.next_error(), R"(-108,"Parameter not allowed")");
+  EXPECT_EQ(session.next_error(), kParameterNotAllowedReply);
+  EXPECT_EQ(session.next_error(), kParameterNotAllowedReply);
   EXPECT_THAT(session.send("WAV:PRE?"), Optional(StartsWith("1E+06,")));
 }
 
