@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <numbers>
 #include <stdexcept>
+#include <tuple>
 #include <vector>
 
 #include "decibels.hpp"
@@ -37,13 +38,13 @@ std::vector<Complex> direct_dft(const std::vector<Complex>& x) {
   return result;
 }
 
-/// `count` samples of a sine with peak amplitude `peak` that completes `cycles` cycles over
-/// `period` samples, rounded to float as captured samples are.
-std::vector<float> sine(std::size_t count, double cycles, std::size_t period, double peak) {
+/// `count` samples of a 1 V peak sine that completes `cycles` cycles over those samples, rounded
+/// to float as captured samples are.
+std::vector<float> sine(std::size_t count, double cycles) {
   std::vector<float> samples(count);
   for (std::size_t n = 0; n < count; ++n) {
     samples[n] = static_cast<float>(
-        peak * std::sin(kTwoPi * cycles * static_cast<double>(n) / static_cast<double>(period)));
+        std::sin(kTwoPi * cycles * static_cast<double>(n) / static_cast<double>(count)));
   }
   return samples;
 }
@@ -123,43 +124,51 @@ struct MainLobe {
   std::vector<double> neighbours;
 };
 
-/// A 1 V peak sine centred on bin 100 of a 1024-point spectrum under each window.
-class BinCentredToneTest : public testing::TestWithParam<MainLobe> {
- protected:
-  static constexpr std::size_t kLength = 1024;
-  static constexpr std::size_t kToneBin = 100;
+/// A spectrum size and the bin its test tone is centred on.
+struct ToneBin {
+  std::size_t length;
+  std::size_t bin;
+};
 
-  MainLobe lobe = GetParam();
+/// A 1 V peak sine centred on a bin of a spectrum under each window, at a small size and at the
+/// largest one (Capture::kMaxRecordLength, 2^20 points).
+class BinCentredToneTest : public testing::TestWithParam<std::tuple<MainLobe, ToneBin>> {
+ protected:
+  MainLobe lobe = std::get<0>(GetParam());
+  ToneBin tone = std::get<1>(GetParam());
   std::vector<float> spectrum =
-      magnitude_spectrum_db(sine(kLength, kToneBin, kLength, 1.0), lobe.window);
+      magnitude_spectrum_db(sine(tone.length, static_cast<double>(tone.bin)), lobe.window);
 };
 
 TEST_P(BinCentredToneTest, ReadsItsRmsLevelInItsBinAndTheWindowsLevelsBesideIt) {
-  ASSERT_EQ(spectrum.size(), (kLength / 2) + 1);
-  EXPECT_NEAR(spectrum[kToneBin], kOneVoltPeakSineDb, 1e-4);
+  ASSERT_EQ(spectrum.size(), (tone.length / 2) + 1);
+  EXPECT_NEAR(spectrum[tone.bin], kOneVoltPeakSineDb, 1e-4);
   for (std::size_t distance = 1; distance <= lobe.neighbours.size(); ++distance) {
     const double expected = kOneVoltPeakSineDb + dbv(lobe.neighbours[distance - 1]);
-    EXPECT_NEAR(spectrum[kToneBin - distance], expected, 1e-3) << distance << " bins below";
-    EXPECT_NEAR(spectrum[kToneBin + distance], expected, 1e-3) << distance << " bins above";
+    EXPECT_NEAR(spectrum[tone.bin - distance], expected, 1e-3) << distance << " bins below";
+    EXPECT_NEAR(spectrum[tone.bin + distance], expected, 1e-3) << distance << " bins above";
   }
 }
 
 TEST_P(BinCentredToneTest, LeavesEveryBinOutsideTheMainLobeEmpty) {
   const std::size_t lobe_width = lobe.neighbours.size();
   for (std::size_t k = 0; k < spectrum.size(); ++k) {
-    if (k + lobe_width < kToneBin || k > kToneBin + lobe_width) {
-      EXPECT_LT(spectrum[k], -120.0) << "bin " << k;
+    if (k + lobe_width < tone.bin || k > tone.bin + lobe_width) {
+      ASSERT_LT(spectrum[k], -120.0) << "bin " << k;
     }
   }
 }
 
 INSTANTIATE_TEST_SUITE_P(
     Windows, BinCentredToneTest,
-    testing::Values(MainLobe{.window = FftWindow::kRectangular, .neighbours = {}},
-                    MainLobe{.window = FftWindow::kHann, .neighbours = {0.5}},
-                    MainLobe{.window = FftWindow::kBlackmanHarris,
-                             .neighbours = {0.48829 / (2 * 0.35875), 0.14128 / (2 * 0.35875),
-                                            0.01168 / (2 * 0.35875)}}));
+    testing::Combine(
+        testing::Values(MainLobe{.window = FftWindow::kRectangular, .neighbours = {}},
+                        MainLobe{.window = FftWindow::kHann, .neighbours = {0.5}},
+                        MainLobe{.window = FftWindow::kBlackmanHarris,
+                                 .neighbours = {0.48829 / (2 * 0.35875), 0.14128 / (2 * 0.35875),
+                                                0.01168 / (2 * 0.35875)}}),
+        testing::Values(ToneBin{.length = 1024, .bin = 100},
+                        ToneBin{.length = std::size_t{1} << 20U, .bin = 100'000})));
 
 /// A window with its scalloping loss, the dB a tone exactly half-way between two bins reads below
 /// its level (Harris 1978, table 1), and the bounds on the level ten bins further out, relative to
@@ -178,7 +187,7 @@ TEST_P(OffBinToneTest, LeaksAsTheWindowPredicts) {
   constexpr std::size_t kLowerBin = 300;  // The tone sits at bin 300.5.
   const Leakage& leakage = GetParam();
   const std::vector<float> spectrum = magnitude_spectrum_db(
-      sine(kLength, static_cast<double>(kLowerBin) + 0.5, kLength, 1.0), leakage.window);
+      sine(kLength, static_cast<double>(kLowerBin) + 0.5), leakage.window);
 
   EXPECT_NEAR(spectrum[kLowerBin], kOneVoltPeakSineDb - leakage.scalloping_loss_db, 0.01);
   EXPECT_NEAR(spectrum[kLowerBin + 1], kOneVoltPeakSineDb - leakage.scalloping_loss_db, 0.01);
@@ -236,7 +245,7 @@ TEST(MagnitudeSpectrumTest, SilenceReadsTheFloor) {
 }
 
 TEST(MagnitudeSpectrumTest, UsesOnlyTheFirstSpectrumLengthSamples) {
-  std::vector<float> samples = sine(1024, 10, 1024, 1.0);
+  std::vector<float> samples = sine(1024, 10);
   const std::vector<float> power_of_two = magnitude_spectrum_db(samples, FftWindow::kHann);
   samples.resize(1500, 7.0F);  // Samples past 1024 must not change the spectrum.
   EXPECT_EQ(magnitude_spectrum_db(samples, FftWindow::kHann), power_of_two);
