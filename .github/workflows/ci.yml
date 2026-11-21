@@ -79,3 +79,26 @@ jobs:
         with:
           name: fuzz-artifacts
           path: fuzz-artifacts/
+
+  benchmark:
+    # Reported, not a merge gate: shared runners are too noisy for timing thresholds.
+    # docs/benchmarks.md records numbers from a fixed machine.
+    name: Benchmarks (reported)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      # CC builds the KissFFT reference (bench/CMakeLists.txt) with the compiler of our own code.
+      CC: gcc-14
+      CXX: g++-14
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/setup-vcpkg
+      - run: cmake --preset benchmark
+      - run: cmake --build --preset benchmark
+      - name: FFT against KissFFT
+        # Explicit shell: bash adds -o pipefail, so a crashing benchmark fails the step instead of
+        # leaving a truncated summary behind tee's exit status.
+        shell: bash
+        run: |
+          build/benchmark/bench/fft_benchmark | tee benchmark.txt
+          { echo '```'; cat benchmark.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
