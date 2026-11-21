@@ -107,7 +107,8 @@ TEST_F(WaveformTest, FormatAcceptsAsciiAndReal) {
 // ADR 0002: one Session's WAV:SOUR and WAV:FORM never change what another Session reads.
 TEST_F(WaveformTest, SourceAndFormatBelongToEachSession) {
   ScpiSession other{instrument};
-  session.send("CHAN2:DISP ON;:SOUR2:FUNC DC;OFFS 0.5;:ACQ:POIN 2");
+  // Time zero on the first sample: Auto captures the record as it fills.
+  session.send("CHAN2:DISP ON;:SOUR2:FUNC DC;OFFS 0.5;:ACQ:POIN 2;:TRIG:POS 0");
   instrument.advance(2);
 
   other.send("WAV:SOUR CHAN2;FORM REAL");
@@ -179,7 +180,8 @@ TEST_F(WaveformTest, EnablingAChannelDoesNotAddItToTheLatestCapture) {
 }
 
 TEST_F(WaveformTest, DisablingAChannelKeepsItInTheLatestCapture) {
-  session.send("ACQ:POIN 4;:SOUR1:FUNC SQU;FREQ 250KHZ");
+  // Time zero on the first sample: the first rising edge, at 4, comes after Auto's capture.
+  session.send("ACQ:POIN 4;:SOUR1:FUNC SQU;FREQ 250KHZ;:TRIG:POS 0");
   instrument.advance(4);
 
   session.send("CHAN1:DISP OFF");
@@ -188,7 +190,8 @@ TEST_F(WaveformTest, DisablingAChannelKeepsItInTheLatestCapture) {
 }
 
 TEST_F(WaveformTest, AsciiDataIsTheCapturedSamplesSeparatedByCommas) {
-  session.send("ACQ:POIN 4;:SOUR1:FUNC SQU;FREQ 250KHZ;AMPL 1;OFFS 0.25");
+  // Time zero on the first sample: the first rising edge, at 4, comes after Auto's capture.
+  session.send("ACQ:POIN 4;:SOUR1:FUNC SQU;FREQ 250KHZ;AMPL 1;OFFS 0.25;:TRIG:POS 0");
   instrument.advance(4);
 
   EXPECT_EQ(session.send("WAV:DATA?"), "0.75,0.75,-0.25,-0.25");

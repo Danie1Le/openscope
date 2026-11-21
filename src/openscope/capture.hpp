@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <span>
@@ -84,15 +85,28 @@ class CaptureAssembler {
   [[nodiscard]] std::shared_ptr<const Capture> latest() const { return latest_; }
 
  private:
-  /// Starts collecting a capture at sample index `first`.
-  void start(SampleIndex first, const AcquisitionSettings& acquisition,
-             std::span<const ChannelSettings, kChannelCount> channels, std::size_t pre_trigger);
-  /// Appends `block`'s samples at offsets [from, to) to every channel of the capture in progress.
-  void append(const SampleBlock& block, std::size_t from, std::size_t to);
-  /// Drops the `count` oldest samples of the capture in progress.
-  void drop_oldest(std::size_t count);
-  /// Makes the capture in progress the latest capture.
-  void publish();
+  /// Offsets of trigger events within the block being pushed.
+  using EventIterator = std::vector<std::size_t>::const_iterator;
+
+  /// Starts collecting a capture at sample index `first` and returns it.
+  Capture& start(SampleIndex first, const AcquisitionSettings& acquisition,
+                 std::span<const ChannelSettings, kChannelCount> channels,
+                 std::size_t pre_trigger);
+  /// Completes `capture`, already placed, with `block`'s samples from offset `used` on; returns the
+  /// offset it stopped at.
+  std::size_t fill(Capture& capture, const SampleBlock& block, std::size_t used);
+  /// Collects `block`'s samples from offset `used` into the unplaced `capture` until the first of
+  /// the events from `next_event` on that may place it, or until the Auto timeout or the Normal
+  /// trim point; returns the offset it stopped at. `holdoff` is in samples.
+  std::size_t collect(Capture& capture, const SampleBlock& block, std::size_t used,
+                      EventIterator& next_event, EventIterator end, TriggerMode mode,
+                      std::uint64_t holdoff);
+  /// Appends `block`'s samples at offsets [from, to) to every channel of `capture`.
+  void append(Capture& capture, const SampleBlock& block, std::size_t from, std::size_t to);
+  /// Drops the `count` oldest samples of `capture`.
+  void drop_oldest(Capture& capture, std::size_t count);
+  /// Makes `capture`, the capture in progress, the latest capture.
+  void publish(Capture& capture);
 
   /// The trigger since the last discard (created by the first block after it), and the first
   /// sample index its holdoff lets place a capture.

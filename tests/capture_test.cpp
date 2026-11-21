@@ -132,9 +132,9 @@ TEST(CaptureAssemblerTest, BlockWithoutTheTriggerChannelIsALogicError) {
   SampleBlock block{.first_index = 0, .count = 1, .channels = {}};
   block.channels[0] = {0.0F};
 
-  EXPECT_THROW(assembler.push(block, {.sample_rate = 1.0, .record_length = 1}, channels,
-                              {.source = 2}),
-               std::logic_error);
+  EXPECT_THROW(
+      assembler.push(block, {.sample_rate = 1.0, .record_length = 1}, channels, {.source = 2}),
+      std::logic_error);
 }
 
 TEST(CaptureAssemblerTest, RecordLengthOfZeroIsALogicError) {

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -18,8 +19,7 @@ namespace openscope {
 void CaptureAssembler::push(const SampleBlock& block, const AcquisitionSettings& acquisition,
                             std::span<const ChannelSettings, kChannelCount> channels,
                             const TriggerSettings& trigger) {
-  const std::size_t record_length = acquisition.record_length;
-  if (record_length == 0) {
+  if (acquisition.record_length == 0) {
     throw std::logic_error("record length of zero");  // No sample would ever fill a capture.
   }
   const std::size_t trigger_channel = trigger.source - 1;
@@ -33,79 +33,92 @@ void CaptureAssembler::push(const SampleBlock& block, const AcquisitionSettings&
   }
   // The trigger sees every sample, whatever the captures do with its events.
   const std::vector<std::size_t> events = trigger_->find(trigger_samples);
-  auto next_event = events.begin();
-  const std::size_t pre_trigger = trigger.pre_trigger_samples(record_length);
+  EventIterator next_event = events.begin();
+  const std::uint64_t holdoff = trigger.holdoff_samples(acquisition.sample_rate);
 
   for (std::size_t used = 0; used < block.count;) {
-    if (!building_) {
-      start(block.first_index + used, acquisition, channels, pre_trigger);
-    }
-    if (!building_->untriggered) {
-      const std::size_t to = std::min(block.count, used + (record_length - filled_));
-      append(block, used, to);
-      used = to;
-      if (filled_ == record_length) {
-        publish();
-      }
-    } else {
-      // Collect samples until a trigger event places the capture. Events count once the
-      // pre-trigger samples have filled, so the Auto timeout is one record length after that.
-      const std::size_t limit = record_length + pre_trigger;
-      std::size_t to = std::min(block.count, used + (limit - filled_));
-      bool placed = false;
-      for (; next_event != events.end() && *next_event < to; ++next_event) {
-        const std::size_t event = *next_event;
-        // An event is ignored until the pre-trigger samples have filled and the holdoff passed.
-        if (event >= used && filled_ + (event - used) >= pre_trigger &&
-            block.first_index + event >= holdoff_end_) {
-          to = event;
-          placed = true;
-          break;
-        }
-      }
-      append(block, used, to);
-      used = to;
-      if (placed) {
-        drop_oldest(filled_ - pre_trigger);
-        building_->untriggered = false;
-        holdoff_end_ = block.first_index + used + trigger.holdoff_samples(acquisition.sample_rate);
-      } else if (filled_ == limit && trigger.mode == TriggerMode::kAuto) {
-        drop_oldest(pre_trigger);  // The latest record becomes an untriggered capture.
-        publish();
-      } else if (filled_ == limit) {
-        drop_oldest(record_length);  // Normal keeps only the samples that may precede an event.
-      }
-    }
+    Capture& capture =
+        building_ ? *building_
+                  : start(block.first_index + used, acquisition, channels,
+                          trigger.pre_trigger_samples(acquisition.record_length));
+    used = capture.untriggered
+               ? collect(capture, block, used, next_event, events.end(), trigger.mode, holdoff)
+               : fill(capture, block, used);
   }
 }
 
-void CaptureAssembler::publish() {
-  latest_ = std::make_shared<const Capture>(std::move(*building_));
+std::size_t CaptureAssembler::fill(Capture& capture, const SampleBlock& block, std::size_t used) {
+  const std::size_t to = std::min(block.count, used + (capture.record_length - filled_));
+  append(capture, block, used, to);
+  if (filled_ == capture.record_length) {
+    publish(capture);
+  }
+  return to;
+}
+
+std::size_t CaptureAssembler::collect(Capture& capture, const SampleBlock& block, std::size_t used,
+                                      EventIterator& next_event, EventIterator end,
+                                      TriggerMode mode, std::uint64_t holdoff) {
+  // Events count once the pre-trigger samples have filled, so the Auto timeout is one record
+  // length after that.
+  const std::size_t pre_trigger = capture.trigger_position;
+  const std::size_t limit = capture.record_length + pre_trigger;
+  std::size_t to = std::min(block.count, used + (limit - filled_));
+  // An event is ignored until the pre-trigger samples have filled and the holdoff has passed.
+  const auto places = [&](std::size_t event) {
+    return event >= used && filled_ + (event - used) >= pre_trigger &&
+           block.first_index + event >= holdoff_end_;
+  };
+  while (next_event != end && *next_event < to && !places(*next_event)) {
+    ++next_event;
+  }
+  const bool placed = next_event != end && *next_event < to;
+  if (placed) {
+    to = *next_event;
+  }
+  append(capture, block, used, to);
+  if (placed) {
+    drop_oldest(capture, filled_ - pre_trigger);
+    capture.untriggered = false;
+    holdoff_end_ = block.first_index + to + holdoff;
+  } else if (filled_ == limit && mode == TriggerMode::kAuto) {
+    drop_oldest(capture, pre_trigger);  // The latest record becomes an untriggered capture.
+    publish(capture);
+  } else if (filled_ == limit) {
+    drop_oldest(capture, capture.record_length);  // Normal keeps what may precede an event.
+  }
+  return to;
+}
+
+void CaptureAssembler::publish(Capture& capture) {
+  latest_ = std::make_shared<const Capture>(std::move(capture));
   building_.reset();
 }
 
-void CaptureAssembler::start(SampleIndex first, const AcquisitionSettings& acquisition,
-                             std::span<const ChannelSettings, kChannelCount> channels,
-                             std::size_t pre_trigger) {
-  building_.emplace(Capture{.first_index = first,
-                            .sample_rate = acquisition.sample_rate,
-                            .record_length = acquisition.record_length,
-                            .trigger_position = pre_trigger,
-                            .untriggered = true,
-                            .channels = {}});
+Capture& CaptureAssembler::start(SampleIndex first, const AcquisitionSettings& acquisition,
+                                 std::span<const ChannelSettings, kChannelCount> channels,
+                                 std::size_t pre_trigger) {
+  Capture& capture = building_.emplace(Capture{.first_index = first,
+                                               .sample_rate = acquisition.sample_rate,
+                                               .record_length = acquisition.record_length,
+                                               .trigger_position = pre_trigger,
+                                               .untriggered = true,
+                                               .channels = {}});
   filled_ = 0;
   for (std::size_t n = 0; n < kChannelCount; ++n) {
     if (channels[n].enabled) {
-      building_->channels.at(n)
+      capture.channels.at(n)
           .emplace(CapturedChannel{.settings = channels[n], .samples = {}})
           .samples.reserve(acquisition.record_length + pre_trigger);  // Its most while waiting.
     }
   }
+  return capture;
 }
 
-void CaptureAssembler::append(const SampleBlock& block, std::size_t from, std::size_t to) {
+void CaptureAssembler::append(Capture& capture, const SampleBlock& block, std::size_t from,
+                              std::size_t to) {
   for (std::size_t n = 0; n < kChannelCount; ++n) {
-    if (auto& channel = building_->channels.at(n)) {
+    if (auto& channel = capture.channels.at(n)) {
       if (block.channels.at(n).size() != block.count) {
         throw std::logic_error("sample block lacks a channel of the capture in progress");
       }
@@ -117,14 +130,14 @@ void CaptureAssembler::append(const SampleBlock& block, std::size_t from, std::s
   filled_ += to - from;
 }
 
-void CaptureAssembler::drop_oldest(std::size_t count) {
-  for (auto& channel : building_->channels) {
+void CaptureAssembler::drop_oldest(Capture& capture, std::size_t count) {
+  for (auto& channel : capture.channels) {
     if (channel) {
       channel->samples.erase(channel->samples.begin(),
                              channel->samples.begin() + static_cast<std::ptrdiff_t>(count));
     }
   }
-  building_->first_index += count;
+  capture.first_index += count;
   filled_ -= count;
 }
 
