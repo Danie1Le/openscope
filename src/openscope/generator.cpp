@@ -5,7 +5,10 @@
 #include <cstdint>
 #include <numbers>
 #include <span>
+#include <vector>
 
+#include "openscope/fault.hpp"
+#include "openscope/phase.hpp"
 #include "openscope/sample_clock.hpp"
 
 namespace openscope {
@@ -61,31 +64,47 @@ double shape(GeneratorFunction function, double phase) {
   return 0.0;
 }
 
-/// The fraction of a cycle the phase advances per sample, in [0, 1). Whole cycles never change the
-/// phase, and dropping them with the exact fmod keeps them from eating the precision of the
-/// phase far along the sample clock when the frequency is above the sample rate.
-double cycles_per_sample(double frequency, double sample_rate) {
-  return std::fmod(frequency, sample_rate) / sample_rate;
-}
-
 }  // namespace
 
 Generator::Generator(std::uint64_t seed, double sample_rate)
     : seed_(seed), cycles_per_sample_(cycles_per_sample(settings_.frequency, sample_rate)) {}
 
 void Generator::configure(const GeneratorSettings& settings, double sample_rate, SampleIndex at) {
-  anchor_phase_ = phase_at(at);
+  // The anchor holds the settings' phase alone: the frequency steps add theirs on top.
+  anchor_phase_ = wrap_phase(settings_cycles_at(at));
   anchor_index_ = at;
   settings_ = settings;
   cycles_per_sample_ = cycles_per_sample(settings.frequency, sample_rate);
 }
 
-double Generator::phase_at(SampleIndex index) const {
+bool Generator::inject(const Fault& fault) {
+  // A Fault that has ended only leaves the phase it gained, which moves into the anchor.
+  std::erase_if(faults_, [&](const Fault& old) {
+    if (old.end() > fault.start()) {
+      return false;
+    }
+    anchor_phase_ = wrap_phase(anchor_phase_ + old.phase_shift(old.end()));
+    return true;
+  });
+  if (faults_.size() >= kMaxFaults) {
+    return false;
+  }
+  faults_.push_back(fault);
+  return true;
+}
+
+double Generator::settings_cycles_at(SampleIndex index) const {
   // Signed, so an index before the anchor still has a well-defined phase.
   const auto elapsed = static_cast<double>(static_cast<std::int64_t>(index - anchor_index_));
-  const double cycles = anchor_phase_ + (elapsed * cycles_per_sample_);
-  const double phase = cycles - std::floor(cycles);
-  return phase < 1.0 ? phase : 0.0;  // A tiny negative `cycles` rounds up to exactly 1.
+  return anchor_phase_ + (elapsed * cycles_per_sample_);
+}
+
+double Generator::phase_at(SampleIndex index) const {
+  double cycles = settings_cycles_at(index);
+  for (const Fault& fault : faults_) {
+    cycles += fault.phase_shift(index);
+  }
+  return wrap_phase(cycles);
 }
 
 void Generator::generate(SampleIndex first, std::span<float> samples) const {
@@ -100,6 +119,9 @@ void Generator::generate(SampleIndex first, std::span<float> samples) const {
     }
     if (settings_.noise > 0.0) {
       volts += settings_.noise * gaussian(seed_, index);
+    }
+    for (const Fault& fault : faults_) {
+      volts = fault.apply(index, volts);
     }
     samples[i] = static_cast<float>(volts);
   }
