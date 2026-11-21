@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include "openscope/capture.hpp"
 #include "openscope/channel.hpp"
@@ -29,9 +30,9 @@ enum class SessionId : std::uint32_t {};
 using ReplyHandler = std::function<void(std::optional<std::string> reply)>;
 
 /// The single entry point for instrument behaviour. It owns every Session and the instrument-wide
-/// state (generators, channels, acquisition and trigger settings, the sample clock and the latest
-/// capture), and executes SCPI text on a Session's behalf, so transports and tests all reach the
-/// instrument through the same path.
+/// state (generators, channels, acquisition and trigger settings, the run state, the sample clock
+/// and the latest capture), and executes SCPI text on a Session's behalf, so transports and tests
+/// all reach the instrument through the same path.
 class Instrument {
  public:
   /// The longest line, in bytes without its terminator, that `execute` runs (4 KB).
@@ -55,20 +56,29 @@ class Instrument {
   /// Opens a new Session with an empty error queue.
   SessionId open_session();
 
-  /// Closes `session` when its client disconnects; its SessionId is never valid again. Throws
-  /// std::out_of_range for a SessionId this Instrument did not open or already closed.
+  /// Closes `session` when its client disconnects; its SessionId is never valid again. A line it
+  /// has held is dropped without a reply. Throws std::out_of_range for a SessionId this Instrument
+  /// did not open or already closed.
   void close_session(SessionId session);
 
   /// Executes one line of SCPI text for `session` and passes its reply to `on_reply`, once, when
   /// the line ends. `line` excludes its terminator: the transport strips the trailing `\n` and an
   /// optional `\r` before calling. A line longer than kMaxLineLength only queues -363. Errors are
-  /// pushed onto that Session's error queue, not replied. Throws std::out_of_range for a SessionId
-  /// this Instrument did not open or already closed.
-  void execute(SessionId session, std::string_view line, const ReplyHandler& on_reply);
+  /// pushed onto that Session's error queue, not replied.
+  ///
+  /// While an operation is pending (a Single is armed), `*OPC?` and `*WAI` hold the line: the rest
+  /// of it runs, and `on_reply` is called, only once nothing is pending, from inside the call that
+  /// ended the operation (`advance`, or `execute` for any Session), after that call's own reply.
+  /// There is no timeout. So `on_reply` must not call back into the Instrument, and a transport
+  /// waits for it without blocking, then sends the Session's next line (the Session's commands run
+  /// in order). Throws std::logic_error when `session` still has a line held, and
+  /// std::out_of_range for a SessionId this Instrument did not open or already closed.
+  void execute(SessionId session, std::string_view line, ReplyHandler on_reply);
 
   /// Advances the sample clock by `samples` sample indexes with no wall-clock pacing, as tests do
-  /// (ADR 0003): every enabled channel is sampled and each capture that fills becomes the latest
-  /// capture.
+  /// (ADR 0003), in sample blocks of at most kMaxBlockLength. Unless the instrument is Stopped,
+  /// every enabled channel is sampled and each capture that fills becomes the latest capture; a
+  /// Single's capture stops the instrument and ends the lines held on it after its block.
   void advance(std::size_t samples);
 
   /// The latest capture, or null before the first capture completes.
@@ -78,6 +88,26 @@ class Instrument {
   /// The `*RST` timebase scale in seconds per division.
   static constexpr double kDefaultTimebaseScale = 1e-3;
 
+  /// What the instrument does with captures. Run state and trigger mode are separate (spec #1).
+  enum class RunState : std::uint8_t {
+    /// Captures are taken continuously (`RUN`, and the `*RST` state).
+    kRunning,
+    /// No capture is taken; the latest capture stays as it is (`STOP`).
+    kStopped,
+    /// One capture is taken, then the instrument is Stopped (`SINGle`). The Single is the pending
+    /// operation `*OPC?` and `*WAI` wait for.
+    kArmedSingle,
+  };
+
+  /// A line `*OPC?` or `*WAI` holds until no operation is pending.
+  struct HeldLine {
+    SessionId session;
+    scpi::Execution execution;
+    ReplyHandler on_reply;
+  };
+
+  /// `RUN`, `STOP`, `SINGle`, and the `*OPC?` and `*WAI` that wait on a Single.
+  void add_run_control_commands();
   void add_generator_commands();
   void add_channel_commands();
   void add_acquisition_commands();
@@ -129,7 +159,7 @@ class Instrument {
                            Keyword TriggerSettings::*field);
 
   /// Applies `change` to the settings of the Generator a `SOURce<n>` command names, from the next
-  /// sample index on.
+  /// sample index on, and discards the capture in progress, so no capture mixes two signals.
   void change_generator(const scpi::Arguments& arguments,
                         const std::function<void(GeneratorSettings&)>& change);
   /// Runs `SOURce<n>:FAULt`: adds a Fault to the Generator the command names, starting at the next
@@ -147,10 +177,18 @@ class Instrument {
   /// Applies `change` to the trigger settings and discards the capture in progress, which restarts
   /// the trigger.
   void change_trigger(const std::function<void(TriggerSettings&)>& change);
-  /// `*RST`: restores every instrument-wide setting, restarts every Generator as if it had run at
-  /// its defaults since sample index 0 with no Faults, and drops the latest capture. The sample
-  /// clock keeps counting and Sessions keep their own state (ADR 0002).
+  /// `*RST`: restores every instrument-wide setting and the Running run state, restarts every
+  /// Generator as if it had run at its defaults since sample index 0 with no Faults, and drops the
+  /// latest capture. The sample clock keeps counting and Sessions keep their own state (ADR 0002).
   void reset();
+  /// Enters `state`. Stopped and Armed-single drop the capture in progress, so the next capture
+  /// starts with the samples after the change; Running keeps it.
+  void enter(RunState state);
+  /// When no operation is pending, carries on every held line, in the order they were held, and
+  /// passes the reply of each line that ends to its handler.
+  void resume_held();
+  /// Whether an operation is pending: a Single is armed (GLOSSARY: Pending operation).
+  [[nodiscard]] bool pending() const { return run_state_ == RunState::kArmedSingle; }
 
   scpi::CommandTree commands_;
   std::unordered_map<SessionId, Session> sessions_;
@@ -165,7 +203,10 @@ class Instrument {
   /// Seconds per division of the display viewport. It never changes what is captured (ADR 0004).
   double timebase_scale_ = kDefaultTimebaseScale;
   TriggerSettings trigger_;
+  RunState run_state_ = RunState::kRunning;
   CaptureAssembler captures_;
+  /// At most one per Session: a Session with a held line sends no other.
+  std::vector<HeldLine> held_;
 };
 
 }  // namespace openscope
