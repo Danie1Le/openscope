@@ -40,6 +40,16 @@ static_assert(kFunctionKeywords.size() == static_cast<std::size_t>(GeneratorFunc
 constexpr std::array<std::string_view, 3> kFaultKeywords{"GLITch", "DROPout", "FSTep"};
 static_assert(kFaultKeywords.size() == static_cast<std::size_t>(FaultKind::kFrequencyStep) + 1);
 
+/// The widest magnitude any kind of Fault accepts. The command tree rejects past it; the handler
+/// then applies the limit of the kind that was named.
+double largest_fault_magnitude() {
+  double largest = 0.0;
+  for (std::size_t kind = 0; kind < kFaultKeywords.size(); ++kind) {
+    largest = std::max(largest, fault_limits(static_cast<FaultKind>(kind)).max_magnitude);
+  }
+  return largest;
+}
+
 /// The `WAVeform:FORMat` keywords, in WaveformFormat order.
 constexpr std::array<std::string_view, 2> kFormatKeywords{"ASCii", "REAL"};
 static_assert(kFormatKeywords.size() == static_cast<std::size_t>(WaveformFormat::kReal) + 1);
@@ -145,11 +155,12 @@ void Instrument::add_generator_commands() {
                        &GeneratorSettings::noise);
   // An action, not a setting: it has no query. The magnitude's unit depends on the kind of fault
   // (volts or hertz), so the parameter takes none; each kind's own limit is checked in the handler.
+  const double widest = largest_fault_magnitude();
   commands_.add(
       {.header = "SOURce<1-4>:FAULt",
        .parameters = {scpi::KeywordParameter{
                           .choices = {kFaultKeywords.begin(), kFaultKeywords.end()}},
-                      NumericParameter{.min = -1e9, .max = 1e9, .unit = ""},
+                      NumericParameter{.min = -widest, .max = widest, .unit = ""},
                       NumericParameter{
                           .min = 1.0, .max = static_cast<double>(kMaxFaultDuration), .unit = ""}},
        .optional_parameters = 2,
