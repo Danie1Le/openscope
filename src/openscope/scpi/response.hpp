@@ -5,6 +5,7 @@
 #include <format>
 #include <span>
 #include <string>
+#include <string_view>
 
 #include "openscope/scpi/ascii.hpp"
 
@@ -18,6 +19,9 @@ template <std::floating_point Real>
 std::string format_real(Real value) {
   return ascii::to_upper(std::format("{}", value));
 }
+
+/// SCPI-99's not-a-number value, which a query replies in place of a value it does not have.
+inline constexpr std::string_view kNotANumber = "9.91E37";
 
 /// The most bytes a definite-length block can carry: its length is at most nine digits.
 inline constexpr std::size_t kMaxBlockBytes = 999'999'999;

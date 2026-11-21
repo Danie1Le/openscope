@@ -1,0 +1,504 @@
+// Amplitude measurements (MEAS:VPP?, VMIN?, VMAX?), the measurement status each result carries
+// (OK, Clipped, or No signal for a measurement that needs edges or cycles; Too few cycles comes
+// with the timing measurements) and the top and base levels the statuses start from.
+
+#include "openscope/measurement.hpp"
+
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include "instrument_fixture.hpp"
+#include "openscope/capture.hpp"
+#include "openscope/instrument.hpp"
+#include "openscope/scpi/response.hpp"
+#include "scpi_session.hpp"
+
+namespace openscope {
+namespace {
+
+using test::captured;
+using test::kDataStaleReply;
+using test::kDataTypeErrorReply;
+using test::kIllegalParameterValueReply;
+using test::kMissingParameterReply;
+using test::kNoErrorReply;
+using test::kParameterNotAllowedReply;
+using test::kResetRecordLength;
+using test::kSettingsConflictReply;
+using test::ScpiSession;
+using testing::Optional;
+using testing::StartsWith;
+
+constexpr auto kClippedReply = R"(-231,"Data questionable;Clipped")";
+
+/// Every amplitude measurement query, short form.
+constexpr std::array<std::string_view, 3> kAmplitudeQueries{"MEAS:VPP?", "MEAS:VMIN?",
+                                                            "MEAS:VMAX?"};
+
+/// Trigger settings under which Auto takes untriggered captures back to back from sample 0: time
+/// zero on the first sample and a level no signal reaches. Measurements read the whole capture, so
+/// these tests need each capture to complete one record length after the last.
+constexpr auto kUntriggeredCaptures = "TRIG:POS 0;LEV 100";
+
+class MeasurementTest : public test::InstrumentFixture {
+ protected:
+  void SetUp() override { session.send(kUntriggeredCaptures); }
+};
+
+TEST_F(MeasurementTest, CleanSineHasTheGeneratorsPeaks) {
+  instrument.advance(kResetRecordLength);
+
+  EXPECT_EQ(session.send("MEAS:VMAX? CHAN1"), "1");
+  EXPECT_EQ(session.send("MEAS:VMIN? CHAN1"), "-1");
+  EXPECT_EQ(session.send("MEAS:VPP? CHAN1"), "2");
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+// 1024 Hz at 2^20 samples per second puts exactly 512 high and 512 low samples in each cycle, so
+// every value is exact.
+TEST_F(MeasurementTest, SquareWaveMeasurementsAreExact) {
+  session.send("ACQ:SRAT 1048576;POIN 10240;:SOUR1:FUNC SQU;FREQ 1024;AMPL 2;OFFS 0.5");
+  instrument.advance(10'240);
+
+  EXPECT_EQ(session.send("MEAS:VMAX? CHAN1"), "1.5");
+  EXPECT_EQ(session.send("MEAS:VMIN? CHAN1"), "-0.5");
+  EXPECT_EQ(session.send("MEAS:VPP? CHAN1"), "2");
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+// A flat signal has an amplitude: No signal is only for measurements that need edges or cycles.
+TEST_F(MeasurementTest, FlatSignalHasRealAmplitudeValues) {
+  session.send("SOUR1:FUNC DC;OFFS 0.75");
+  instrument.advance(kResetRecordLength);
+
+  EXPECT_EQ(session.send("MEAS:VPP? CHAN1;VMIN? CHAN1;VMAX? CHAN1"), "0;0.75;0.75");
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+// Noise alone spreads the samples, and the amplitude measurements report that spread.
+TEST_F(MeasurementTest, NoiseAloneHasRealAmplitudeValues) {
+  session.send("SOUR1:FUNC DC;NOIS 0.1");
+  instrument.advance(kResetRecordLength);
+  const auto samples = captured(instrument, 1).samples;
+  const auto [lowest, highest] = std::ranges::minmax(samples);
+
+  EXPECT_EQ(session.send("MEAS:VPP? CHAN1"), scpi::format_real(highest - lowest));
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+TEST_F(MeasurementTest, ClippedReturnsTheValueWithAWarning) {
+  session.send("CHAN1:SCAL 0.2");
+  instrument.advance(kResetRecordLength);
+
+  EXPECT_EQ(session.send("MEAS:VPP? CHAN1"), "1.6");
+  EXPECT_EQ(session.send("MEAS:VMAX? CHAN1"), "0.8");
+  EXPECT_EQ(session.next_error(), kClippedReply);
+  EXPECT_EQ(session.next_error(), kClippedReply);
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+// Clipped means a sample hit an input-range limit, so a peak exactly at the limit counts. The
+// input range here is -6 V to 2 V, so only the top limit is in reach.
+TEST_F(MeasurementTest, PeakAtTheTopLimitIsClipped) {
+  session.send("CHAN1:OFFS -2;:SOUR1:AMPL 4");
+  instrument.advance(kResetRecordLength);
+  EXPECT_EQ(session.send("MEAS:VMAX? CHAN1"), "2");
+  EXPECT_EQ(session.next_error(), kClippedReply);
+
+  session.send("SOUR1:AMPL 3.99");
+  instrument.advance(kResetRecordLength);
+  EXPECT_EQ(session.send("MEAS:VMAX? CHAN1"), "1.995");
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+// The input range here is -2 V to 6 V, so only the bottom limit is in reach.
+TEST_F(MeasurementTest, PeakAtTheBottomLimitIsClipped) {
+  session.send("CHAN1:OFFS 2;:SOUR1:AMPL 4");
+  instrument.advance(kResetRecordLength);
+  EXPECT_EQ(session.send("MEAS:VMIN? CHAN1"), "-2");
+  EXPECT_EQ(session.next_error(), kClippedReply);
+
+  session.send("SOUR1:AMPL 3.99");
+  instrument.advance(kResetRecordLength);
+  EXPECT_EQ(session.send("MEAS:VMIN? CHAN1"), "-1.995");
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+// A signal held flat at a limit still has an amplitude, which may be wrong.
+TEST_F(MeasurementTest, SignalClippedFlatIsClipped) {
+  session.send("SOUR1:FUNC DC;OFFS 10");
+  instrument.advance(kResetRecordLength);
+
+  EXPECT_EQ(session.send("MEAS:VMAX? CHAN1;VPP? CHAN1"), "4;0");
+  EXPECT_EQ(session.next_error(), kClippedReply);
+  EXPECT_EQ(session.next_error(), kClippedReply);
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+// A status entry reports on a result that was returned, so it does not stop the line.
+TEST_F(MeasurementTest, StatusEntriesLetTheRestOfTheLineRun) {
+  session.send("CHAN1:SCAL 0.2");
+  instrument.advance(kResetRecordLength);
+  EXPECT_THAT(session.send("MEAS:VMAX? CHAN1;VMIN? CHAN1;*IDN?"),
+              Optional(StartsWith("0.8;-0.8;OpenScope,")));
+
+  EXPECT_EQ(session.next_error(), kClippedReply);
+  EXPECT_EQ(session.next_error(), kClippedReply);
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+// Each query of a result reports its status, cached or not, and only to the Session that asked.
+TEST_F(MeasurementTest, EveryQueryReportsItsStatusToItsOwnSession) {
+  ScpiSession other{instrument};
+  session.send("CHAN1:SCAL 0.2");
+  instrument.advance(kResetRecordLength);
+
+  session.send("MEAS:VPP? CHAN1");
+  session.send("MEAS:VPP? CHAN1");
+
+  EXPECT_EQ(other.next_error(), kNoErrorReply);
+  EXPECT_EQ(session.next_error(), kClippedReply);
+  EXPECT_EQ(session.next_error(), kClippedReply);
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+TEST_F(MeasurementTest, EveryEnabledChannelCanBeMeasured) {
+  session.send("CHAN2:DISP ON;:CHAN3:DISP ON;:CHAN4:DISP ON");
+  session.send("SOUR2:AMPL 3;:SOUR3:AMPL 4;:SOUR4:AMPL 5");
+  instrument.advance(kResetRecordLength);
+
+  EXPECT_EQ(session.send("MEAS:VPP? CHAN1"), "2");
+  EXPECT_EQ(session.send("MEAS:VPP? CHAN2"), "3");
+  EXPECT_EQ(session.send("MEASure:VPP? CHANnel3"), "4");
+  EXPECT_EQ(session.send("meas:vpp? chan4"), "5");
+  EXPECT_EQ(session.send("MEAS:VPP? CHAN"), "2");
+}
+
+TEST_F(MeasurementTest, LongFormsAreAccepted) {
+  session.send("SOUR1:OFFS 0.5");
+  instrument.advance(kResetRecordLength);
+
+  EXPECT_EQ(session.send("MEASure:VMAX? CHANnel1"), "1.5");
+  EXPECT_EQ(session.send("MEASure:VMIN? CHANnel1"), "-0.5");
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+TEST_F(MeasurementTest, DisabledChannelIsASettingsConflict) {
+  instrument.advance(kResetRecordLength);
+
+  for (const std::string_view query : kAmplitudeQueries) {
+    EXPECT_EQ(session.send(std::string(query) + " CHAN2"), std::nullopt) << query;
+    EXPECT_EQ(session.next_error(), kSettingsConflictReply) << query;
+  }
+  EXPECT_EQ(session.send("*IDN?;:MEAS:VPP? CHAN3;*IDN?"), session.send("*IDN?"));
+  EXPECT_EQ(session.next_error(), kSettingsConflictReply);
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+TEST_F(MeasurementTest, ChannelEnabledSinceTheLatestCaptureIsASettingsConflict) {
+  instrument.advance(kResetRecordLength);
+
+  session.send("CHAN2:DISP ON");
+
+  EXPECT_EQ(session.send("MEAS:VPP? CHAN2"), std::nullopt);
+  EXPECT_EQ(session.next_error(), kSettingsConflictReply);
+}
+
+TEST_F(MeasurementTest, ChannelDisabledSinceTheLatestCaptureCanStillBeMeasured) {
+  instrument.advance(kResetRecordLength);
+
+  session.send("CHAN1:DISP OFF");
+
+  EXPECT_EQ(session.send("MEAS:VPP? CHAN1"), "2");
+}
+
+TEST_F(MeasurementTest, NoCaptureYetIsStaleData) {
+  instrument.advance(kResetRecordLength - 1);
+
+  EXPECT_EQ(session.send("MEAS:VPP? CHAN1"), std::nullopt);
+  EXPECT_EQ(session.next_error(), kDataStaleReply);
+
+  instrument.advance(1);
+  session.send("*RST");
+  EXPECT_EQ(session.send("MEAS:VMIN? CHAN1"), std::nullopt);
+  EXPECT_EQ(session.next_error(), kDataStaleReply);
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+// Results are cached per capture: a later capture is measured afresh, while settings changed since
+// the latest capture do not touch its results.
+TEST_F(MeasurementTest, ResultsFollowTheLatestCapture) {
+  instrument.advance(kResetRecordLength);
+  EXPECT_EQ(session.send("MEAS:VPP? CHAN1"), "2");
+
+  session.send("SOUR1:AMPL 1");
+  EXPECT_EQ(session.send("MEAS:VPP? CHAN1"), "2");
+
+  instrument.advance(kResetRecordLength);
+  EXPECT_EQ(session.send("MEAS:VPP? CHAN1"), "1");
+
+  session.send("*RST");
+  session.send(kUntriggeredCaptures);
+  instrument.advance(kResetRecordLength);
+  EXPECT_EQ(session.send("MEAS:VPP? CHAN1"), "2");
+}
+
+TEST_F(MeasurementTest, OneSampleCaptureIsMeasured) {
+  session.send("ACQ:POIN 1;:SOUR1:FUNC DC;OFFS 0.5");
+  instrument.advance(1);
+
+  EXPECT_EQ(session.send("MEAS:VPP? CHAN1;VMIN? CHAN1;VMAX? CHAN1"), "0;0.5;0.5");
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+TEST_F(MeasurementTest, TwoSampleCaptureHasBothLevels) {
+  session.send("ACQ:POIN 2;:SOUR1:FUNC SQU;FREQ 500KHZ");
+  instrument.advance(2);
+
+  EXPECT_EQ(session.send("MEAS:VPP? CHAN1;VMAX? CHAN1;VMIN? CHAN1"), "2;1;-1");
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+TEST_F(MeasurementTest, ChannelParameterIsRequiredAndChecked) {
+  instrument.advance(kResetRecordLength);
+
+  session.send("MEAS:VPP?");
+  session.send("MEAS:VPP? CHAN5");
+  session.send("MEAS:VPP? 1");
+  session.send("MEAS:VPP? CHAN1,CHAN2");
+  session.send("MEAS:VPP? SOUR1");
+
+  EXPECT_EQ(session.next_error(), kMissingParameterReply);
+  EXPECT_EQ(session.next_error(), kIllegalParameterValueReply);
+  EXPECT_EQ(session.next_error(), kDataTypeErrorReply);
+  EXPECT_EQ(session.next_error(), kParameterNotAllowedReply);
+  EXPECT_EQ(session.next_error(), kIllegalParameterValueReply);
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+// A record longer than one sample block is measured as a whole.
+TEST_F(MeasurementTest, LongestRecordIsMeasuredWhole) {
+  session.send("ACQ:POIN 1048576;:SOUR1:FREQ 10");
+  instrument.advance(1'048'576);
+
+  EXPECT_EQ(session.send("MEAS:VMAX? CHAN1;VMIN? CHAN1"), "1;-1");
+}
+
+/// A measurement that needs a signal, as the timing measurements do; its value is top minus base.
+constexpr Measurement kNeedsSignal{
+    .mnemonic = "TEST",
+    .measure = [](const MeasuredSignal& signal) -> std::optional<double> {
+      return signal.levels.top - signal.levels.base;
+    },
+    .needs_signal = true};
+
+/// kNeedsSignal of channel 1 of `instrument`'s latest capture.
+MeasurementResult measure_needing_signal(const Instrument& instrument) {
+  const CapturedChannel channel = captured(instrument, 1);
+  if (channel.samples.empty()) {
+    return {.status = MeasurementStatus::kOk, .value = std::nullopt};  // captured() failed.
+  }
+  return evaluate(kNeedsSignal, channel, find_levels(channel.samples));
+}
+
+// No signal is top minus base under 0.2 vertical divisions: at 1.25 V/div that is 0.25 V, which
+// a square wave of exactly 0.25 Vpp reaches.
+TEST_F(MeasurementTest, NoSignalBelowTwoTenthsOfADivision) {
+  session.send("CHAN1:SCAL 1.25;:SOUR1:FUNC SQU;AMPL 0.25");
+  instrument.advance(kResetRecordLength);
+  EXPECT_EQ(measure_needing_signal(instrument).status, MeasurementStatus::kOk);
+
+  session.send("SOUR1:AMPL 0.2499");
+  instrument.advance(kResetRecordLength);
+  const MeasurementResult result = measure_needing_signal(instrument);
+  EXPECT_EQ(result.status, MeasurementStatus::kNoSignal);
+  EXPECT_EQ(result.value, std::nullopt);
+}
+
+// Top and base are the most common levels, not the extremes: noise alone spreads the samples over
+// more than 0.2 div, but its histogram has no separate high and low level.
+TEST_F(MeasurementTest, NoiseAloneIsNoSignal) {
+  session.send("SOUR1:FUNC DC;NOIS 0.1");
+  instrument.advance(kResetRecordLength);
+  const auto samples = captured(instrument, 1).samples;
+  const auto [lowest, highest] = std::ranges::minmax(samples);
+  ASSERT_GT(highest - lowest, 0.2F);
+
+  EXPECT_EQ(measure_needing_signal(instrument).status, MeasurementStatus::kNoSignal);
+}
+
+// A signal held flat at a limit has no edges or cycles, so No signal wins over Clipped.
+TEST_F(MeasurementTest, SignalClippedFlatIsNoSignalForAMeasurementThatNeedsASignal) {
+  session.send("SOUR1:FUNC DC;OFFS 10");
+  instrument.advance(kResetRecordLength);
+
+  EXPECT_EQ(measure_needing_signal(instrument).status, MeasurementStatus::kNoSignal);
+}
+
+TEST_F(MeasurementTest, NoAmplitudeMeasurementNeedsASignal) {
+  for (const Measurement& measurement : measurements()) {
+    EXPECT_FALSE(measurement.needs_signal) << measurement.mnemonic;
+  }
+}
+
+/// `length` samples of a square wave between 0 V and 1 V with a period of 100 samples: low for
+/// samples 0 to 49 of each period, high for 50 to 99.
+std::vector<float> square_wave(std::size_t length) {
+  std::vector<float> samples(length);
+  for (std::size_t index = 0; index < length; ++index) {
+    samples[index] = index % 100 < 50 ? 0.0F : 1.0F;
+  }
+  return samples;
+}
+
+/// The length of the hand-built captures that top and base are checked on.
+constexpr std::size_t kLength = 10'000;
+
+TEST(SignalLevelsTest, SquareWaveLevelsAreItsHighAndLow) {
+  const SignalLevels levels = find_levels(square_wave(kLength));
+
+  EXPECT_DOUBLE_EQ(levels.top, 1.0);
+  EXPECT_DOUBLE_EQ(levels.base, 0.0);
+}
+
+/// Samples of the square wave overwritten with one voltage: a spike or a short glitch.
+struct Disturbance {
+  std::size_t first;
+  std::size_t length;
+  float volts;
+};
+
+/// A one-sample spike and a 20-sample glitch out from each level of square_wave().
+constexpr std::array kDisturbances{Disturbance{.first = 75, .length = 1, .volts = 5.0F},
+                                   Disturbance{.first = 25, .length = 1, .volts = -4.0F},
+                                   Disturbance{.first = 150, .length = 20, .volts = 3.0F},
+                                   Disturbance{.first = 210, .length = 20, .volts = -2.0F}};
+
+/// Overwrites `samples` with `disturbance`.
+void disturb(std::vector<float>& samples, const Disturbance& disturbance) {
+  std::fill_n(samples.begin() + static_cast<std::ptrdiff_t>(disturbance.first), disturbance.length,
+              disturbance.volts);
+}
+
+class DisturbedSquareWaveTest : public testing::TestWithParam<Disturbance> {};
+
+// Spec story 57: noise spikes do not distort top and base. Each disturbance is alone on its side
+// of the wave, so it alone sets the maximum or minimum.
+TEST_P(DisturbedSquareWaveTest, MovesNeitherTopNorBase) {
+  const Disturbance disturbance = GetParam();
+  std::vector<float> samples = square_wave(kLength);
+  disturb(samples, disturbance);
+
+  const SignalLevels levels = find_levels(samples);
+
+  EXPECT_DOUBLE_EQ(levels.top, 1.0);
+  EXPECT_DOUBLE_EQ(levels.base, 0.0);
+  EXPECT_DOUBLE_EQ(std::max(levels.maximum, -levels.minimum), std::abs(disturbance.volts));
+}
+
+INSTANTIATE_TEST_SUITE_P(SpikesAndShortGlitches, DisturbedSquareWaveTest,
+                         testing::ValuesIn(kDisturbances));
+
+// Outliers at both ends are set aside together.
+TEST(SignalLevelsTest, SpikesAndGlitchesOnBothLevelsAtOnce) {
+  std::vector<float> samples = square_wave(kLength);
+  for (const Disturbance& disturbance : kDisturbances) {
+    disturb(samples, disturbance);
+  }
+
+  const SignalLevels levels = find_levels(samples);
+
+  EXPECT_DOUBLE_EQ(levels.top, 1.0);
+  EXPECT_DOUBLE_EQ(levels.base, 0.0);
+}
+
+// In a short capture one sample is already 1/128 of it, but a settled level needs two.
+TEST(SignalLevelsTest, SingleSpikeInAShortCaptureIsNotTop) {
+  std::vector<float> samples = square_wave(100);
+  samples.at(75) = 5.0F;
+
+  const SignalLevels levels = find_levels(samples);
+
+  EXPECT_DOUBLE_EQ(levels.top, 1.0);
+  EXPECT_DOUBLE_EQ(levels.base, 0.0);
+}
+
+// Setting the lone extremes of two or three samples aside would leave too few for a level.
+TEST(SignalLevelsTest, TinyCapturesKeepEverySample) {
+  for (const std::vector<float>& samples :
+       {std::vector<float>{-1.0F, 1.0F}, std::vector<float>{-1.0F, 0.0F, 1.0F}}) {
+    const SignalLevels levels = find_levels(samples);
+
+    EXPECT_DOUBLE_EQ(levels.top, 1.0) << samples.size();
+    EXPECT_DOUBLE_EQ(levels.base, -1.0) << samples.size();
+  }
+}
+
+// A level counts once it holds 1/128 of the samples (78.125 of 10000): a pulse of 79 samples is
+// top, one of 78 is a glitch.
+TEST(SignalLevelsTest, LevelHoldingOneSampleIn128IsSettled) {
+  std::vector<float> samples = square_wave(kLength);
+  std::fill_n(samples.begin() + 150, 79, 3.0F);
+  EXPECT_DOUBLE_EQ(find_levels(samples).top, 3.0);
+
+  samples.at(150) = 1.0F;
+  EXPECT_DOUBLE_EQ(find_levels(samples).top, 1.0);
+}
+
+TEST(SignalLevelsTest, SpikeOnAFlatSignalIsNeitherTopNorBase) {
+  std::vector<float> samples(kLength, 0.5F);
+  samples.at(5000) = 2.5F;
+
+  const SignalLevels levels = find_levels(samples);
+
+  EXPECT_DOUBLE_EQ(levels.top, 0.5);
+  EXPECT_DOUBLE_EQ(levels.base, 0.5);
+}
+
+// Spec story 57 on a Generator's own glitches: a one-sample glitch up from the square wave's high
+// level and a 20-sample glitch up from its low level (to 1.5 V, between the high level and the
+// spike) move neither top nor base.
+TEST_F(MeasurementTest, GeneratorGlitchesMoveNeitherTopNorBase) {
+  session.send("SOUR1:FUNC SQU");
+  instrument.advance(2250);  // A quarter into a 1 kHz cycle: the high level.
+  session.send("SOUR1:FAUL GLIT,2.5");
+  instrument.advance(5500);  // Three quarters into a cycle: the low level.
+  session.send("SOUR1:FAUL GLIT,2.5,20");
+  instrument.advance(kResetRecordLength - 7750);
+
+  const SignalLevels levels = find_levels(captured(instrument, 1).samples);
+
+  EXPECT_DOUBLE_EQ(levels.maximum, 3.5);
+  EXPECT_DOUBLE_EQ(levels.minimum, -1.0);
+  EXPECT_DOUBLE_EQ(levels.top, 1.0);
+  EXPECT_DOUBLE_EQ(levels.base, -1.0);
+}
+
+// A triangle spends equal time at every level, so its histogram has no mode to take: top and base
+// fall back to its extremes, and a spike past them is not one of them.
+TEST_F(MeasurementTest, SignalWithoutSettledLevelsFallsBackToItsExtremes) {
+  session.send("SOUR1:FUNC TRI");
+  instrument.advance(kResetRecordLength);
+  std::vector<float> samples = captured(instrument, 1).samples;
+  const auto [lowest, highest] = std::ranges::minmax(samples);
+  EXPECT_DOUBLE_EQ(find_levels(samples).top, highest);
+  EXPECT_DOUBLE_EQ(find_levels(samples).base, lowest);
+
+  samples.at(1234) = 3.0F;
+  samples.at(4321) = -3.0F;
+  const SignalLevels levels = find_levels(samples);
+  EXPECT_DOUBLE_EQ(levels.top, highest);
+  EXPECT_DOUBLE_EQ(levels.base, lowest);
+}
+
+}  // namespace
+}  // namespace openscope

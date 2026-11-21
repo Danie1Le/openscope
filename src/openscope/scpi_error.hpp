@@ -37,6 +37,15 @@ inline const ScpiError kHeaderSuffixOutOfRange{.code = -114,
 /// A numeric parameter's suffix is not a unit, with an optional multiplier, the parameter accepts.
 inline const ScpiError kInvalidSuffix{.code = -131, .message = "Invalid suffix"};
 
+/// A measurement that needs edges or cycles with no value because top minus base is under 0.2
+/// vertical divisions (measurement status No signal). The query still replies, with SCPI's
+/// not-a-number value, so the rest of the line runs.
+inline const ScpiError kNoSignal{.code = -200, .message = "Execution error;No signal"};
+
+/// A measurement with no value because the capture holds under one whole cycle or no complete edge
+/// (measurement status Too few cycles). The query still replies, with SCPI's not-a-number value.
+inline const ScpiError kTooFewCycles{.code = -200, .message = "Execution error;Too few cycles"};
+
 /// A query on a channel that is not in the latest capture, because it was not enabled when the
 /// capture was taken; or a fault injected into a Generator that already holds as many as it can.
 inline const ScpiError kSettingsConflict{.code = -221, .message = "Settings conflict"};
@@ -50,6 +59,10 @@ inline const ScpiError kIllegalParameterValue{.code = -224, .message = "Illegal 
 /// A query for capture data when there is no latest capture: before the first completes, or after
 /// *RST until the next does.
 inline const ScpiError kDataCorruptOrStale{.code = -230, .message = "Data corrupt or stale"};
+
+/// A warning that a measured value was replied although a sample hit an input-range limit
+/// (measurement status Clipped), so the value may be wrong.
+inline const ScpiError kClipped{.code = -231, .message = "Data questionable;Clipped"};
 
 /// Recorded in place of the newest error when a Session's error queue is full.
 inline const ScpiError kQueueOverflow{.code = -350, .message = "Queue overflow"};

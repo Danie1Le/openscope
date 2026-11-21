@@ -22,6 +22,7 @@
 #include "openscope/fft.hpp"
 #include "openscope/fft_window.hpp"
 #include "openscope/generator.hpp"
+#include "openscope/measurement.hpp"
 #include "openscope/sample_block.hpp"
 #include "openscope/sample_clock.hpp"
 #include "openscope/scpi/command_tree.hpp"
@@ -115,6 +116,24 @@ Value value_of(const Arguments& arguments, std::size_t index = 0) {
   return std::get<Value>(arguments.values.at(index));
 }
 
+/// A parameter naming a channel: `CHANnel<1-4>`.
+scpi::KeywordParameter channel_parameter() { return {.choices = {"CHANnel<1-4>"}}; }
+
+/// The error queue entry that reports a measurement's `status`, or nullopt for OK.
+std::optional<ScpiError> status_entry(MeasurementStatus status) {
+  switch (status) {
+    case MeasurementStatus::kOk:
+      break;
+    case MeasurementStatus::kNoSignal:
+      return kNoSignal;
+    case MeasurementStatus::kClipped:
+      return kClipped;
+    case MeasurementStatus::kTooFewCycles:
+      return kTooFewCycles;
+  }
+  return std::nullopt;
+}
+
 /// A count of samples sent as a number: a fraction rounds to the nearest whole number, half away
 /// from zero.
 std::size_t whole_samples(double count) { return static_cast<std::size_t>(std::llround(count)); }
@@ -157,6 +176,7 @@ Instrument::Instrument(std::uint64_t seed)
   add_trigger_commands();
   add_waveform_commands();
   add_fft_commands();
+  add_measurement_commands();
 }
 
 void Instrument::add_run_control_commands() {
@@ -376,6 +396,32 @@ void Instrument::add_fft_commands() {
        }});
 }
 
+void Instrument::add_measurement_commands() {
+  const std::span<const Measurement> all = measurements();
+  for (std::size_t measurement = 0; measurement < all.size(); ++measurement) {
+    commands_.add({.header = std::format("MEASure:{}?", all[measurement].mnemonic),
+                   .parameters = {channel_parameter()},
+                   .handler = [this, measurement](Session& caller, const Arguments& arguments) {
+                     const std::size_t channel = value_of<scpi::Choice>(arguments).suffix;
+                     return reply_with_source(channel, [&](const Capture&, const CapturedChannel&) {
+                       // The engine keys its cache on the shared capture, which is the one
+                       // reply_with_source just checked: nothing advances the sample clock in
+                       // between.
+                       const MeasurementResult result =
+                           measurements_.measure(captures_.latest(), channel, measurement);
+                       // The status entry reports on a reply that was given, so unlike an execution
+                       // error it goes on the queue without stopping the line.
+                       if (std::optional<ScpiError> entry = status_entry(result.status)) {
+                         caller.push_error(std::move(*entry));
+                       }
+                       // Written as float32, the precision of the samples the value comes from.
+                       return result.value ? scpi::format_real(static_cast<float>(*result.value))
+                                           : std::string(scpi::kNotANumber);
+                     });
+                   }});
+  }
+}
+
 scpi::HandlerResult Instrument::reply_with_source(
     std::size_t source,
     const std::function<std::string(const Capture&, const CapturedChannel&)>& reply) const {
@@ -468,7 +514,7 @@ void Instrument::add_channel_choice(std::string_view header,
                                     std::function<void(Session&, std::size_t)> set,
                                     std::function<std::size_t(Session&)> get) {
   add_setting(
-      header, scpi::KeywordParameter{.choices = {"CHANnel<1-4>"}},
+      header, channel_parameter(),
       [set = std::move(set)](Session& caller, const Arguments& arguments) {
         set(caller, value_of<scpi::Choice>(arguments).suffix);
       },
