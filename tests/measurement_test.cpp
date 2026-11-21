@@ -1,11 +1,15 @@
-// Amplitude measurements (MEAS:VPP?, VMIN?, VMAX?) and the measurement status each result
-// carries: OK, No signal or Clipped (Too few cycles comes with the timing measurements).
+// Amplitude measurements (MEAS:VPP?, VMIN?, VMAX?, VAV?, VRMS?) and the measurement status each
+// result carries: OK, No signal or Clipped (Too few cycles comes with the timing measurements).
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <array>
+#include <charconv>
+#include <cmath>
+#include <format>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -26,6 +30,7 @@ using test::kParameterNotAllowedReply;
 using test::kResetRecordLength;
 using test::kSettingsConflictReply;
 using test::ScpiSession;
+using testing::DoubleNear;
 using testing::Optional;
 using testing::StartsWith;
 
@@ -35,8 +40,20 @@ constexpr auto kNoSignalReply = R"(-200,"Execution error;No signal")";
 constexpr auto kClippedReply = R"(-231,"Data questionable;Clipped")";
 
 /// Every amplitude measurement query, short form.
-constexpr std::array<std::string_view, 3> kAmplitudeQueries{"MEAS:VPP?", "MEAS:VMIN?",
-                                                            "MEAS:VMAX?"};
+constexpr std::array<std::string_view, 5> kAmplitudeQueries{"MEAS:VPP?", "MEAS:VMIN?", "MEAS:VMAX?",
+                                                            "MEAS:VAV?", "MEAS:VRMS?"};
+
+/// The number a measurement query replied, as a client parses it. Fails the test and returns NaN
+/// when the reply is missing or not one number.
+double number(const std::optional<std::string>& reply) {
+  const std::string text = reply.value_or("");
+  double value = std::nan("");
+  const char* const end = std::to_address(text.cend());
+  if (text.empty() || std::from_chars(text.data(), end, value).ptr != end) {
+    ADD_FAILURE() << "not a number: " << text;
+  }
+  return value;
+}
 
 using MeasurementTest = test::InstrumentFixture;
 
@@ -50,7 +67,7 @@ TEST_F(MeasurementTest, CleanSineHasTheGeneratorsPeaks) {
 }
 
 // 1024 Hz at 2^20 samples per second puts exactly 512 high and 512 low samples in each cycle, so
-// every value is exact.
+// every value is exact: the mean is the offset and the RMS is sqrt((1.5^2 + 0.5^2) / 2).
 TEST_F(MeasurementTest, SquareWaveMeasurementsAreExact) {
   session.send("ACQ:SRAT 1048576;POIN 10240;:SOUR1:FUNC SQU;FREQ 1024;AMPL 2;OFFS 0.5");
   instrument.advance(10'240);
@@ -58,8 +75,43 @@ TEST_F(MeasurementTest, SquareWaveMeasurementsAreExact) {
   EXPECT_EQ(session.send("MEAS:VMAX? CHAN1"), "1.5");
   EXPECT_EQ(session.send("MEAS:VMIN? CHAN1"), "-0.5");
   EXPECT_EQ(session.send("MEAS:VPP? CHAN1"), "2");
+  EXPECT_EQ(session.send("MEAS:VAV? CHAN1"), "0.5");
+  EXPECT_EQ(session.send("MEAS:VRMS? CHAN1"), "1.118034");
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
+
+/// One clean sine: its Generator settings and the vertical scale that keeps it unclipped.
+struct SineCase {
+  double amplitude;
+  double frequency;
+  double offset;
+  double scale;
+};
+
+class SineAccuracyTest : public MeasurementTest, public testing::WithParamInterface<SineCase> {};
+
+// NFR-5: peak-to-peak and RMS within 1% of the Generator's ground truth on a clean sine, including
+// captures that end part-way through a cycle. With an offset the capture holds whole cycles, since
+// a part cycle shifts the mean and so the RMS of an offset sine by more than 1%.
+TEST_P(SineAccuracyTest, PeakToPeakAndRmsAreWithinOnePercent) {
+  const SineCase sine = GetParam();
+  session.send(std::format("SOUR1:AMPL {};FREQ {};OFFS {};:CHAN1:SCAL {}", sine.amplitude,
+                           sine.frequency, sine.offset, sine.scale));
+  instrument.advance(kResetRecordLength);
+
+  const double peak = sine.amplitude / 2.0;
+  const double rms = std::sqrt((sine.offset * sine.offset) + (peak * peak / 2.0));
+  EXPECT_THAT(number(session.send("MEAS:VPP? CHAN1")),
+              DoubleNear(sine.amplitude, 0.01 * sine.amplitude));
+  EXPECT_THAT(number(session.send("MEAS:VRMS? CHAN1")), DoubleNear(rms, 0.01 * rms));
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+INSTANTIATE_TEST_SUITE_P(CleanSines, SineAccuracyTest,
+                         testing::Values(SineCase{2.0, 1e3, 0.0, 1.0},
+                                         SineCase{5.0, 1234.5, 0.0, 2.0},
+                                         SineCase{0.5, 3.3e3, 0.0, 0.2},
+                                         SineCase{6.0, 1.5e3, -1.5, 1.5}));
 
 TEST_F(MeasurementTest, FlatSignalIsNoSignalForEveryMeasurement) {
   session.send("SOUR1:FUNC DC;OFFS 0.75");
@@ -208,6 +260,7 @@ TEST_F(MeasurementTest, LongFormsAreAccepted) {
 
   EXPECT_EQ(session.send("MEASure:VMAX? CHANnel1"), "1.5");
   EXPECT_EQ(session.send("MEASure:VMIN? CHANnel1"), "-0.5");
+  EXPECT_EQ(session.send("MEASure:VAVerage? CHANnel1"), session.send("MEAS:VAV? CHAN1"));
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 
@@ -282,7 +335,7 @@ TEST_F(MeasurementTest, TwoSampleCaptureHasBothLevels) {
   session.send("ACQ:POIN 2;:SOUR1:FUNC SQU;FREQ 500KHZ");
   instrument.advance(2);
 
-  EXPECT_EQ(session.send("MEAS:VPP? CHAN1;VMAX? CHAN1;VMIN? CHAN1"), "2;1;-1");
+  EXPECT_EQ(session.send("MEAS:VPP? CHAN1;VAV? CHAN1;VRMS? CHAN1"), "2;0;1");
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 
@@ -309,6 +362,7 @@ TEST_F(MeasurementTest, LongestRecordIsMeasuredWhole) {
   instrument.advance(1'048'576);
 
   EXPECT_EQ(session.send("MEAS:VMAX? CHAN1;VMIN? CHAN1"), "1;-1");
+  EXPECT_THAT(number(session.send("MEAS:VRMS? CHAN1")), DoubleNear(std::sqrt(0.5), 0.01));
 }
 
 }  // namespace
