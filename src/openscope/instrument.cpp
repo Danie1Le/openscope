@@ -17,6 +17,7 @@
 
 #include "openscope/capture.hpp"
 #include "openscope/channel.hpp"
+#include "openscope/fault.hpp"
 #include "openscope/generator.hpp"
 #include "openscope/sample_block.hpp"
 #include "openscope/scpi/command_tree.hpp"
@@ -34,6 +35,10 @@ using scpi::NumericParameter;
 constexpr std::array<std::string_view, 6> kFunctionKeywords{"SINusoid", "SQUare", "TRIangle",
                                                             "RAMP",     "DC",     "NOISe"};
 static_assert(kFunctionKeywords.size() == static_cast<std::size_t>(GeneratorFunction::kNoise) + 1);
+
+/// The `SOURce<n>:FAULt` keywords, in FaultKind order.
+constexpr std::array<std::string_view, 3> kFaultKeywords{"GLITch", "DROPout", "FSTep"};
+static_assert(kFaultKeywords.size() == static_cast<std::size_t>(FaultKind::kFrequencyStep) + 1);
 
 /// The `WAVeform:FORMat` keywords, in WaveformFormat order.
 constexpr std::array<std::string_view, 2> kFormatKeywords{"ASCii", "REAL"};
@@ -72,11 +77,15 @@ std::array<Generator, kChannelCount> make_generators(std::uint64_t seed, double 
 /// from 0.
 std::size_t channel_of(const Arguments& arguments) { return arguments.suffixes.at(0) - 1; }
 
-/// The value of a command's only parameter.
+/// The value of a command's parameter at `index`, the only one by default.
 template <typename Value>
-Value value_of(const Arguments& arguments) {
-  return std::get<Value>(arguments.values.at(0));
+Value value_of(const Arguments& arguments, std::size_t index = 0) {
+  return std::get<Value>(arguments.values.at(index));
 }
+
+/// A count of samples sent as a number: a fraction rounds to the nearest whole number, half away
+/// from zero.
+std::size_t whole_samples(double count) { return static_cast<std::size_t>(std::llround(count)); }
 
 }  // namespace
 
@@ -134,6 +143,37 @@ void Instrument::add_generator_commands() {
                        &GeneratorSettings::offset);
   add_generator_number("SOURce<1-4>:NOISe", {.min = 0.0, .max = 50.0, .unit = "V"},
                        &GeneratorSettings::noise);
+  // An action, not a setting: it has no query. The magnitude's unit depends on the kind of fault
+  // (volts or hertz), so the parameter takes none; each kind's own limit is checked in the handler.
+  commands_.add(
+      {.header = "SOURce<1-4>:FAULt",
+       .parameters = {scpi::KeywordParameter{
+                          .choices = {kFaultKeywords.begin(), kFaultKeywords.end()}},
+                      NumericParameter{.min = -1e9, .max = 1e9, .unit = ""},
+                      NumericParameter{
+                          .min = 1.0, .max = static_cast<double>(kMaxFaultDuration), .unit = ""}},
+       .optional_parameters = 2,
+       .handler = [this](Session&, const Arguments& arguments) {
+         return inject_fault(arguments);
+       }});
+}
+
+scpi::HandlerResult Instrument::inject_fault(const Arguments& arguments) {
+  const auto kind = static_cast<FaultKind>(value_of<scpi::Choice>(arguments).index);
+  const FaultLimits limits = fault_limits(kind);
+  const std::size_t sent = arguments.values.size();
+  const double magnitude = sent > 1 ? value_of<double>(arguments, 1) : limits.default_magnitude;
+  if (std::abs(magnitude) > limits.max_magnitude) {
+    return kDataOutOfRange;
+  }
+  const std::size_t duration =
+      sent > 2 ? whole_samples(value_of<double>(arguments, 2)) : limits.default_duration;
+  // From the next sample index on, so the fault lands in the next sample block (ADR 0003).
+  const Fault fault{kind, magnitude, duration, clock_.now(), acquisition_.sample_rate};
+  if (!generators_.at(channel_of(arguments)).inject(fault)) {
+    return kSettingsConflict;
+  }
+  return std::nullopt;
 }
 
 void Instrument::add_channel_commands() {
@@ -169,9 +209,7 @@ void Instrument::add_acquisition_commands() {
                        .unit = ""},
       [this](Session&, const Arguments& arguments) {
         change_acquisition([&](AcquisitionSettings& settings) {
-          // A count of samples: a fraction rounds to the nearest whole number, half away from zero.
-          settings.record_length =
-              static_cast<std::size_t>(std::llround(value_of<double>(arguments)));
+          settings.record_length = whole_samples(value_of<double>(arguments));
         });
       },
       [this](Session&, const Arguments&) { return std::to_string(acquisition_.record_length); });
