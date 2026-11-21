@@ -48,10 +48,12 @@ class FftCommandsTest : public test::InstrumentFixture {
 
   /// Sets CH1's sine to `frequency`, takes one capture of kRecordLength samples at 1.024 MS/s (so
   /// the bins are exactly 1 kHz apart and a tone at a whole number of kilohertz sits on a bin) and
-  /// returns the spectrum of the `FFT:SOUR` channel that `FFT:DATA?` replies under `window`.
+  /// returns the spectrum of the `FFT:SOUR` channel that `FFT:DATA?` replies under `window`. The
+  /// trigger level is out of the sine's reach, so Auto completes the capture one record length in.
   std::vector<float> spectrum_of_sine(std::string_view frequency, std::string_view window) {
-    session.send(std::format("ACQ:SRAT 1.024E6;POIN {};:SOUR1:FREQ {};:FFT:WIND {}", kRecordLength,
-                             frequency, window));
+    session.send(
+        std::format("ACQ:SRAT 1.024E6;POIN {};:TRIG:LEV 2;POS 0;:SOUR1:FREQ {};:FFT:WIND {}",
+                    kRecordLength, frequency, window));
     instrument.advance(kRecordLength);
     return decode_float32_block(session.send("FFT:DATA?").value_or(""));
   }
@@ -158,7 +160,7 @@ TEST_F(FftCommandsTest, ARecordLengthOfOneGivesOneDcBin) {
 }
 
 TEST_F(FftCommandsTest, TheLongestRecordLengthGivesHalfAMillionBins) {
-  session.send("ACQ:POIN 1048576");
+  session.send("ACQ:POIN 1048576;:TRIG:LEV 2;POS 0");
   instrument.advance(1'048'576);
 
   EXPECT_EQ(decode_float32_block(session.send("FFT:DATA?").value_or("")).size(), 524'289);
@@ -166,7 +168,7 @@ TEST_F(FftCommandsTest, TheLongestRecordLengthGivesHalfAMillionBins) {
 }
 
 TEST_F(FftCommandsTest, SilenceReadsTheFloorInEveryBin) {
-  session.send("ACQ:POIN 8;:SOUR1:FUNC DC");
+  session.send("ACQ:POIN 8;:TRIG:POS 0;:SOUR1:FUNC DC");
   instrument.advance(8);
 
   EXPECT_EQ(decode_float32_block(session.send("FFT:DATA?").value_or("")),
@@ -174,7 +176,7 @@ TEST_F(FftCommandsTest, SilenceReadsTheFloorInEveryBin) {
 }
 
 TEST_F(FftCommandsTest, SpacingReportsTheSettingsTheCaptureWasTakenWith) {
-  session.send("ACQ:SRAT 2E6;POIN 4096");
+  session.send("ACQ:SRAT 2E6;POIN 4096;:TRIG:LEV 2;POS 0");
   instrument.advance(4096);
 
   session.send("ACQ:SRAT 5;POIN 7");
