@@ -708,14 +708,13 @@ std::optional<AcquiredBlock> Instrument::snapshot() {
   if (run_state_ == RunState::kStopped) {
     return std::nullopt;
   }
-  return AcquiredBlock{
-      .samples = {},
-      .acquisition = acquisition_,
-      .channels = channels_,
-      .trigger = trigger_,
-      .limit = pending() ? CaptureLimit::kFirst : CaptureLimit::kEvery,
-      .generation = generation_,
-      .sequence = next_sequence_++};
+  return AcquiredBlock{.samples = {},
+                       .acquisition = acquisition_,
+                       .channels = channels_,
+                       .trigger = trigger_,
+                       .limit = pending() ? CaptureLimit::kFirst : CaptureLimit::kEvery,
+                       .generation = generation_,
+                       .sequence = next_sequence_++};
 }
 
 Pushed Instrument::assemble(const AcquiredBlock& block) {
