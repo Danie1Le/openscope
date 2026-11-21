@@ -19,8 +19,8 @@ namespace openscope {
 enum class MeasurementStatus : std::uint8_t {
   /// The value is valid.
   kOk,
-  /// Top minus base is under kNoSignalDivisions: the signal is flat or missing, so there is no
-  /// value.
+  /// The measurement needs edges or cycles and top minus base is under kNoSignalDivisions: the
+  /// signal is flat or missing, so there is no value.
   kNoSignal,
   /// A sample in the capture hit an input-range limit: the value is reported but may be wrong.
   kClipped,
@@ -43,12 +43,18 @@ struct SignalLevels {
   double minimum;
   /// The highest sample.
   double maximum;
-  /// The settled high level: the mode of the upper half of the histogram, or the maximum when
-  /// that half has no clear mode.
+  /// The settled high level: the mode of the upper half of the histogram, or the highest sample
+  /// that is not an outlier when that half has no settled level. A spike or short glitch is never
+  /// top.
   double top;
-  /// The settled low level: the mode of the lower half of the histogram, or the minimum.
+  /// The settled low level: the mode of the lower half of the histogram, or the lowest sample that
+  /// is not an outlier.
   double base;
 };
+
+/// The levels of `samples`, which hold at least one sample. Top and base come from a histogram,
+/// so samples that stray from the rest briefly (a spike, a short glitch) do not move them.
+SignalLevels find_levels(std::span<const float> samples);
 
 /// What a measurement reads: one channel's samples from a capture and their levels.
 struct MeasuredSignal {
@@ -68,6 +74,9 @@ struct Measurement {
   /// The value measured from `signal`, or nullopt when the signal holds too little for it (Too few
   /// cycles).
   std::optional<double> (*measure)(const MeasuredSignal& signal);
+  /// True for a measurement that needs edges or cycles (the timing measurements), which a flat
+  /// signal does not have: it reports No signal. A flat signal's amplitude is a real value.
+  bool needs_signal = false;
 };
 
 /// Every automatic measurement, in a fixed order: a measurement's position here identifies it.
@@ -75,6 +84,11 @@ std::span<const Measurement> measurements();
 
 /// Top minus base under this many vertical divisions is No signal.
 inline constexpr double kNoSignalDivisions = 0.2;
+
+/// `measurement` of `channel`, whose levels are `levels`, with its status: No signal first (for a
+/// measurement that needs a signal), then Too few cycles, then Clipped.
+MeasurementResult evaluate(const Measurement& measurement, const CapturedChannel& channel,
+                           const SignalLevels& levels);
 
 /// The measurement engine: measures channels of a capture on demand and caches each result for as
 /// long as that capture is the one asked about, so repeated queries of the latest capture cost
