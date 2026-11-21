@@ -27,10 +27,11 @@ std::vector<float> samples(const Generator& generator, SampleIndex first, std::s
   return out;
 }
 
-/// A Generator at kSampleRate configured at index 0 with `settings`.
-Generator make(const GeneratorSettings& settings, std::uint64_t seed = 0) {
-  Generator generator{seed, kSampleRate};
-  generator.configure(settings, kSampleRate, 0);
+/// A Generator at `sample_rate` configured at index 0 with `settings`.
+Generator make(const GeneratorSettings& settings, std::uint64_t seed = 0,
+               double sample_rate = kSampleRate) {
+  Generator generator{seed, sample_rate};
+  generator.configure(settings, sample_rate, 0);
   return generator;
 }
 
@@ -270,16 +271,13 @@ TEST(GeneratorTest, PhaseStaysExactFarAlongTheSampleClock) {
 // Whole cycles per sample never change the phase, so a frequency above the sample rate samples
 // exactly like its alias below it, even far along the sample clock.
 TEST(GeneratorTest, FrequencyAboveTheSampleRateMatchesItsAliasFarAlongTheSampleClock) {
-  constexpr double kRate = 1e6;
   const auto sine_at = [](double frequency) {
-    Generator generator{0, kRate};
-    generator.configure({.function = GeneratorFunction::kSine,
-                         .frequency = frequency,
-                         .amplitude = 2.0,
-                         .offset = 0.0,
-                         .noise = 0.0},
-                        kRate, 0);
-    return generator;
+    return make({.function = GeneratorFunction::kSine,
+                 .frequency = frequency,
+                 .amplitude = 2.0,
+                 .offset = 0.0,
+                 .noise = 0.0},
+                0, 1e6);
   };
 
   constexpr SampleIndex kFarAlong = 100'000'000'000;
