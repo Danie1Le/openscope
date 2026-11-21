@@ -150,7 +150,7 @@ class BinCentredToneTest : public testing::TestWithParam<ToneCase> {
 std::string tone_case_name(const testing::TestParamInfo<ToneCase>& info) {
   constexpr std::array<std::string_view, 3> kWindowNames{"Rectangular", "Hann", "BlackmanHarris"};
   const auto& [lobe, tone] = info.param;
-  return std::format("{}_{}Samples", kWindowNames[static_cast<std::size_t>(lobe.window)],
+  return std::format("{}_{}Samples", kWindowNames.at(static_cast<std::size_t>(lobe.window)),
                      tone.length);
 }
 
