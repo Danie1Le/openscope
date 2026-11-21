@@ -19,6 +19,7 @@
 
 #include "instrument_fixture.hpp"
 #include "measurement_fixture.hpp"
+#include "openscope/capture.hpp"
 #include "openscope/channel.hpp"
 #include "openscope/instrument.hpp"
 #include "openscope/measurement.hpp"
@@ -53,7 +54,7 @@ constexpr std::ptrdiff_t query_count(std::string_view line) {
 }
 
 /// The sample rate at `*RST` (`ACQ:SRAT`), in samples per second.
-constexpr double kResetSampleRate = 1e6;
+constexpr double kResetSampleRate = AcquisitionSettings{}.sample_rate;
 
 TEST_F(TimingMeasurementTest, SquareWaveRepliesAreExact) {
   session.send("SOUR1:FUNC SQU;:CHAN2:DISP ON;:SOUR2:FUNC SQU;FREQ 2.5KHZ");
