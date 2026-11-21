@@ -543,30 +543,40 @@ TEST_P(NoisyPulseTrainTest, LevelsAreThePulseLevels) {
 INSTANTIATE_TEST_SUITE_P(NarrowAndWidePulses, NoisyPulseTrainTest,
                          testing::Values(0.015, 0.02, 0.03, 0.04, 0.96, 0.985));
 
+/// `length` samples of a triangle wave between 0 V and 1 V that runs `cycles` cycles, starting
+/// `start` of a cycle in.
+std::vector<float> triangle_wave(std::size_t length, double cycles, double start) {
+  std::vector<float> samples(length);
+  for (std::size_t index = 0; index < length; ++index) {
+    const double phase =
+        std::fmod((cycles * static_cast<double>(index) / static_cast<double>(length)) + start, 1.0);
+    samples[index] = static_cast<float>(phase < 0.5 ? 2.0 * phase : 2.0 - (2.0 * phase));
+  }
+  return samples;
+}
+
+class ShortTriangleTest : public testing::TestWithParam<std::size_t> {};
+
 // A short triangle's evenly stepped samples land in every second or third bin, so single bins hold
 // twice the average; no level stands above the rest, so top and base are its extremes (within a
 // tenth of its span: a lone sample at an extreme may be set aside as an outlier), never a level in
 // the middle.
-TEST(SignalLevelsTest, ShortTriangleFallsBackToItsExtremes) {
-  for (const std::size_t length : std::array<std::size_t, 6>{64, 128, 256, 512, 1000, 2000}) {
-    for (const double cycles : {2.0, 3.0, 4.5, 5.0, 7.5, 11.0}) {
-      for (const double start : {0.0, 0.13, 0.37}) {
-        std::vector<float> samples(length);
-        for (std::size_t index = 0; index < length; ++index) {
-          const double phase = std::fmod(
-              (cycles * static_cast<double>(index) / static_cast<double>(length)) + start, 1.0);
-          samples[index] = static_cast<float>(phase < 0.5 ? 2.0 * phase : 2.0 - (2.0 * phase));
-        }
-        const auto [lowest, highest] = std::ranges::minmax(samples);
+TEST_P(ShortTriangleTest, FallsBackToItsExtremes) {
+  for (const double cycles : {2.0, 3.0, 4.5, 5.0, 7.5, 11.0}) {
+    for (const double start : {0.0, 0.13, 0.37}) {
+      const std::vector<float> samples = triangle_wave(GetParam(), cycles, start);
+      const auto [lowest, highest] = std::ranges::minmax(samples);
 
-        const SignalLevels levels = find_levels(samples);
+      const SignalLevels levels = find_levels(samples);
 
-        EXPECT_NEAR(levels.top, highest, 0.1) << length << " " << cycles << " " << start;
-        EXPECT_NEAR(levels.base, lowest, 0.1) << length << " " << cycles << " " << start;
-      }
+      EXPECT_NEAR(levels.top, highest, 0.1) << cycles << " cycles from " << start;
+      EXPECT_NEAR(levels.base, lowest, 0.1) << cycles << " cycles from " << start;
     }
   }
 }
+
+INSTANTIATE_TEST_SUITE_P(ShortCaptures, ShortTriangleTest,
+                         testing::Values(64, 128, 256, 512, 1000, 2000));
 
 // A level counts once it holds 1/128 of the samples (78.125 of 10000): a pulse of 79 samples is
 // top, one of 78 is a glitch.
