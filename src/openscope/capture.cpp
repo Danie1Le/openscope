@@ -51,7 +51,7 @@ Pushed CaptureAssembler::push(const SampleBlock& block, const AcquisitionSetting
     // Each step completes at most one capture, and it is handed on before the next one exists, so
     // a block's captures never pile up however many it completes.
     if (on_completed) {
-      on_completed(*completed_);
+      on_completed(completed_);
     }
     if (limit == CaptureLimit::kFirst) {
       discard();  // The trigger has seen the samples after `used`, which the caller pushes again.
