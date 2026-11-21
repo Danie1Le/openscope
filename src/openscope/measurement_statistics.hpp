@@ -39,7 +39,7 @@ struct MeasurementSeries {
 /// change, so its owner guards it the way it guards its settings.
 class MeasurementStatistics {
  public:
-  /// Counts one capture's results. Every capture published since the last reset is added, oldest
+  /// Counts one capture's results. Every capture completed since the last reset is added, oldest
   /// first, untriggered ones included (spec #1, story 65).
   void add(const CaptureResults& results);
 
@@ -48,11 +48,6 @@ class MeasurementStatistics {
 
   /// True when no capture has been added since the last reset.
   [[nodiscard]] bool empty() const { return empty_; }
-
-  /// True when the captures added since the last reset hold channel `channel` (1 to 4).
-  [[nodiscard]] bool holds(std::size_t channel) const {
-    return channels_.at(channel - 1).has_value();
-  }
 
   /// The series of measurement `measurement` (a position in measurements()) of channel `channel`
   /// (1 to 4). Throws std::out_of_range when no capture added since the last reset holds the
