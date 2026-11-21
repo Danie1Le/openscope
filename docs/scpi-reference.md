@@ -120,7 +120,7 @@ The queue holds 20 entries. When it is full, the newest entry is replaced by `-3
 
 ### Settings
 
-Each setting has a setter and a query: `SOUR2:FREQ 5kHz` sets it, `SOUR2:FREQ?` replies with its value. A rejected setter (`-222` for a value out of range, `-224` for an unknown keyword) leaves the setting as it was. Generators, channels, acquisition and the timebase are instrument-wide: a change from one Session is seen by all.
+Each setting has a setter and a query: `SOUR2:FREQ 5kHz` sets it, `SOUR2:FREQ?` replies with its value. A rejected setter (`-222` for a value out of range, `-224` for an unknown keyword) leaves the setting as it was. Generators, channels, acquisition, the timebase and the trigger are instrument-wide: a change from one Session is seen by all.
 
 Query replies write numbers in the shortest form that reads back as the same value, with an upper-case exponent: `1000`, `0.001`, `1E+06`. Booleans reply `1` or `0`, keywords their short form (`SIN`), and the record length a whole number.
 
@@ -137,6 +137,12 @@ Query replies write numbers in the shortest form that reads back as the same val
 | `ACQuire:SRATe` | 1 to 1E9 samples per second (no unit) | 1E+06 | The sample rate of the sample clock, shared by all channels |
 | `ACQuire:POINts` | 1 to 1048576 (no unit) | 10000 | The record length: sample indexes per capture. The range applies to the value as sent, so `0.6` and `1048576.4` get `-222`. A fraction inside it rounds to the nearest whole number, half away from zero (`2.5` is 3) |
 | `TIMebase:SCALe` | 1 ns to 100 s per division (unit `S`) | 1 ms | The display viewport only; it never changes what is captured (ADR 0004) |
+| `TRIGger:SOURce` | `CHANnel<n>` | `CHAN1` | The trigger channel. It may be a disabled channel. The query replies `CHAN<n>` |
+| `TRIGger:LEVel` | -100 V to 100 V (unit `V`) | 0 V | The trigger level |
+| `TRIGger:SLOPe` | `POSitive`, `NEGative` | `POS` | The edge that is a trigger event: rising or falling through the level |
+| `TRIGger:MODE` | `AUTO`, `NORMal` | `AUTO` | The trigger mode. `SINGle` is not a trigger mode (`SINGle` is a run-control command) and reports `-224` |
+| `TRIGger:HOLDoff` | 0 s to 10 s (unit `S`) | 0 s | The least time from the trigger event of one capture to the trigger event of the next, counted in samples: rounded to the nearest whole number of samples at the sample rate |
+| `TRIGger:POSition` | 0 to 100 percent (no unit) | 50 | The pre-trigger position: where in the capture time zero sits, as a percentage of the way from the first sample to the last |
 
 `<n>` is 1 to 4 and defaults to 1.
 
@@ -157,9 +163,26 @@ Over one cycle, with A half the peak-to-peak amplitude and the offset added on t
 
 ### Channels and captures
 
-A channel's input range is its offset plus or minus four vertical divisions (four times its scale). A sample outside it is clipped: held at the nearer limit. The sample rate and record length alone define a capture. Captures are taken back to back, each spanning one record length of sample indexes, and only the latest capture is kept.
+A channel's input range is its offset plus or minus four vertical divisions (four times its scale). A sample outside it is clipped: held at the nearer limit. The sample rate and record length alone define a capture: one record length of sample indexes, positioned by the trigger (below). Only the latest capture is kept.
 
-A capture takes its settings from its first sample, so changing a channel setting (`CHAN<n>:DISP`, `SCAL`, `OFFS`) or an acquisition setting (`ACQ:SRAT`, `POIN`) drops the capture in progress, and the next capture starts at the next sample index. The latest capture already completed stays as it was. Generator and timebase changes do not drop the capture in progress.
+A capture takes its settings from its first sample, so changing a channel setting (`CHAN<n>:DISP`, `SCAL`, `OFFS`), an acquisition setting (`ACQ:SRAT`, `POIN`) or a trigger setting (`TRIG:...`) drops the capture in progress and restarts the trigger, and the next capture starts collecting samples at the next sample index. Any such change does this, even one that sets the value already in place. The latest capture already completed stays as it was. Generator and timebase changes do not drop the capture in progress.
+
+### Trigger
+
+A trigger event is the sample index where the trigger channel reaches the trigger level in the slope's direction (at or above the level for `POS`, at or below it for `NEG`) after first moving at least the hysteresis band past the level on the other side. The band is fixed at 0.1 vertical divisions of the trigger channel (0.1 V at 1 V/div). So after one trigger event the next needs the signal to go back through the band first, and noise smaller than the band around the level gives no false trigger events. After a change that restarts the trigger, the signal must pass the band before the first trigger event. The trigger sees the trigger channel's samples after clipping, whether the channel is enabled or not.
+
+Time zero of a capture sits at its trigger position: sample round(position / 100 × (record length − 1)) of the capture, rounding half away from zero. 50% of 10000 points is sample 5000; 0% is the first sample and 100% the last. That many samples before time zero are the pre-trigger samples.
+
+Each capture collects samples from the sample index after the previous capture ends (or after a change that restarts it). A trigger event places time zero only when both hold:
+
+- the capture already holds its pre-trigger samples, all taken after the previous capture ended, so captures never overlap and every capture is complete from its first sample;
+- the holdoff has passed: the trigger event is at least `TRIG:HOLD` × sample rate samples after the trigger event that placed the previous capture.
+
+Other trigger events are ignored. Once time zero is placed, the capture completes with the samples after it.
+
+In `NORMal` mode a capture is taken only on a trigger event; without one, the latest capture stays as it is for as long as it takes. In `AUTO` mode, once the pre-trigger samples have filled, the instrument waits one record length of samples for a trigger event (the Auto timeout). When none places the capture by then, the last record length of samples becomes an untriggered capture: time zero sits at the trigger position, and `WAV:PRE?` reports `1` in its untriggered field. The next capture starts collecting at the next sample index, so a signal that never triggers gives an untriggered capture every record length plus pre-trigger samples: at the `*RST` settings, samples 5000 to 14999, then 20000 to 29999, and so on.
+
+The holdoff and the Auto timeout are counted on the sample clock, not the wall clock (ADR 0003).
 
 ### Waveform transfer
 
@@ -187,7 +210,5 @@ A capture takes its settings from its first sample, so changing a channel settin
 | points | The record length: values `WAV:DATA?` returns |
 | scale | The source channel's vertical scale in volts per division |
 | offset | The source channel's offset in volts |
-| trigger position | The sample (counting from 0) where time zero sits; sample k is at (k - trigger position) / sample rate seconds |
-| untriggered | `1` for an untriggered capture, `0` for one placed by a trigger event |
-
-Every capture is untriggered until the trigger is added, so the trigger position is 0 and the flag is 1.
+| trigger position | The sample (counting from 0) where time zero sits: the trigger event, or for an untriggered capture the pre-trigger position. Sample k is at (k - trigger position) / sample rate seconds |
+| untriggered | `1` for an untriggered capture (Auto mode, no trigger event), `0` for one placed by a trigger event |

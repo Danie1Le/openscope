@@ -46,12 +46,16 @@ TEST_F(CaptureTest, CaptureSpansOneRecordLengthOfTheEnabledChannelsOnly) {
   EXPECT_EQ(capture->first_index, 0U);
   EXPECT_EQ(capture->sample_rate, 1e6);
   EXPECT_EQ(capture->record_length, test::kResetRecordLength);
-  EXPECT_TRUE(capture->untriggered);
-  EXPECT_EQ(capture->trigger_position, 0U);
   const CapturedChannel channel = test::captured(instrument, 1);
   EXPECT_EQ(channel.settings.scale, 1.0);
   EXPECT_EQ(channel.settings.offset, 0.0);
   EXPECT_EQ(channel.samples.size(), test::kResetRecordLength);
+}
+
+TEST_F(CaptureTest, ChannelsDisabledAtRstAreNotInTheCapture) {
+  instrument.advance(test::kResetRecordLength);
+
+  const std::shared_ptr<const Capture> capture = test::latest(instrument);
   for (std::size_t n = 1; n < kChannelCount; ++n) {
     EXPECT_FALSE(capture->channels.at(n).has_value()) << "CH" << n + 1;
   }
@@ -115,14 +119,27 @@ TEST(CaptureAssemblerTest, BlockWithoutAChannelOfTheCaptureInProgressIsALogicErr
   channels[1].enabled = true;
   CaptureAssembler assembler;
   SampleBlock block{.first_index = 0, .count = 2, .channels = {}};
+  block.channels[0] = {0.0F, 0.0F};
   block.channels[1] = {0.0F, 0.0F};
-  assembler.push(block, {.sample_rate = 1.0, .record_length = 4}, channels);
+  assembler.push(block, {.sample_rate = 1.0, .record_length = 4}, channels, {});
 
   block.first_index = 2;
   block.channels[1].clear();
 
-  EXPECT_THROW(assembler.push(block, {.sample_rate = 1.0, .record_length = 4}, channels),
+  EXPECT_THROW(assembler.push(block, {.sample_rate = 1.0, .record_length = 4}, channels, {}),
                std::logic_error);
+}
+
+TEST(CaptureAssemblerTest, BlockWithoutTheTriggerChannelIsALogicError) {
+  std::array<ChannelSettings, kChannelCount> channels{};
+  channels[0].enabled = true;
+  CaptureAssembler assembler;
+  SampleBlock block{.first_index = 0, .count = 1, .channels = {}};
+  block.channels[0] = {0.0F};
+
+  EXPECT_THROW(
+      assembler.push(block, {.sample_rate = 1.0, .record_length = 1}, channels, {.source = 2}),
+      std::logic_error);
 }
 
 TEST(CaptureAssemblerTest, RecordLengthOfZeroIsALogicError) {
@@ -132,7 +149,7 @@ TEST(CaptureAssemblerTest, RecordLengthOfZeroIsALogicError) {
   SampleBlock block{.first_index = 0, .count = 1, .channels = {}};
   block.channels[0] = {0.0F};
 
-  EXPECT_THROW(assembler.push(block, {.sample_rate = 1.0, .record_length = 0}, channels),
+  EXPECT_THROW(assembler.push(block, {.sample_rate = 1.0, .record_length = 0}, channels, {}),
                std::logic_error);
   EXPECT_EQ(assembler.latest(), nullptr);
 }
