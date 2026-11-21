@@ -53,7 +53,7 @@ struct Capture {
   std::array<std::optional<CapturedChannel>, kChannelCount> channels;
 };
 
-/// How many of the captures a sample block completes `CaptureAssembler::push` publishes.
+/// How many of the captures a sample block could complete `CaptureAssembler::push` completes.
 enum class CaptureLimit : std::uint8_t {
   /// Every one (the Running run state).
   kEvery,
@@ -122,14 +122,14 @@ class CaptureAssembler {
   /// Drops the `count` oldest samples of `capture`.
   void drop_oldest(Capture& capture, std::size_t count);
   /// Completes `capture`, the capture in progress: it becomes completed_.
-  void publish(Capture& capture);
+  void complete(Capture& capture);
 
   /// The trigger since the last discard (created by the first block after it), and the first
   /// sample index its holdoff lets place a capture.
   std::optional<EdgeTrigger> trigger_;
   SampleIndex holdoff_end_ = 0;
   /// The capture being collected, and how many samples it holds. Its `trigger_position` and
-  /// `untriggered` are set when it is published, from the placement state below.
+  /// `untriggered` are set when it completes, from the placement state below.
   std::optional<Capture> building_;
   std::size_t filled_ = 0;
   /// The pre-trigger sample count of the capture being collected.
