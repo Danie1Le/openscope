@@ -418,6 +418,22 @@ TEST(GeneratorFaultTest, FrequencyStepKeepsItsHertzWhenTheFrequencyChangesDuring
   EXPECT_THAT(samples(generator, 6, 4), ElementsAre(-1.0F, -0.25F, 0.5F, 0.75F));
 }
 
+TEST(GeneratorFaultTest, FrequencyStepKeepsItsHertzWhenTheSampleRateChangesDuringIt) {
+  const GeneratorSettings ramp{.function = GeneratorFunction::kRamp,
+                               .frequency = 250.0,
+                               .amplitude = 2.0,
+                               .offset = 0.0,
+                               .noise = 0.0};
+  Generator generator = make(ramp);
+  ASSERT_TRUE(generator.inject(fault(FaultKind::kFrequencyStep, 250.0, 4, 4)));
+
+  generator.configure(ramp, 2 * kSampleRate, 6);
+
+  // The same indexes as when the frequency halves: the step still adds .25 cycle per sample at
+  // the rate it was injected at, while the Generator's own advance drops to .125 per sample.
+  EXPECT_THAT(samples(generator, 6, 4), ElementsAre(-1.0F, -0.25F, 0.5F, 0.75F));
+}
+
 TEST(GeneratorFaultTest, FrequencyStepDoesNothingToDcOrNoise) {
   for (const GeneratorFunction function : {GeneratorFunction::kDc, GeneratorFunction::kNoise}) {
     const GeneratorSettings settings{
