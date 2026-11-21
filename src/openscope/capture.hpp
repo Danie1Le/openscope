@@ -57,8 +57,9 @@ class CaptureAssembler {
   /// Appends `block`, taken under `acquisition` and `channels`. A capture takes its settings from
   /// the block that starts it, so the caller discards the capture in progress whenever it changes
   /// a setting. Each capture that fills becomes the latest capture; a block may fill several.
-  /// Throws std::logic_error when `block` lacks samples for a channel of the capture in progress,
-  /// which means a channel was enabled or disabled without a discard.
+  /// Throws std::logic_error when `acquisition` has a record length of zero, or when `block` lacks
+  /// samples for a channel of the capture in progress, which means a channel was enabled or
+  /// disabled without a discard.
   void push(const SampleBlock& block, const AcquisitionSettings& acquisition,
             std::span<const ChannelSettings, kChannelCount> channels);
 

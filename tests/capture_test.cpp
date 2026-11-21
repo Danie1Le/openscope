@@ -125,5 +125,17 @@ TEST(CaptureAssemblerTest, BlockWithoutAChannelOfTheCaptureInProgressIsALogicErr
                std::logic_error);
 }
 
+TEST(CaptureAssemblerTest, RecordLengthOfZeroIsALogicError) {
+  std::array<ChannelSettings, kChannelCount> channels{};
+  channels[0].enabled = true;
+  CaptureAssembler assembler;
+  SampleBlock block{.first_index = 0, .count = 1, .channels = {}};
+  block.channels[0] = {0.0F};
+
+  EXPECT_THROW(assembler.push(block, {.sample_rate = 1.0, .record_length = 0}, channels),
+               std::logic_error);
+  EXPECT_EQ(assembler.latest(), nullptr);
+}
+
 }  // namespace
 }  // namespace openscope

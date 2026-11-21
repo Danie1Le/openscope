@@ -14,6 +14,9 @@ namespace openscope {
 
 void CaptureAssembler::push(const SampleBlock& block, const AcquisitionSettings& acquisition,
                             std::span<const ChannelSettings, kChannelCount> channels) {
+  if (acquisition.record_length == 0) {
+    throw std::logic_error("record length of zero");  // No sample would ever fill a capture.
+  }
   for (std::size_t used = 0; used < block.count;) {
     if (!building_) {
       building_.emplace(Capture{.first_index = block.first_index + used,
