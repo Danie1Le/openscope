@@ -191,3 +191,28 @@ A capture takes its settings from its first sample, so changing a channel settin
 | untriggered | `1` for an untriggered capture, `0` for one placed by a trigger event |
 
 Every capture is untriggered until the trigger is added, so the trigger position is 0 and the flag is 1.
+
+### FFT
+
+| Command | Values | New Session | Notes |
+|---|---|---|---|
+| `FFT:SOURce` | `CHANnel<n>` | `CHAN1` | The channel `FFT:DATA?` and `FFT:SPAC?` read. The query replies `CHAN<n>` |
+| `FFT:WINDow` | `RECTangular`, `HANNing`, `BHARris` | `HANN` | The window applied to the samples before the transform |
+| `FFT:DATA?` | | | The source channel's magnitude spectrum in the latest capture, in dBV RMS |
+| `FFT:SPACing?` | | | The bin spacing in hertz: the frequency step from one `FFT:DATA?` value to the next |
+
+`FFT:SOUR` and `FFT:WIND` belong to each Session (ADR 0002), like `WAV:SOUR`, and are separate from it: a Session can read the waveform of one channel and the spectrum of another. A new Session starts at `CHAN1` and `HANN`, and `*RST` leaves both alone. `FFT:DATA?` and `FFT:SPAC?` read the latest capture at the moment they run and report `-230` and `-221` in the same cases as `WAV:DATA?`.
+
+The FFT is a radix-2 transform, so it takes a power-of-two number of samples: the first N samples of the capture, where N is the largest power of two that is not more than the record length. At the `*RST` record length of 10000 it uses the first 8192 samples; at a power-of-two record length it uses every sample. Up to half the capture can go unused (a record length of 16383 uses 8192), so pick a power of two to use it all. Dropping the last samples, rather than padding with zeros, keeps a tone that completes a whole number of cycles in N samples exactly on one bin.
+
+`FFT:DATA?` replies N/2 + 1 levels as an IEEE 488.2 definite-length block of float32, laid out as `WAV:FORM REAL` writes samples. Value k is the level at k × spacing hertz, from DC (k = 0) to half the sample rate (k = N/2), and `FFT:SPAC?` replies the spacing, sample rate / N, from the settings the latest capture was taken with. At 1 MS/s and the `*RST` record length of 10000 the spacing is `122.0703125` Hz and the block holds 4097 values.
+
+Levels are dBV RMS: 20 log10 of the RMS voltage at that frequency. The window's coherent gain is divided out, so a sine of peak amplitude A volts whose frequency falls exactly on a bin reads 20 log10(A / √2) in every window (a 2 Vpp sine reads -3.0103 dBV), and DC reads 20 log10 of its voltage. A bin with no signal reads `-300`, the floor, instead of minus infinity. The windows trade frequency resolution against leakage, the spread of a tone that falls between bins into the bins around it:
+
+| Window | Formula, n from 0 to N - 1 | Bins a bin-centred tone spreads over | A tone half-way between bins reads | Highest sidelobe |
+|---|---|---|---|---|
+| `RECT` | 1 | 1 | 3.92 dB low | -13 dB |
+| `HANN` | 0.5 - 0.5 cos(2πn/N) | 3 | 1.42 dB low | -31 dB |
+| `BHAR` | 0.35875 - 0.48829 cos(2πn/N) + 0.14128 cos(4πn/N) - 0.01168 cos(6πn/N) | 7 | 0.83 dB low | -92 dB |
+
+The windows are periodic (their period is N), as is usual for spectral analysis. A spectrum of fewer than 4 samples (a record length of 1 to 3) uses no window whatever `FFT:WIND` says: a window that short no longer has the shape, or the mean, its formula gives.

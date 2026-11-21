@@ -17,6 +17,7 @@
 
 #include "openscope/capture.hpp"
 #include "openscope/channel.hpp"
+#include "openscope/fft.hpp"
 #include "openscope/generator.hpp"
 #include "openscope/sample_block.hpp"
 #include "openscope/scpi/command_tree.hpp"
@@ -38,6 +39,10 @@ static_assert(kFunctionKeywords.size() == static_cast<std::size_t>(GeneratorFunc
 /// The `WAVeform:FORMat` keywords, in WaveformFormat order.
 constexpr std::array<std::string_view, 2> kFormatKeywords{"ASCii", "REAL"};
 static_assert(kFormatKeywords.size() == static_cast<std::size_t>(WaveformFormat::kReal) + 1);
+
+/// The `FFT:WINDow` keywords, in FftWindow order.
+constexpr std::array<std::string_view, 3> kWindowKeywords{"RECTangular", "HANNing", "BHARris"};
+static_assert(kWindowKeywords.size() == static_cast<std::size_t>(FftWindow::kBlackmanHarris) + 1);
 
 /// Samples as comma-separated values, each in the shortest form that reads back as the same float.
 std::string ascii_values(std::span<const float> samples) {
@@ -113,6 +118,7 @@ Instrument::Instrument(std::uint64_t seed)
   add_acquisition_commands();
   add_timebase_commands();
   add_waveform_commands();
+  add_fft_commands();
 }
 
 void Instrument::add_generator_commands() {
@@ -189,14 +195,8 @@ void Instrument::add_timebase_commands() {
 
 void Instrument::add_waveform_commands() {
   // ADR 0002: the source and format belong to the calling Session.
-  add_setting(
-      "WAVeform:SOURce", scpi::KeywordParameter{.choices = {"CHANnel<1-4>"}},
-      [](Session& caller, const Arguments& arguments) {
-        caller.waveform().source = value_of<scpi::Choice>(arguments).suffix;
-      },
-      [](Session& caller, const Arguments&) {
-        return std::format("CHAN{}", caller.waveform().source);
-      });
+  add_source_setting("WAVeform:SOURce",
+                     [](Session& caller) -> std::size_t& { return caller.waveform().source; });
   add_keyword_setting(
       "WAVeform:FORMat", kFormatKeywords,
       [](Session& caller, const Arguments&, std::size_t keyword) {
@@ -209,35 +209,69 @@ void Instrument::add_waveform_commands() {
                  .parameters = {},
                  .handler = [this](Session& caller, const Arguments&) {
                    return reply_with_source(
-                       caller, [&caller](const Capture&, const CapturedChannel& channel) {
+                       caller.waveform().source,
+                       [&caller](const Capture&, const CapturedChannel& channel) {
                          return caller.waveform().format == WaveformFormat::kReal
                                     ? scpi::float32_block(channel.samples)
                                     : ascii_values(channel.samples);
                        });
                  }});
-  commands_.add({.header = "WAVeform:PREamble?",
-                 .parameters = {},
-                 .handler = [this](Session& caller, const Arguments&) {
-                   return reply_with_source(
-                       caller, [](const Capture& capture, const CapturedChannel& channel) {
-                         return std::format(
-                             "{},{},{},{},{},{}", scpi::format_real(capture.sample_rate),
-                             capture.record_length, scpi::format_real(channel.settings.scale),
-                             scpi::format_real(channel.settings.offset), capture.trigger_position,
-                             capture.untriggered ? 1 : 0);
-                       });
-                 }});
+  commands_.add(
+      {.header = "WAVeform:PREamble?",
+       .parameters = {},
+       .handler = [this](Session& caller, const Arguments&) {
+         return reply_with_source(
+             caller.waveform().source, [](const Capture& capture, const CapturedChannel& channel) {
+               return std::format("{},{},{},{},{},{}", scpi::format_real(capture.sample_rate),
+                                  capture.record_length, scpi::format_real(channel.settings.scale),
+                                  scpi::format_real(channel.settings.offset),
+                                  capture.trigger_position, capture.untriggered ? 1 : 0);
+             });
+       }});
+}
+
+void Instrument::add_fft_commands() {
+  // Spec #1 and ADR 0002: the source and window belong to the calling Session.
+  add_source_setting("FFT:SOURce",
+                     [](Session& caller) -> std::size_t& { return caller.fft().source; });
+  add_keyword_setting(
+      "FFT:WINDow", kWindowKeywords,
+      [](Session& caller, const Arguments&, std::size_t keyword) {
+        caller.fft().window = static_cast<FftWindow>(keyword);
+      },
+      [](Session& caller, const Arguments&) {
+        return static_cast<std::size_t>(caller.fft().window);
+      });
+  commands_.add(
+      {.header = "FFT:DATA?",
+       .parameters = {},
+       .handler = [this](Session& caller, const Arguments&) {
+         return reply_with_source(caller.fft().source, [&caller](const Capture&,
+                                                                 const CapturedChannel& channel) {
+           return scpi::float32_block(magnitude_spectrum_db(channel.samples, caller.fft().window));
+         });
+       }});
+  commands_.add(
+      {.header = "FFT:SPACing?",
+       .parameters = {},
+       .handler = [this](Session& caller, const Arguments&) {
+         return reply_with_source(caller.fft().source, [](const Capture& capture,
+                                                          const CapturedChannel& channel) {
+           // N from the samples FFT:DATA? transforms, so the two replies always agree.
+           return scpi::format_real(capture.sample_rate /
+                                    static_cast<double>(spectrum_length(channel.samples.size())));
+         });
+       }});
 }
 
 scpi::HandlerResult Instrument::reply_with_source(
-    Session& caller,
+    std::size_t source,
     const std::function<std::string(const Capture&, const CapturedChannel&)>& reply) const {
   const std::shared_ptr<const Capture> capture = captures_.latest();
   if (capture == nullptr) {
     return kDataCorruptOrStale;
   }
-  const std::optional<CapturedChannel>& channel =
-      capture->channels.at(caller.waveform().source - 1);
+  const std::optional<CapturedChannel>& channel = capture->channels.at(source - 1);
   if (!channel) {
     return kSettingsConflict;
   }
@@ -260,6 +294,18 @@ void Instrument::add_setting(std::string_view header, scpi::ParameterSpec parame
        .parameters = {},
        .handler = [get = std::move(get)](Session& caller, const Arguments& arguments)
            -> scpi::HandlerResult { return std::optional<std::string>(get(caller, arguments)); }});
+}
+
+void Instrument::add_source_setting(std::string_view header,
+                                    const std::function<std::size_t&(Session&)>& source) {
+  add_setting(
+      header, scpi::KeywordParameter{.choices = {"CHANnel<1-4>"}},
+      [source](Session& caller, const Arguments& arguments) {
+        source(caller) = value_of<scpi::Choice>(arguments).suffix;
+      },
+      [source](Session& caller, const Arguments&) {
+        return std::format("CHAN{}", source(caller));
+      });
 }
 
 void Instrument::add_keyword_setting(
