@@ -222,8 +222,7 @@ TEST_F(TriggerTest, HoldoffDelaysTheNextCaptureBeyondItsPreTriggerSamples) {
 TEST_F(TriggerTest, DefaultPositionPutsTheTriggerEventHalfWayThroughTheCapture) {
   instrument.advance(kResetRecordLength);
 
-  const std::shared_ptr<const Capture> capture = instrument.latest_capture();
-  ASSERT_NE(capture, nullptr);
+  const std::shared_ptr<const Capture> capture = test::latest(instrument);
   EXPECT_FALSE(capture->untriggered);
   EXPECT_EQ(capture->first_index, 0U);
   EXPECT_EQ(capture->trigger_position, 5000U);
@@ -336,8 +335,7 @@ TEST_F(TriggerTest, AutoTakesAnUntriggeredCaptureAfterOneRecordLengthWithoutATri
   EXPECT_EQ(instrument.latest_capture(), nullptr);
   instrument.advance(1);
 
-  const std::shared_ptr<const Capture> capture = instrument.latest_capture();
-  ASSERT_NE(capture, nullptr);
+  const std::shared_ptr<const Capture> capture = test::latest(instrument);
   EXPECT_TRUE(capture->untriggered);
   EXPECT_EQ(capture->first_index, 5000U);
   EXPECT_THAT(captured(instrument, 1).samples, Each(0.5F));
@@ -358,8 +356,7 @@ TEST_F(TriggerTest, AutoTimeoutIsOneRecordLengthAfterThePreTriggerSamplesFill) {
   test::ScpiSession client{longer};
   client.send("SOUR1:FUNC SQU;FREQ 50;:TRIG:POS 100;:ACQ:POIN 10001");
   longer.advance(20'001);
-  const std::shared_ptr<const Capture> capture = longer.latest_capture();
-  ASSERT_NE(capture, nullptr);
+  const std::shared_ptr<const Capture> capture = test::latest(longer);
   EXPECT_FALSE(capture->untriggered);
   EXPECT_EQ(capture->first_index, 10'000U);
   EXPECT_EQ(capture->trigger_position, 10'000U);
@@ -386,8 +383,7 @@ TEST_F(TriggerTest, ADisabledTriggerChannelPlacesCapturesOfTheEnabledOnes) {
 
   instrument.advance(6667 + 5000);
 
-  const std::shared_ptr<const Capture> capture = instrument.latest_capture();
-  ASSERT_NE(capture, nullptr);
+  const std::shared_ptr<const Capture> capture = test::latest(instrument);
   EXPECT_FALSE(capture->untriggered);
   EXPECT_EQ(capture->first_index, 6667U - 5000U);
   EXPECT_FALSE(capture->channels[1].has_value());
