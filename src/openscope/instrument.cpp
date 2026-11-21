@@ -305,24 +305,23 @@ void Instrument::add_keyword_setting(
 }
 
 template <typename Settings, typename Change, typename Lookup>
-void Instrument::add_number_setting(std::string_view header, NumericParameter range,
+void Instrument::add_number_setting(std::string_view header, const NumericParameter& range,
                                     double Settings::*field, Change change, Lookup lookup) {
   add_setting(
-      header, std::move(range),
+      header, range,
       [field, change = std::move(change)](Session&, const Arguments& arguments) {
-        change(arguments, [&](Settings& settings) {
-          settings.*field = value_of<double>(arguments);
-        });
+        change(arguments,
+               [&](Settings& settings) { settings.*field = value_of<double>(arguments); });
       },
       [field, lookup = std::move(lookup)](Session&, const Arguments& arguments) {
         return scpi::format_real(lookup(arguments).*field);
       });
 }
 
-void Instrument::add_generator_number(std::string_view header, NumericParameter range,
+void Instrument::add_generator_number(std::string_view header, const NumericParameter& range,
                                       double GeneratorSettings::*field) {
   add_number_setting(
-      header, std::move(range), field,
+      header, range, field,
       [this](const Arguments& arguments, const std::function<void(GeneratorSettings&)>& change) {
         change_generator(arguments, change);
       },
@@ -331,10 +330,10 @@ void Instrument::add_generator_number(std::string_view header, NumericParameter 
       });
 }
 
-void Instrument::add_channel_number(std::string_view header, NumericParameter range,
+void Instrument::add_channel_number(std::string_view header, const NumericParameter& range,
                                     double ChannelSettings::*field) {
   add_number_setting(
-      header, std::move(range), field,
+      header, range, field,
       [this](const Arguments& arguments, const std::function<void(ChannelSettings&)>& change) {
         change_channel(arguments, change);
       },
@@ -356,10 +355,10 @@ void Instrument::add_channel_choice(std::string_view header,
       });
 }
 
-void Instrument::add_trigger_number(std::string_view header, NumericParameter range,
+void Instrument::add_trigger_number(std::string_view header, const NumericParameter& range,
                                     double TriggerSettings::*field) {
   add_number_setting(
-      header, std::move(range), field,
+      header, range, field,
       [this](const Arguments&, const std::function<void(TriggerSettings&)>& change) {
         change_trigger(change);
       },
