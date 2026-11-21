@@ -8,8 +8,10 @@
 #include <cmath>
 #include <complex>
 #include <cstddef>
+#include <format>
 #include <numbers>
 #include <stdexcept>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
@@ -168,7 +170,13 @@ INSTANTIATE_TEST_SUITE_P(
                                  .neighbours = {0.48829 / (2 * 0.35875), 0.14128 / (2 * 0.35875),
                                                 0.01168 / (2 * 0.35875)}}),
         testing::Values(ToneBin{.length = 1024, .bin = 100},
-                        ToneBin{.length = std::size_t{1} << 20U, .bin = 100'000})));
+                        ToneBin{.length = std::size_t{1} << 20U, .bin = 100'000})),
+    [](const testing::TestParamInfo<std::tuple<MainLobe, ToneBin>>& info) {
+      constexpr std::array<std::string_view, 3> kWindowNames{"Rectangular", "Hann", "BlackmanHarris"};
+      const auto& [lobe, tone] = info.param;
+      return std::format("{}_{}Points", kWindowNames[static_cast<std::size_t>(lobe.window)],
+                         tone.length);
+    });
 
 /// A window with its scalloping loss, the dB a tone exactly half-way between two bins reads below
 /// its level (Harris 1978, table 1), and the bounds on the level ten bins further out, relative to
