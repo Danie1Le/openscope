@@ -40,9 +40,8 @@ void CaptureAssembler::push(const SampleBlock& block, const AcquisitionSettings&
   for (std::size_t used = 0; used < block.count;) {
     const SampleIndex index = block.first_index + used;
     Capture& capture = building_ ? *building_ : start(index, acquisition, channels, pre_trigger);
-    used = capture.untriggered
-               ? collect(capture, block, used, next_event, events.end(), trigger.mode, holdoff)
-               : fill(capture, block, used);
+    used = placed_ ? fill(capture, block, used)
+                   : collect(capture, block, used, next_event, events.end(), trigger.mode, holdoff);
   }
 }
 
@@ -60,12 +59,11 @@ std::size_t CaptureAssembler::collect(Capture& capture, const SampleBlock& block
                                       TriggerMode mode, std::uint64_t holdoff) {
   // Events count once the pre-trigger samples have filled, so the Auto timeout is one record
   // length after that.
-  const std::size_t pre_trigger = capture.trigger_position;
-  const std::size_t limit = capture.record_length + pre_trigger;
+  const std::size_t limit = capture.record_length + pre_trigger_;
   std::size_t to = std::min(block.count, used + (limit - filled_));
   // An event is ignored until the pre-trigger samples have filled and the holdoff has passed.
   const auto places = [&](std::size_t event) {
-    return event >= used && filled_ + (event - used) >= pre_trigger &&
+    return event >= used && filled_ + (event - used) >= pre_trigger_ &&
            block.first_index + event >= holdoff_end_;
   };
   while (next_event != end && *next_event < to && !places(*next_event)) {
@@ -77,11 +75,11 @@ std::size_t CaptureAssembler::collect(Capture& capture, const SampleBlock& block
   }
   append(capture, block, used, to);
   if (placed) {
-    drop_oldest(capture, filled_ - pre_trigger);
-    capture.untriggered = false;
+    drop_oldest(capture, filled_ - pre_trigger_);
+    placed_ = true;
     holdoff_end_ = block.first_index + to + holdoff;
   } else if (filled_ == limit && mode == TriggerMode::kAuto) {
-    drop_oldest(capture, pre_trigger);  // The latest record becomes an untriggered capture.
+    drop_oldest(capture, pre_trigger_);  // The latest record becomes an untriggered capture.
     publish(capture);
   } else if (filled_ == limit) {
     drop_oldest(capture, capture.record_length);  // Normal keeps what may precede an event.
@@ -90,6 +88,8 @@ std::size_t CaptureAssembler::collect(Capture& capture, const SampleBlock& block
 }
 
 void CaptureAssembler::publish(Capture& capture) {
+  capture.trigger_position = pre_trigger_;
+  capture.untriggered = !placed_;
   latest_ = std::make_shared<const Capture>(std::move(capture));
   building_.reset();
 }
@@ -100,15 +100,16 @@ Capture& CaptureAssembler::start(SampleIndex first, const AcquisitionSettings& a
   Capture& capture = building_.emplace(Capture{.first_index = first,
                                                .sample_rate = acquisition.sample_rate,
                                                .record_length = acquisition.record_length,
-                                               .trigger_position = pre_trigger,
-                                               .untriggered = true,
                                                .channels = {}});
+  pre_trigger_ = pre_trigger;
+  placed_ = false;
   filled_ = 0;
   for (std::size_t n = 0; n < kChannelCount; ++n) {
     if (channels[n].enabled) {
       capture.channels.at(n)
           .emplace(CapturedChannel{.settings = channels[n], .samples = {}})
-          .samples.reserve(acquisition.record_length + pre_trigger);  // Its most while waiting.
+          // Normal mode holds at most a record length plus the pre-trigger samples while it waits.
+          .samples.reserve(acquisition.record_length + pre_trigger);
     }
   }
   return capture;

@@ -111,10 +111,14 @@ class CaptureAssembler {
   /// sample index its holdoff lets place a capture.
   std::optional<EdgeTrigger> trigger_;
   SampleIndex holdoff_end_ = 0;
-  /// The capture being collected, and how many samples it holds. It stays untriggered until a
-  /// trigger event places it.
+  /// The capture being collected, and how many samples it holds. Its `trigger_position` and
+  /// `untriggered` are set when it is published, from the placement state below.
   std::optional<Capture> building_;
   std::size_t filled_ = 0;
+  /// The pre-trigger sample count of the capture being collected.
+  std::size_t pre_trigger_ = 0;
+  /// True once a trigger event has placed the capture being collected.
+  bool placed_ = false;
   std::shared_ptr<const Capture> latest_;
 };
 
