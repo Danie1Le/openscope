@@ -382,8 +382,7 @@ TEST_F(MeasurementTest, SignalClippedFlatIsNoSignalForAMeasurementThatNeedsASign
 }
 
 TEST_F(MeasurementTest, OnlyTheTimingMeasurementsNeedASignal) {
-  constexpr std::array<std::string_view, 5> kTiming{"FREQuency", "PERiod", "RISetime", "FALLtime",
-                                                    "DUTYcycle"};
+  constexpr std::array<std::string_view, 3> kTiming{"FREQuency", "PERiod", "DUTYcycle"};
   for (const Measurement& measurement : measurements()) {
     EXPECT_EQ(measurement.needs_signal,
               std::ranges::find(kTiming, measurement.mnemonic) != kTiming.end())
@@ -393,9 +392,7 @@ TEST_F(MeasurementTest, OnlyTheTimingMeasurementsNeedASignal) {
 
 /// `length` samples of a square wave between 0 V and 1 V with a period of 100 samples: low for
 /// samples 0 to 49 of each period, high for 50 to 99.
-std::vector<float> square_wave(std::size_t length) {
-  return test::pulse_train(length, 100, 50);
-}
+std::vector<float> square_wave(std::size_t length) { return test::pulse_train(length, 100, 50); }
 
 /// The length of the hand-built captures that top and base are checked on.
 constexpr std::size_t kLength = 10'000;

@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "openscope/capture.hpp"
+#include "openscope/channel.hpp"
 
 namespace openscope {
 namespace {
@@ -202,9 +203,6 @@ struct Edge {
   Direction direction;
   /// When the edge last crossed the 50% level, from the first sample.
   double middle;
-  /// How long the edge took from last leaving the outer level it started from (10% rising, 90%
-  /// falling) to reaching the other one.
-  double duration;
 };
 
 /// When `samples` last reached `level` going up (`sign` 1) or down (-1) at or before sample
@@ -234,19 +232,17 @@ std::vector<Edge> find_edges(const MeasuredSignal& signal) {
   std::vector<Edge> edges;
   for (std::size_t index = 0; index < signal.samples.size(); ++index) {
     const double sample = signal.samples[index];
-    const Side now = sample < levels.low    ? Side::kLow
-                     : sample > levels.high ? Side::kHigh
-                                            : side;
+    Side now = side;
+    if (sample < levels.low) {
+      now = Side::kLow;
+    } else if (sample > levels.high) {
+      now = Side::kHigh;
+    }
     if (now != side && side != Side::kUnknown) {
       const bool rising = now == Side::kHigh;
-      const auto crossing = [&](double level) {
-        return crossing_before(signal.samples, index, level, rising ? 1.0 : -1.0);
-      };
       edges.push_back(
           {.direction = rising ? Edge::Direction::kRising : Edge::Direction::kFalling,
-           .middle = crossing(levels.middle),
-           .duration = crossing(rising ? levels.high : levels.low) -
-                       crossing(rising ? levels.low : levels.high)});
+           .middle = crossing_before(signal.samples, index, levels.middle, rising ? 1.0 : -1.0)});
     }
     side = now;
   }
@@ -259,7 +255,7 @@ struct WholeCycles {
   /// The edges from the first one to the last that ends a whole cycle.
   std::vector<Edge> edges;
   /// How many whole cycles they bound.
-  double count;
+  std::size_t count;
   /// Sample periods from the first edge's 50% crossing to the last one's.
   double length;
 };
@@ -272,7 +268,7 @@ std::optional<WholeCycles> whole_cycles(const MeasuredSignal& signal) {
   }
   edges.resize(edges.size() - ((edges.size() - 1) % 2));
   const double length = edges.back().middle - edges.front().middle;
-  const auto count = static_cast<double>(edges.size() / 2);
+  const std::size_t count = edges.size() / 2;
   return WholeCycles{.edges = std::move(edges), .count = count, .length = length};
 }
 
@@ -282,7 +278,7 @@ std::optional<double> period(const MeasuredSignal& signal) {
   if (!cycles) {
     return std::nullopt;
   }
-  return cycles->length / cycles->count / signal.sample_rate;
+  return cycles->length / static_cast<double>(cycles->count) / signal.sample_rate;
 }
 
 /// The percentage of the whole cycles in `signal` spent above the 50% level, or nullopt under one
@@ -300,24 +296,6 @@ std::optional<double> positive_duty_cycle(const MeasuredSignal& signal) {
     }
   }
   return 100.0 * high / cycles->length;
-}
-
-/// The mean time the edges in `kDirection` in `signal` take from one outer reference level to the
-/// other, in seconds, or nullopt when there is no such edge.
-template <Edge::Direction kDirection>
-std::optional<double> transition_time(const MeasuredSignal& signal) {
-  double total = 0.0;
-  std::size_t count = 0;
-  for (const Edge& edge : find_edges(signal)) {
-    if (edge.direction == kDirection) {
-      total += edge.duration;
-      ++count;
-    }
-  }
-  if (count == 0) {
-    return std::nullopt;
-  }
-  return total / static_cast<double>(count) / signal.sample_rate;
 }
 
 constexpr std::array kMeasurements{
@@ -349,12 +327,6 @@ constexpr std::array kMeasurements{
                 .needs_signal = true},
     Measurement{.mnemonic = "PERiod", .measure = period, .needs_signal = true},
     Measurement{.mnemonic = "DUTYcycle", .measure = positive_duty_cycle, .needs_signal = true},
-    Measurement{.mnemonic = "RISetime",
-                .measure = transition_time<Edge::Direction::kRising>,
-                .needs_signal = true},
-    Measurement{.mnemonic = "FALLtime",
-                .measure = transition_time<Edge::Direction::kFalling>,
-                .needs_signal = true},
 };
 
 }  // namespace
