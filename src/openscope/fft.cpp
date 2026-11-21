@@ -19,13 +19,13 @@ using Complex = std::complex<double>;
 
 constexpr double kTwoPi = 2.0 * std::numbers::pi;
 
-/// The coefficients a_m of a cosine-sum window, w[n] = sum (-1)^m a_m cos(2 pi m n / N). a_0 is
-/// the window's coherent gain: its mean over N points whenever N > m for every term, which holds
-/// from kMinWindowedLength on.
+/// The coefficients b_m of a cosine-sum window, w[n] = sum b_m cos(2 pi m n / N). b_0 is the
+/// window's coherent gain: its mean over N points whenever N > m for every term, which holds from
+/// kMinWindowedLength on.
 std::span<const double> window_coefficients(FftWindow window) {
   static constexpr std::array<double, 1> kRectangular{1.0};
-  static constexpr std::array<double, 2> kHann{0.5, 0.5};
-  static constexpr std::array<double, 4> kBlackmanHarris{0.35875, 0.48829, 0.14128, 0.01168};
+  static constexpr std::array<double, 2> kHann{0.5, -0.5};
+  static constexpr std::array<double, 4> kBlackmanHarris{0.35875, -0.48829, 0.14128, -0.01168};
   switch (window) {
     case FftWindow::kRectangular:
       return kRectangular;
@@ -40,12 +40,19 @@ std::span<const double> window_coefficients(FftWindow window) {
 /// The periodic window value at sample `n` of `length`: periodic rather than symmetric, so a tone
 /// centred on a bin spreads over exactly the window's main lobe and nowhere else.
 double window_at(std::span<const double> coefficients, std::size_t n, std::size_t length) {
-  const double turns = static_cast<double>(n) / static_cast<double>(length);
-  double value = 0.0;
-  double sign = 1.0;
-  for (std::size_t m = 0; m < coefficients.size(); ++m) {
-    value += sign * coefficients[m] * std::cos(kTwoPi * static_cast<double>(m) * turns);
-    sign = -sign;
+  double value = coefficients[0];
+  if (coefficients.size() == 1) {
+    return value;
+  }
+  // One cos per sample: the higher harmonics follow from cos((m+1)x) = 2 cos x cos mx - cos(m-1)x.
+  const double cos_x = std::cos(kTwoPi * static_cast<double>(n) / static_cast<double>(length));
+  double cos_previous = 1.0;
+  double cos_m = cos_x;
+  for (std::size_t m = 1; m < coefficients.size(); ++m) {
+    value += coefficients[m] * cos_m;
+    const double cos_next = (2.0 * cos_x * cos_m) - cos_previous;
+    cos_previous = cos_m;
+    cos_m = cos_next;
   }
   return value;
 }
@@ -108,15 +115,17 @@ std::vector<float> magnitude_spectrum_db(std::span<const float> samples, FftWind
   }
   Fft(length).transform(data);
 
-  // |X[k]| / (N a0) is the peak amplitude a bin-centred tone contributes to each of its two
+  // |X[k]| / (N b0) is the peak amplitude a bin-centred tone contributes to each of its two
   // mirrored bins. Bins 1 to N/2 - 1 fold both halves, so their RMS is twice that over sqrt 2; DC
-  // and N/2 have no mirror and their RMS is the amplitude itself.
+  // and N/2 have no mirror and their RMS is the amplitude itself. Levels come from |X|^2 with
+  // 10 log10, which needs no square root.
   const double scale = 1.0 / (static_cast<double>(length) * coefficients[0]);
   std::vector<float> levels((length / 2) + 1);
   for (std::size_t k = 0; k < levels.size(); ++k) {
     const bool unmirrored = k == 0 || k == length / 2;
-    const double rms = std::abs(data[k]) * scale * (unmirrored ? 1.0 : std::numbers::sqrt2);
-    levels[k] = std::max(static_cast<float>(20.0 * std::log10(rms)), kSpectrumFloorDb);
+    const double gain = scale * (unmirrored ? 1.0 : std::numbers::sqrt2);
+    const double power = std::norm(data[k]) * gain * gain;
+    levels[k] = std::max(static_cast<float>(10.0 * std::log10(power)), kSpectrumFloorDb);
   }
   return levels;
 }

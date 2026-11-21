@@ -133,15 +133,15 @@ TEST_P(BinCentredToneTest, ReadsItsRmsLevelAndSpreadsOnlyOverTheMainLobe) {
       magnitude_spectrum_db(sine(kLength, kToneBin, kLength, 1.0), lobe.window);
 
   ASSERT_EQ(spectrum.size(), (kLength / 2) + 1);
-  const double tone = kOneVoltPeakSineDb;
-  EXPECT_NEAR(spectrum[kToneBin], tone, 1e-4);
+
+  EXPECT_NEAR(spectrum[kToneBin], kOneVoltPeakSineDb, 1e-4);
   for (std::size_t k = 0; k < spectrum.size(); ++k) {
     const std::size_t distance = k > kToneBin ? k - kToneBin : kToneBin - k;
     if (distance == 0) {
       continue;
     }
     if (distance <= lobe.neighbours.size()) {
-      EXPECT_NEAR(spectrum[k], tone + dbv(lobe.neighbours[distance - 1]), 1e-3) << "bin " << k;
+      EXPECT_NEAR(spectrum[k], kOneVoltPeakSineDb + dbv(lobe.neighbours[distance - 1]), 1e-3) << "bin " << k;
     } else {
       EXPECT_LT(spectrum[k], -120.0) << "bin " << k;
     }
@@ -175,10 +175,10 @@ TEST_P(OffBinToneTest, LeaksAsTheWindowPredicts) {
   const std::vector<float> spectrum = magnitude_spectrum_db(
       sine(kLength, static_cast<double>(kLowerBin) + 0.5, kLength, 1.0), leakage.window);
 
-  const double tone = kOneVoltPeakSineDb;
-  EXPECT_NEAR(spectrum[kLowerBin], tone - leakage.scalloping_loss_db, 0.01);
-  EXPECT_NEAR(spectrum[kLowerBin + 1], tone - leakage.scalloping_loss_db, 0.01);
-  const double far = spectrum[kLowerBin + 11] - tone;  // 10.5 bins above the tone.
+
+  EXPECT_NEAR(spectrum[kLowerBin], kOneVoltPeakSineDb - leakage.scalloping_loss_db, 0.01);
+  EXPECT_NEAR(spectrum[kLowerBin + 1], kOneVoltPeakSineDb - leakage.scalloping_loss_db, 0.01);
+  const double far = spectrum[kLowerBin + 11] - kOneVoltPeakSineDb;  // 10.5 bins above the tone.
   EXPECT_GT(far, leakage.far_min_db);
   EXPECT_LT(far, leakage.far_max_db);
 }

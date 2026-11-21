@@ -20,8 +20,8 @@ enum class FftWindow : std::uint8_t {
   kBlackmanHarris,
 };
 
-/// A radix-2 complex FFT of one fixed power-of-two length. The twiddle factors are computed once
-/// at construction, so transforming many records of the same length repeats no trigonometry.
+/// A radix-2 complex FFT of one fixed power-of-two length. Construction computes the twiddle
+/// factors and every transform reuses them, as a KissFFT plan does, so the two time the same work.
 class Fft {
  public:
   /// Prepares transforms of `length` points. Throws std::invalid_argument unless `length` is a
