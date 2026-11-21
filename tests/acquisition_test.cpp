@@ -26,6 +26,9 @@ using testing::Each;
 using testing::ElementsAre;
 using testing::Eq;
 
+/// Enables the channels *RST leaves off, so a capture holds all four.
+constexpr auto kEnableChannelsTwoToFour = "CHAN2:DISP ON;:CHAN3:DISP ON;:CHAN4:DISP ON";
+
 class AcquisitionTest : public test::InstrumentFixture {
  protected:
   /// The first sample index of the latest capture, or -1 when there is none.
@@ -36,7 +39,7 @@ class AcquisitionTest : public test::InstrumentFixture {
 };
 
 TEST_F(AcquisitionTest, ChannelNIsFedByGeneratorN) {
-  session.send("CHAN2:DISP ON;:CHAN3:DISP ON;:CHAN4:DISP ON");
+  session.send(kEnableChannelsTwoToFour);
   session.send("SOUR1:FUNC DC;OFFS 0.5;:SOUR2:FUNC DC;OFFS 1;:SOUR3:FUNC DC;OFFS 1.5");
   session.send("SOUR4:FUNC DC;OFFS 2");
 
@@ -292,13 +295,13 @@ TEST_F(AcquisitionTest, RstGivesTheSameNextCaptureAsAFreshInstrument) {
   instrument.advance((2 * kResetRecordLength) - 12'345);
 
   session.send("*RST");
-  session.send("CHAN2:DISP ON;:CHAN3:DISP ON;:CHAN4:DISP ON");
+  session.send(kEnableChannelsTwoToFour);
   instrument.advance(kResetRecordLength);
 
   Instrument fresh;
   ScpiSession client{fresh};
   fresh.advance(2 * kResetRecordLength);
-  client.send("CHAN2:DISP ON;:CHAN3:DISP ON;:CHAN4:DISP ON");
+  client.send(kEnableChannelsTwoToFour);
   fresh.advance(kResetRecordLength);
 
   ASSERT_NE(instrument.latest_capture(), nullptr);
