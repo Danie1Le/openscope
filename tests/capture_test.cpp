@@ -192,21 +192,21 @@ TEST(CaptureAssemblerTest, PushHandsOnEveryCaptureAsItCompletes) {
   HandedOn handed_on;
   const AcquisitionSettings acquisition{.sample_rate = 1.0, .record_length = 2};
 
-  const Pushed three = assembler.push(rising_block(0, 7), acquisition, kChannelOne,
-                                      kUntriggeredEveryRecord, CaptureLimit::kEvery,
-                                      handed_on.sink());
+  const Pushed three =
+      assembler.push(rising_block(0, 7), acquisition, kChannelOne, kUntriggeredEveryRecord,
+                     CaptureLimit::kEvery, handed_on.sink());
   EXPECT_THAT(handed_on.first_indexes, ElementsAre(0U, 2U, 4U));
   EXPECT_EQ(handed_on.last, three.capture.get());  // The last one handed on is returned.
 
-  const Pushed one = assembler.push(rising_block(7, 1), acquisition, kChannelOne,
-                                    kUntriggeredEveryRecord, CaptureLimit::kEvery,
-                                    handed_on.sink());
+  const Pushed one =
+      assembler.push(rising_block(7, 1), acquisition, kChannelOne, kUntriggeredEveryRecord,
+                     CaptureLimit::kEvery, handed_on.sink());
   EXPECT_THAT(handed_on.first_indexes, ElementsAre(0U, 2U, 4U, 6U));
   EXPECT_EQ(handed_on.last, one.capture.get());
 
-  const Pushed none = assembler.push(rising_block(8, 1), acquisition, kChannelOne,
-                                     kUntriggeredEveryRecord, CaptureLimit::kEvery,
-                                     handed_on.sink());
+  const Pushed none =
+      assembler.push(rising_block(8, 1), acquisition, kChannelOne, kUntriggeredEveryRecord,
+                     CaptureLimit::kEvery, handed_on.sink());
   EXPECT_THAT(handed_on.first_indexes, ElementsAre(0U, 2U, 4U, 6U));
   EXPECT_EQ(none.capture, nullptr);
 }
