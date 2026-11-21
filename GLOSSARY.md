@@ -103,7 +103,7 @@ _Avoid_: Auto capture, free-run capture
 ## Measurement
 
 **Top** and **Base**:
-The two settled voltage levels of a signal, taken as the most common high and low values in a capture, falling back to the maximum and minimum.
+The two settled voltage levels of a signal, taken as the most common high and low values in a capture, falling back to the maximum and minimum once outliers are set aside. A spike or short glitch is never top or base.
 _Avoid_: High/low, max/min (they are not the same thing)
 
 **Reference levels**:

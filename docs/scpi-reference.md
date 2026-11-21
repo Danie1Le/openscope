@@ -102,7 +102,7 @@ The queue holds 20 entries. When it is full, the newest entry is replaced by `-3
 | `-113` | Undefined header | No command matches the header, including a suffix on a mnemonic that takes none |
 | `-114` | Header suffix out of range | The header matches a command except that a mnemonic's suffix is outside its range (`CHAN5`) |
 | `-131` | Invalid suffix | A number's suffix is not the parameter's unit with an optional multiplier |
-| `-200` | Execution error;No signal | A measurement found top minus base under 0.2 vertical divisions; the query replied `9.91E37` (see [Measurements](#measurements)) |
+| `-200` | Execution error;No signal | A measurement that needs edges or cycles found top minus base under 0.2 vertical divisions; the query replied `9.91E37` (see [Measurements](#measurements)) |
 | `-200` | Execution error;Too few cycles | A measurement found under one whole cycle or no complete edge; the query replied `9.91E37` |
 | `-221` | Settings conflict | A query reads a channel that is not in the latest capture (it was not enabled when the capture was taken) |
 | `-222` | Data out of range | A number outside the command's range or beyond a double's range |
@@ -234,7 +234,7 @@ Values are written like settings (shortest form, upper-case exponent) at float32
 
 Every result carries a measurement status, decided in this order:
 
-1. **No signal**: top minus base is under 0.2 vertical divisions of the channel's scale (the scale the capture was taken at). Top and base are the signal's settled high and low levels: the histogram of its samples has 256 equal bins from the minimum to the maximum, and the level of each half of it (128 bins) is the mean of the samples in that half's fullest bin, when that bin holds at least twice the half's average per bin. A half with no such bin (a triangle or ramp sweeps evenly through its range) takes the maximum or the minimum instead. A flat signal, noise alone, or a signal held flat at an input-range limit is No signal.
+1. **No signal**: only for a measurement that needs edges or cycles (the timing measurements). Top minus base is under 0.2 vertical divisions of the channel's scale (the scale the capture was taken at): a flat signal, noise alone, or a signal held flat at an input-range limit. The amplitude measurements above never report it: a flat signal's `VPP` is 0 and its `VMIN`, `VMAX`, `VAV` and `VRMS` are its level.
 2. **Too few cycles**: the measurement needs more of the signal than the capture holds (under one whole cycle, or no complete edge). The amplitude measurements above never report it.
 3. **Clipped**: a sample of the channel in the capture hit an input-range limit (offset plus or minus four divisions), so the value may be wrong.
 4. **OK**.
@@ -248,4 +248,14 @@ A query reports its status every time it runs, to the calling Session only:
 | No signal | `9.91E37` (SCPI's not-a-number) | `-200,"Execution error;No signal"` |
 | Too few cycles | `9.91E37` | `-200,"Execution error;Too few cycles"` |
 
-The entry does not stop the line: `MEAS:VPP? CHAN1;VRMS? CHAN1` on a flat signal replies `9.91E37;9.91E37` and queues two `-200` entries.
+The entry does not stop the line: `MEAS:VPP? CHAN1;VRMS? CHAN1` on a clipped signal replies both values and queues two `-231` entries.
+
+#### Top and base
+
+Top and base are a signal's settled high and low levels, taken from histograms of its samples so that a spike or a short glitch never becomes either:
+
+1. A histogram of 256 equal bins spans the minimum to the maximum. A level is settled when its bin holds at least 1/128 of the capture's samples.
+2. Outliers are set aside: at each end of the histogram, samples cut off from the rest by empty bins that add up to fewer than 1/128 of the capture.
+3. A second histogram of 256 bins spans the samples that are left, and the level of each half of it (128 bins) is the mean of the samples in that half's fullest bin, when that bin holds a settled level. A half with no settled level (a triangle or ramp sweeps evenly through its range) takes the highest or lowest sample that is left instead.
+
+A real level held by fewer than 1/128 of the samples and cut off from the rest, such as the top of a pulse train with a duty cycle under 1/128, is set aside the same way.
