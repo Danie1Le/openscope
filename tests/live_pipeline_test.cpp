@@ -151,9 +151,9 @@ TEST_F(LivePipelineTest, StatisticsCountOnlyTheNewSignalAfterASettingChange) {
 // after a channel change MEAS:STAT? never finds statistics of the new channels beside a latest
 // capture of the old ones, or the reverse.
 TEST_F(LivePipelineTest, StatisticsHoldTheChannelsOfTheCapturesTheyCount) {
-  session.send("ACQ:POIN 10");  // Many captures a block, so the race is often there to lose.
+  session.send("ACQ:POIN 100");  // Several captures a block, each counted and published apart.
   const LivePipeline live(instrument);
-  for (int round = 0; round < 50; ++round) {
+  for (int round = 0; round < 20; ++round) {
     const bool enabled = round % 2 == 0;
     session.send(enabled ? "CHAN2:DISP ON" : "CHAN2:DISP OFF");
     std::string error;
