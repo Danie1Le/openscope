@@ -119,7 +119,7 @@ The verdict that travels with every measured value: OK, No signal, Clipped or To
 _Avoid_: Error code, quality
 
 **Measurement statistics**:
-Current, mean, minimum, maximum and standard deviation of one measurement across captures since the last statistics reset. Any setting change resets them.
+Current result, mean, minimum, maximum, standard deviation and count of one measurement of one channel across every capture since the last statistics reset, untriggered captures included. Only results with a value (OK and Clipped) are counted. `MEAS:STAT:RES`, `*RST` and any setting change reset them.
 
 **Spectrum**:
 The magnitude of one channel of the latest capture at each frequency bin, in dBV RMS, computed by the FFT through a window.
