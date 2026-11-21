@@ -113,20 +113,15 @@ Instrument::Instrument(std::uint64_t seed)
 }
 
 void Instrument::add_generator_commands() {
-  add_setting(
-      "SOURce<1-4>:FUNCtion",
-      scpi::KeywordParameter{.choices = {kFunctionKeywords.begin(), kFunctionKeywords.end()}},
-      [this](Session&, const Arguments& arguments) {
-        change_generator(arguments, [&](GeneratorSettings& settings) {
-          settings.function =
-              static_cast<GeneratorFunction>(value_of<scpi::Choice>(arguments).index);
+  add_keyword_setting(
+      "SOURce<1-4>:FUNCtion", kFunctionKeywords,
+      [this](Session&, const Arguments& arguments, std::size_t keyword) {
+        change_generator(arguments, [keyword](GeneratorSettings& settings) {
+          settings.function = static_cast<GeneratorFunction>(keyword);
         });
       },
       [this](Session&, const Arguments& arguments) {
-        const GeneratorFunction function =
-            generators_.at(channel_of(arguments)).settings().function;
-        return std::string(
-            scpi::short_form(kFunctionKeywords.at(static_cast<std::size_t>(function))));
+        return static_cast<std::size_t>(generators_.at(channel_of(arguments)).settings().function);
       });
   add_generator_number("SOURce<1-4>:FREQuency", {.min = 1e-3, .max = 1e9, .unit = "HZ"},
                        &GeneratorSettings::frequency);
@@ -197,16 +192,13 @@ void Instrument::add_waveform_commands() {
       [](Session& caller, const Arguments&) {
         return std::format("CHAN{}", caller.waveform().source);
       });
-  add_setting(
-      "WAVeform:FORMat",
-      scpi::KeywordParameter{.choices = {kFormatKeywords.begin(), kFormatKeywords.end()}},
-      [](Session& caller, const Arguments& arguments) {
-        caller.waveform().format =
-            static_cast<WaveformFormat>(value_of<scpi::Choice>(arguments).index);
+  add_keyword_setting(
+      "WAVeform:FORMat", kFormatKeywords,
+      [](Session& caller, const Arguments&, std::size_t keyword) {
+        caller.waveform().format = static_cast<WaveformFormat>(keyword);
       },
       [](Session& caller, const Arguments&) {
-        const auto format = static_cast<std::size_t>(caller.waveform().format);
-        return std::string(scpi::short_form(kFormatKeywords.at(format)));
+        return static_cast<std::size_t>(caller.waveform().format);
       });
   commands_.add({.header = "WAVeform:DATA?",
                  .parameters = {},
@@ -262,6 +254,20 @@ void Instrument::add_setting(std::string_view header, scpi::ParameterSpec parame
        .parameters = {},
        .handler = [get = std::move(get)](Session& caller, const Arguments& arguments)
            -> scpi::HandlerResult { return std::optional<std::string>(get(caller, arguments)); }});
+}
+
+void Instrument::add_keyword_setting(
+    std::string_view header, std::span<const std::string_view> keywords,
+    std::function<void(Session&, const Arguments&, std::size_t)> set,
+    std::function<std::size_t(Session&, const Arguments&)> get) {
+  add_setting(
+      header, scpi::KeywordParameter{.choices = {keywords.begin(), keywords.end()}},
+      [set = std::move(set)](Session& caller, const Arguments& arguments) {
+        set(caller, arguments, value_of<scpi::Choice>(arguments).index);
+      },
+      [keywords, get = std::move(get)](Session& caller, const Arguments& arguments) {
+        return std::string(scpi::short_form(keywords[get(caller, arguments)]));
+      });
 }
 
 void Instrument::add_generator_number(std::string_view header, NumericParameter range,

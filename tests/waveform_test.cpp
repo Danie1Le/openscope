@@ -57,7 +57,8 @@ TEST_F(WaveformTest, NewSessionReadsChannelOneAsAscii) {
 TEST_F(WaveformTest, SourceAcceptsEveryChannelInShortOrLongForm) {
   for (const std::string_view channel : {"CHAN2", "CHANNEL3", "chan4", "Channel1"}) {
     session.send("WAV:SOUR " + std::string(channel));
-    EXPECT_EQ(session.send("WAVeform:SOURce?"), "CHAN" + std::string(channel.substr(channel.size() - 1)))
+    EXPECT_EQ(session.send("WAVeform:SOURce?"),
+              "CHAN" + std::string(channel.substr(channel.size() - 1)))
         << channel;
   }
   session.send("WAV:SOUR CHAN3");

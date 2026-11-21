@@ -6,6 +6,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -86,6 +87,12 @@ class Instrument {
   void add_setting(std::string_view header, scpi::ParameterSpec parameter,
                    std::function<void(Session&, const scpi::Arguments&)> set,
                    std::function<std::string(Session&, const scpi::Arguments&)> get);
+  /// add_setting for a choice of `keywords`, which must outlive the Instrument: `set` receives the
+  /// index of the keyword sent, and the query replies the short form of the keyword at the index
+  /// `get` returns.
+  void add_keyword_setting(std::string_view header, std::span<const std::string_view> keywords,
+                           std::function<void(Session&, const scpi::Arguments&, std::size_t)> set,
+                           std::function<std::size_t(Session&, const scpi::Arguments&)> get);
   /// add_setting for one numeric field of the Generator a `SOURce<n>` header names.
   void add_generator_number(std::string_view header, scpi::NumericParameter range,
                             double GeneratorSettings::*field);

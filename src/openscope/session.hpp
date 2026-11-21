@@ -21,6 +21,7 @@ enum class WaveformFormat : std::uint8_t {
 struct WaveformSettings {
   /// The channel (1 to 4) `WAV:DATA?` and `WAV:PRE?` read (`WAVeform:SOURce`).
   std::size_t source = 1;
+  /// How `WAV:DATA?` writes the samples (`WAVeform:FORMat`).
   WaveformFormat format = WaveformFormat::kAscii;
 };
 
