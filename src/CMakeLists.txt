@@ -1,5 +1,6 @@
 add_library(openscope
   openscope/capture.cpp
+  openscope/fault.cpp
   openscope/fft.cpp
   openscope/generator.cpp
   openscope/instrument.cpp

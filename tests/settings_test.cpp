@@ -17,13 +17,14 @@ namespace {
 
 using test::kDataTypeErrorReply;
 using test::kIllegalParameterValueReply;
+using test::kInvalidSuffixReply;
 using test::kMissingParameterReply;
 using test::kNoErrorReply;
+using test::kOutOfRangeReply;
 using test::kParameterNotAllowedReply;
+using test::kSuffixOutOfRangeReply;
 using test::kUndefinedHeaderReply;
 using test::ScpiSession;
-
-constexpr auto kOutOfRangeReply = R"(-222,"Data out of range")";
 
 /// One numeric setting: its header, its *RST reply, and values just inside and just outside its
 /// range, written as a client would send them and as the query replies.
@@ -151,10 +152,10 @@ TEST_F(SettingsTest, CountsRatesAndPercentagesTakeNoUnit) {
   session.send("SOUR1:FREQ 5V");
   session.send("TRIG:POS 5PCT");
 
-  EXPECT_EQ(session.next_error(), R"(-131,"Invalid suffix")");
-  EXPECT_EQ(session.next_error(), R"(-131,"Invalid suffix")");
-  EXPECT_EQ(session.next_error(), R"(-131,"Invalid suffix")");
-  EXPECT_EQ(session.next_error(), R"(-131,"Invalid suffix")");
+  EXPECT_EQ(session.next_error(), kInvalidSuffixReply);
+  EXPECT_EQ(session.next_error(), kInvalidSuffixReply);
+  EXPECT_EQ(session.next_error(), kInvalidSuffixReply);
+  EXPECT_EQ(session.next_error(), kInvalidSuffixReply);
   EXPECT_EQ(session.send("ACQ:SRAT?;POIN?"), "1E+06;10000");
   EXPECT_EQ(session.send("SOUR1:FREQ?"), "1000");
   EXPECT_EQ(session.send("TRIG:POS?"), "50");
@@ -201,7 +202,7 @@ TEST_F(SettingsTest, SuffixOutOfRangeIsReportedAndChangesNothing) {
   for (const char* line : {"SOUR5:FREQ 5", "SOUR0:AMPL 2", "CHAN5:DISP ON", "CHAN0:SCAL 2",
                            "SOUR5:FUNC?", "CHAN5:OFFS?"}) {
     EXPECT_EQ(session.send(line), std::nullopt) << line;
-    EXPECT_EQ(session.next_error(), R"(-114,"Header suffix out of range")") << line;
+    EXPECT_EQ(session.next_error(), kSuffixOutOfRangeReply) << line;
   }
   EXPECT_EQ(session.send("SOUR4:FREQ?;AMPL?;:CHAN4:DISP?;SCAL?"), "1000;2;0;1");
 }
