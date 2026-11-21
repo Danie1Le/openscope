@@ -105,8 +105,9 @@ struct SineCase {
 class SineAccuracyTest : public MeasurementTest, public testing::WithParamInterface<SineCase> {};
 
 // NFR-5: peak-to-peak and RMS within 1% of the Generator's ground truth on a clean sine, including
-// captures that end part-way through a cycle. With an offset the capture holds whole cycles, since
-// a part cycle shifts the mean and so the RMS of an offset sine by more than 1%.
+// captures that end part-way through a cycle (12.345 and 33.5 cycles). With an offset the capture
+// holds whole cycles, since a part cycle shifts the mean and so the RMS of an offset sine by more
+// than 1%.
 TEST_P(SineAccuracyTest, PeakToPeakAndRmsAreWithinOnePercent) {
   const SineCase sine = GetParam();
   session.send(std::format("SOUR1:AMPL {};FREQ {};OFFS {};:CHAN1:SCAL {}", sine.amplitude,
@@ -124,7 +125,7 @@ TEST_P(SineAccuracyTest, PeakToPeakAndRmsAreWithinOnePercent) {
 INSTANTIATE_TEST_SUITE_P(CleanSines, SineAccuracyTest,
                          testing::Values(SineCase{2.0, 1e3, 0.0, 1.0},
                                          SineCase{5.0, 1234.5, 0.0, 2.0},
-                                         SineCase{0.5, 3.3e3, 0.0, 0.2},
+                                         SineCase{0.5, 3.35e3, 0.0, 0.2},
                                          SineCase{6.0, 1.5e3, -1.5, 1.5}));
 
 // A flat signal has an amplitude: No signal is only for measurements that need edges or cycles.
