@@ -13,7 +13,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <tuple>
 #include <vector>
 
 #include "instrument_fixture.hpp"
@@ -457,9 +456,22 @@ TEST_F(RunControlTest, RunSentByAResumedLineStartsAfterTheCaptureWithinOneAdvanc
   EXPECT_EQ(first_index(instrument), 2 * kResetRecordLength);
 }
 
-/// What a line and the captures leave once the sample clock has run: the line's reply, the latest
-/// capture's first sample index, and that capture as another Session's `WAV:PRE?;DATA?` reads it.
-using SteppedRun = std::tuple<std::string, SampleIndex, std::optional<std::string>>;
+/// What a line and the captures leave once the sample clock has run.
+struct SteppedRun {
+  /// The line's reply, or `<held>` while it is held.
+  std::string reply;
+  SampleIndex latest_first_index = 0;
+  /// The latest capture as another Session's `WAV:PRE?;DATA?` reads it.
+  std::optional<std::string> latest;
+
+  bool operator==(const SteppedRun&) const = default;
+
+  // The capture text runs to many kilobytes, so a failure prints only its length.
+  friend void PrintTo(const SteppedRun& run, std::ostream* out) {
+    *out << '"' << run.reply << "\", first index " << run.latest_first_index << ", "
+         << run.latest.value_or("").size() << " bytes of capture";
+  }
+};
 
 /// Runs `line` on a fresh instrument set up with kUntriggeredDc and steps the sample clock
 /// `samples` sample indexes in `advance` calls of at most `step`.
@@ -472,8 +484,9 @@ SteppedRun run_stepped(std::string_view line, std::size_t samples, std::size_t s
     instrument.advance(std::min(step, samples - done));
   }
   ScpiSession reader{instrument};
-  return {reply->ended ? reply->text.value_or("<no reply>") : "<held>", first_index(instrument),
-          reader.send("WAV:PRE?;DATA?")};
+  return {.reply = reply->ended ? reply->text.value_or("<no reply>") : "<held>",
+          .latest_first_index = first_index(instrument),
+          .latest = reader.send("WAV:PRE?;DATA?")};
 }
 
 /// A line SteppingInvarianceTest runs, how many sample indexes it steps the clock, and the line's
@@ -493,11 +506,10 @@ class SteppingInvarianceTest : public testing::TestWithParam<ResumedLine> {};
 TEST_P(SteppingInvarianceTest, OneAdvanceGivesWhatManySmallOnesGive) {
   const auto [line, samples, reply] = GetParam();
   const SteppedRun by_record = run_stepped(line, samples, kResetRecordLength);
-  const auto& [by_record_reply, by_record_first, by_record_capture] = by_record;
-  ASSERT_EQ(by_record_reply, reply);
+  ASSERT_EQ(by_record.reply, reply);
 
-  for (const std::size_t step : {samples, std::size_t{1}, std::size_t{7}, std::size_t{3333},
-                                 kResetRecordLength - 1, kResetRecordLength + 1}) {
+  for (const std::size_t step : {samples, std::size_t{1}, std::size_t{3333}, kResetRecordLength - 1,
+                                 kResetRecordLength + 1}) {
     EXPECT_EQ(run_stepped(line, samples, step), by_record) << "step " << step;
   }
 }

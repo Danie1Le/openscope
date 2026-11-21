@@ -40,20 +40,17 @@ std::optional<std::size_t> CaptureAssembler::push(
   const std::size_t pre_trigger = trigger.pre_trigger_samples(acquisition.record_length);
 
   const std::size_t published_before = published_;
-  std::optional<std::size_t> first_published_end;
   for (std::size_t used = 0; used < block.count;) {
     const SampleIndex index = block.first_index + used;
     Capture& capture = building_ ? *building_ : start(index, acquisition, channels, pre_trigger);
     used = placed_ ? fill(capture, block, used)
                    : collect(capture, block, used, next_event, events.end(), trigger.mode, holdoff);
-    if (!first_published_end && published_ != published_before) {
-      first_published_end = used;
-      if (limit == CaptureLimit::kFirst) {
-        break;
-      }
+    if (limit == CaptureLimit::kFirst && published_ != published_before) {
+      discard();  // The trigger has seen the samples after `used`, which the caller pushes again.
+      return used;
     }
   }
-  return first_published_end;
+  return std::nullopt;
 }
 
 std::size_t CaptureAssembler::fill(Capture& capture, const SampleBlock& block, std::size_t used) {
