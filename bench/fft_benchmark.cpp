@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "openscope/fft.hpp"
+#include "openscope/fft_window.hpp"
 
 namespace openscope {
 namespace {
