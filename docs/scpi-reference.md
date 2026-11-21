@@ -301,9 +301,9 @@ The entry does not stop the line: `MEAS:VPP? CHAN1;VRMS? CHAN1` on a clipped sig
 
 Top and base are a signal's settled high and low levels, taken from histograms of its samples so that a spike or a short glitch never becomes either:
 
-1. A histogram of 256 equal bins spans the minimum to the maximum. A level is settled when its bin holds at least 1/128 of the capture's samples, and never fewer than two, so even in a short capture a single spike is not a level.
+1. A histogram of 256 equal bins spans the minimum to the maximum. A settled level holds at least 1/128 of the capture's samples, and never fewer than two, so even in a short capture a single spike is not a level.
 2. Outliers are set aside: at each end of the histogram, samples cut off from the rest by empty bins that add up to fewer than a settled level. When the samples left could not hold a settled level (a capture of two or three samples), every sample is kept.
-3. A second histogram of 256 bins spans the samples that are left, and the level of each half of it (128 bins) is the mean of the samples in that half's fullest bin, when that bin holds a settled level. A half with no settled level (a triangle or ramp sweeps evenly through its range) takes the highest or lowest sample that is left instead.
+3. A second histogram of 256 bins spans the samples that are left. In each half of it (128 bins), the fullest bin and the 4 bins either side of it are a level when, together, they hold a settled level's share of the samples, at least 24 samples, and twice what as many bins of that half hold on average. Counting the neighbouring bins finds a level that noise spreads over several bins; the last two tests keep chance clusters in a short capture from counting. The level is the mean of the samples in the fullest bin. A half with no level (a triangle or ramp sweeps evenly through its range) takes the highest or lowest sample that is left instead, never a value from the middle of the span.
 
 A real level held by fewer than 1/128 of the samples and cut off from the rest, such as the top of a pulse train with a duty cycle under 1/128, is set aside the same way.
 
