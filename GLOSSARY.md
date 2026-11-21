@@ -80,7 +80,7 @@ One triggered record: the samples of every enabled channel over the same record-
 _Avoid_: Acquisition, frame, record (alone), sweep
 
 **Latest capture**:
-The most recently completed capture. It is the only capture the instrument keeps; every waveform, FFT and single-measurement query reads it. Measurement statistics count every completed capture.
+The most recently completed capture. It is the only capture the instrument keeps; every waveform, FFT and `MEAS:<type>?` query reads it. Measurement statistics count every completed capture.
 _Avoid_: Current capture, history
 
 **Run state**:

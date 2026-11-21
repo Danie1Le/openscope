@@ -104,7 +104,7 @@ The queue holds 20 entries. When it is full, the newest entry is replaced by `-3
 | `-131` | Invalid suffix | A number's suffix is not the parameter's unit with an optional multiplier |
 | `-200` | Execution error;No signal | A measurement that needs edges or cycles found top minus base under 0.2 vertical divisions; the query replied `9.91E37` (see [Measurements](#measurements)) |
 | `-200` | Execution error;Too few cycles | A measurement found under one whole cycle or no complete edge; the query replied `9.91E37` |
-| `-221` | Settings conflict | A query reads a channel that is not in the latest capture (it was not enabled when the capture was taken), `MEAS:STAT?` reads a channel that is not in the captures the statistics count, or `SOUR<n>:FAUL` finds its Generator already holding 64 faults |
+| `-221` | Settings conflict | A query reads a channel that is not in the latest capture (it was not enabled when the capture was taken), or `SOUR<n>:FAUL` finds its Generator already holding 64 faults |
 | `-222` | Data out of range | A number outside the command's range or beyond a double's range |
 | `-224` | Illegal parameter value | A keyword that is not one of the parameter's choices |
 | `-230` | Data corrupt or stale | A query reads capture data before the first capture has completed (or since `*RST`), or `MEAS:STAT?` finds no capture completed since the statistics were last reset |
@@ -308,7 +308,7 @@ The entry does not stop the line: `MEAS:VPP? CHAN1;VRMS? CHAN1` on a clipped sig
 
 Measurement statistics follow every measurement of every enabled channel across the captures since the last reset, so a script can check how stable a value is. Every capture that completes counts, untriggered captures included, even when several complete between two queries and only the last becomes the latest capture. They are instrument-wide: every Session reads the same statistics, and a reset from one Session resets them for all.
 
-The statistics reset on `MEAS:STAT:RES`, on `*RST` and on every setting command that shapes captures (`SOUR<n>:...`, `CHAN<n>:...`, `ACQ:...`, `TRIG:...`), from any Session and even one that sets the value already in place, so they never mix data from two settings. A capture interrupted by the change is dropped (see [Channels and captures](#channels-and-captures)), so the first capture counted after a reset starts after it. Other commands keep them: `TIM:SCAL` (the timebase only zooms the display and changes no captured data, ADR 0004), a Session's own `WAV:...` and `FFT:...` settings, faults (`SOUR<n>:FAUL`, which are meant to show in the statistics), run control (`RUN`, `STOP`, `SINGle`), queries, and a setter that is rejected.
+The statistics reset on `MEAS:STAT:RES`, on `*RST` and on every setting command that shapes captures (`SOUR<n>:...`, `CHAN<n>:...`, `ACQ:...`, `TRIG:...`), from any Session and even one that sets the value already in place, so they never mix data from two settings. A capture interrupted by the change is dropped (see [Channels and captures](#channels-and-captures)), so the first capture counted after a reset starts after it. `MEAS:STAT:RES` changes no setting and keeps the capture in progress: it is counted when it completes, although some of its samples came before the reset. Other commands keep them: `TIM:SCAL` (the timebase only zooms the display and changes no captured data, ADR 0004), a Session's own `WAV:...` and `FFT:...` settings, faults (`SOUR<n>:FAUL`, which are meant to show in the statistics), run control (`RUN`, `STOP`, `SINGle`), queries, and a setter that is rejected.
 
 The fields:
 
@@ -326,7 +326,7 @@ Measurement status works as for a single measurement:
 - When a Clipped value has been counted, the statistics may be wrong: the query reports one `-231,"Data questionable;Clipped"` even after the signal has come back into range, until the next reset.
 - None of these entries stops the line.
 
-Before a capture has completed since the last reset, `MEAS:STAT?` replies nothing and reports `-230,"Data corrupt or stale"`, even while the latest capture can still be read: there are no statistics yet. On a channel that is not in the captures the statistics count (it was not enabled when they were taken), it replies nothing and reports `-221`. A channel change resets the statistics, so every capture they count has the same channels. In live mode a capture is counted as soon as the processing thread completes it, a moment before it becomes the latest capture.
+Before a capture has completed since the last reset, `MEAS:STAT?` replies nothing and reports `-230,"Data corrupt or stale"`, even while the latest capture can still be read: there are no statistics yet. On a channel that is not in the latest capture, it replies nothing and reports `-221`. A capture is counted as it becomes the latest capture, so the current result is always the latest capture's.
 
 `MEAS:STAT:RES;:SINGle;*OPC?;:MEAS:STAT? VPP,CHAN1` replies `1;` and the statistics of one capture, the Single's: its value four times (current, mean, minimum and maximum), a standard deviation of `0` and a count of `1`.
 
