@@ -63,7 +63,7 @@ struct MeasuredSignal {
   /// The levels of those samples.
   SignalLevels levels;
   /// Samples per second the capture was taken at, which turns sample counts into seconds.
-  double sample_rate;
+  double sample_rate = 1.0;
 };
 
 /// One automatic measurement: the SCPI mnemonic it is queried by and how it is computed. The
