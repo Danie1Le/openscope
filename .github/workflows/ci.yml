@@ -95,10 +95,12 @@ jobs:
       - uses: ./.github/actions/setup-vcpkg
       - run: cmake --preset benchmark
       - run: cmake --build --preset benchmark
-      - name: FFT against KissFFT
+      - name: FFT against KissFFT, and SPSC ring buffer throughput
         # Explicit shell: bash adds -o pipefail, so a crashing benchmark fails the step instead of
         # leaving a truncated summary behind tee's exit status.
         shell: bash
         run: |
-          build/benchmark/bench/fft_benchmark | tee benchmark.txt
-          { echo '```'; cat benchmark.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          for benchmark in fft_benchmark ring_buffer_benchmark; do
+            build/benchmark/bench/$benchmark | tee $benchmark.txt
+            { echo "### $benchmark"; echo '```'; cat $benchmark.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          done
