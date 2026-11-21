@@ -123,26 +123,31 @@ struct MainLobe {
   std::vector<double> neighbours;
 };
 
-class BinCentredToneTest : public testing::TestWithParam<MainLobe> {};
+/// A 1 V peak sine centred on bin 100 of a 1024-point spectrum under each window.
+class BinCentredToneTest : public testing::TestWithParam<MainLobe> {
+ protected:
+  static constexpr std::size_t kLength = 1024;
+  static constexpr std::size_t kToneBin = 100;
 
-TEST_P(BinCentredToneTest, ReadsItsRmsLevelAndSpreadsOnlyOverTheMainLobe) {
-  constexpr std::size_t kLength = 1024;
-  constexpr std::size_t kToneBin = 100;
-  const MainLobe& lobe = GetParam();
-  const std::vector<float> spectrum =
+  MainLobe lobe = GetParam();
+  std::vector<float> spectrum =
       magnitude_spectrum_db(sine(kLength, kToneBin, kLength, 1.0), lobe.window);
+};
 
+TEST_P(BinCentredToneTest, ReadsItsRmsLevelInItsBinAndTheWindowsLevelsBesideIt) {
   ASSERT_EQ(spectrum.size(), (kLength / 2) + 1);
-
   EXPECT_NEAR(spectrum[kToneBin], kOneVoltPeakSineDb, 1e-4);
+  for (std::size_t distance = 1; distance <= lobe.neighbours.size(); ++distance) {
+    const double expected = kOneVoltPeakSineDb + dbv(lobe.neighbours[distance - 1]);
+    EXPECT_NEAR(spectrum[kToneBin - distance], expected, 1e-3) << distance << " bins below";
+    EXPECT_NEAR(spectrum[kToneBin + distance], expected, 1e-3) << distance << " bins above";
+  }
+}
+
+TEST_P(BinCentredToneTest, LeavesEveryBinOutsideTheMainLobeEmpty) {
+  const std::size_t lobe_width = lobe.neighbours.size();
   for (std::size_t k = 0; k < spectrum.size(); ++k) {
-    const std::size_t distance = k > kToneBin ? k - kToneBin : kToneBin - k;
-    if (distance == 0) {
-      continue;
-    }
-    if (distance <= lobe.neighbours.size()) {
-      EXPECT_NEAR(spectrum[k], kOneVoltPeakSineDb + dbv(lobe.neighbours[distance - 1]), 1e-3) << "bin " << k;
-    } else {
+    if (k + lobe_width < kToneBin || k > kToneBin + lobe_width) {
       EXPECT_LT(spectrum[k], -120.0) << "bin " << k;
     }
   }
@@ -174,7 +179,6 @@ TEST_P(OffBinToneTest, LeaksAsTheWindowPredicts) {
   const Leakage& leakage = GetParam();
   const std::vector<float> spectrum = magnitude_spectrum_db(
       sine(kLength, static_cast<double>(kLowerBin) + 0.5, kLength, 1.0), leakage.window);
-
 
   EXPECT_NEAR(spectrum[kLowerBin], kOneVoltPeakSineDb - leakage.scalloping_loss_db, 0.01);
   EXPECT_NEAR(spectrum[kLowerBin + 1], kOneVoltPeakSineDb - leakage.scalloping_loss_db, 0.01);
