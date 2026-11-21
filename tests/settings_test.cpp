@@ -160,6 +160,15 @@ TEST_F(SettingsTest, RecordLengthRoundsToTheNearestWholeSample) {
   EXPECT_EQ(session.send("ACQ:POIN?"), "1048576");
 }
 
+TEST_F(SettingsTest, RecordLengthRangeAppliesToTheValueAsSentBeforeRounding) {
+  session.send("ACQ:POIN 0.6");
+  session.send("ACQ:POIN 1048576.4");
+
+  EXPECT_EQ(session.next_error(), kOutOfRangeReply);
+  EXPECT_EQ(session.next_error(), kOutOfRangeReply);
+  EXPECT_EQ(session.send("ACQ:POIN?"), "10000");
+}
+
 TEST_F(SettingsTest, EachGeneratorAndChannelHasItsOwnSettings) {
   session.send("SOUR3:AMPL 3;FUNC RAMP");
   session.send(":CHAN2:SCAL 0.5;DISP ON");

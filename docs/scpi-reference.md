@@ -133,7 +133,7 @@ Query replies write numbers in the shortest form that reads back as the same val
 | `CHANnel<n>:SCALe` | 1 mV to 10 V per division (unit `V`) | 1 V | Vertical scale |
 | `CHANnel<n>:OFFSet` | -50 V to 50 V (unit `V`) | 0 V | The voltage at the centre of the input range |
 | `ACQuire:SRATe` | 1 to 1E9 samples per second (no unit) | 1E+06 | The sample rate of the sample clock, shared by all channels |
-| `ACQuire:POINts` | 1 to 1048576 (no unit) | 10000 | The record length: sample indexes per capture. A fraction rounds to the nearest whole number, half away from zero (`2.5` is 3) |
+| `ACQuire:POINts` | 1 to 1048576 (no unit) | 10000 | The record length: sample indexes per capture. The range applies to the value as sent, so `0.6` and `1048576.4` get `-222`. A fraction inside it rounds to the nearest whole number, half away from zero (`2.5` is 3) |
 | `TIMebase:SCALe` | 1 ns to 100 s per division (unit `S`) | 1 ms | The display viewport only; it never changes what is captured (ADR 0004) |
 
 `<n>` is 1 to 4 and defaults to 1.
