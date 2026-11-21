@@ -418,6 +418,22 @@ TEST(GeneratorFaultTest, FrequencyStepKeepsItsHertzWhenTheFrequencyChangesDuring
   EXPECT_THAT(samples(generator, 6, 4), ElementsAre(-1.0F, -0.25F, 0.5F, 0.75F));
 }
 
+TEST(GeneratorFaultTest, FrequencyStepKeepsItsHertzWhenTheSampleRateChangesDuringIt) {
+  const GeneratorSettings ramp{.function = GeneratorFunction::kRamp,
+                               .frequency = 250.0,
+                               .amplitude = 2.0,
+                               .offset = 0.0,
+                               .noise = 0.0};
+  Generator generator = make(ramp);
+  ASSERT_TRUE(generator.inject(fault(FaultKind::kFrequencyStep, 250.0, 4, 4)));
+
+  generator.configure(ramp, 2 * kSampleRate, 6);
+
+  // The same indexes as when the frequency halves: the step still adds .25 cycle per sample at
+  // the rate it was injected at, while the Generator's own advance drops to .125 per sample.
+  EXPECT_THAT(samples(generator, 6, 4), ElementsAre(-1.0F, -0.25F, 0.5F, 0.75F));
+}
+
 TEST(GeneratorFaultTest, FrequencyStepDoesNothingToDcOrNoise) {
   for (const GeneratorFunction function : {GeneratorFunction::kDc, GeneratorFunction::kNoise}) {
     const GeneratorSettings settings{
@@ -497,7 +513,8 @@ TEST(GeneratorFaultTest, FinishedFaultsAreForgottenWithTheirPhaseKept) {
   ASSERT_TRUE(forgotten.inject(fault(FaultKind::kFrequencyStep, 250.0, 2, 4)));
   ASSERT_TRUE(kept.inject(fault(FaultKind::kFrequencyStep, 250.0, 2, 4)));
 
-  // Index 100 is long after both faults, so injecting there forgets them.
+  // Index 100 is long after the step ended, so injecting there forgets it and folds its phase
+  // into the anchor.
   ASSERT_TRUE(forgotten.inject(fault(FaultKind::kGlitch, 0.0, 1, 100)));
 
   EXPECT_EQ(samples(forgotten, 100, 12), samples(kept, 100, 12));

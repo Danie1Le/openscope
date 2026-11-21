@@ -24,19 +24,18 @@ namespace {
 using test::decode_float32_block;
 using test::kDataTypeErrorReply;
 using test::kIllegalParameterValueReply;
+using test::kInvalidSuffixReply;
 using test::kMissingParameterReply;
 using test::kNoErrorReply;
+using test::kOutOfRangeReply;
 using test::kParameterNotAllowedReply;
+using test::kSettingsConflictReply;
+using test::kSuffixOutOfRangeReply;
 using test::kUndefinedHeaderReply;
 using test::ScpiSession;
 using testing::Each;
 using testing::ElementsAre;
 using testing::Eq;
-
-constexpr auto kOutOfRangeReply = R"(-222,"Data out of range")";
-constexpr auto kInvalidSuffixReply = R"(-131,"Invalid suffix")";
-constexpr auto kSuffixOutOfRangeReply = R"(-114,"Header suffix out of range")";
-constexpr auto kSettingsConflictReply = R"(-221,"Settings conflict")";
 
 /// The latest capture of `channel` (1 to 4) as `WAV:DATA?` reports it.
 std::vector<float> wave(ScpiSession& session, unsigned channel = 1) {
