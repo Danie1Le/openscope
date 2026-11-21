@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstddef>
 #include <optional>
+#include <random>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -440,6 +441,59 @@ TEST(SignalLevelsTest, TinyCapturesKeepEverySample) {
 
     EXPECT_DOUBLE_EQ(levels.top, 1.0) << samples.size();
     EXPECT_DOUBLE_EQ(levels.base, -1.0) << samples.size();
+  }
+}
+
+/// `kLength` samples of a pulse train between 0 V and 1 V, high for `duty` of each 1000-sample
+/// period, with 10 mV RMS of Gaussian noise from a fixed seed.
+std::vector<float> noisy_pulse_train(double duty) {
+  std::mt19937 random(9);
+  std::normal_distribution<double> noise(0.0, 0.01);
+  std::vector<float> samples(kLength);
+  for (std::size_t index = 0; index < kLength; ++index) {
+    const double level = static_cast<double>(index % 1000) < duty * 1000.0 ? 1.0 : 0.0;
+    samples[index] = static_cast<float>(level + noise(random));
+  }
+  return samples;
+}
+
+class NoisyPulseTrainTest : public testing::TestWithParam<double> {};
+
+// Noise spreads a level over several bins, so no single bin holds its share of the samples: a
+// narrow pulse's top (or, mirrored, a wide pulse's base) above 1/128 of the samples is still its
+// level, not the highest noise sample.
+TEST_P(NoisyPulseTrainTest, LevelsAreThePulseLevels) {
+  const SignalLevels levels = find_levels(noisy_pulse_train(GetParam()));
+
+  EXPECT_NEAR(levels.top, 1.0, 0.01);
+  EXPECT_NEAR(levels.base, 0.0, 0.01);
+}
+
+INSTANTIATE_TEST_SUITE_P(NarrowAndWidePulses, NoisyPulseTrainTest,
+                         testing::Values(0.015, 0.02, 0.03, 0.04, 0.96, 0.985));
+
+// A short triangle's evenly stepped samples land in every second or third bin, so single bins hold
+// twice the average; no level stands above the rest, so top and base are its extremes (within a
+// tenth of its span: a lone sample at an extreme may be set aside as an outlier), never a level in
+// the middle.
+TEST(SignalLevelsTest, ShortTriangleFallsBackToItsExtremes) {
+  for (const std::size_t length : std::array<std::size_t, 6>{64, 128, 256, 512, 1000, 2000}) {
+    for (const double cycles : {2.0, 3.0, 4.5, 5.0, 7.5, 11.0}) {
+      for (const double start : {0.0, 0.13, 0.37}) {
+        std::vector<float> samples(length);
+        for (std::size_t index = 0; index < length; ++index) {
+          const double phase = std::fmod(
+              (cycles * static_cast<double>(index) / static_cast<double>(length)) + start, 1.0);
+          samples[index] = static_cast<float>(phase < 0.5 ? 2.0 * phase : 2.0 - (2.0 * phase));
+        }
+        const auto [lowest, highest] = std::ranges::minmax(samples);
+
+        const SignalLevels levels = find_levels(samples);
+
+        EXPECT_NEAR(levels.top, highest, 0.1) << length << " " << cycles << " " << start;
+        EXPECT_NEAR(levels.base, lowest, 0.1) << length << " " << cycles << " " << start;
+      }
+    }
   }
 }
 
