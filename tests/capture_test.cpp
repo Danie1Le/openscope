@@ -176,13 +176,13 @@ struct HandedOn {
   /// Their first sample indexes, oldest first.
   std::vector<SampleIndex> first_indexes;
   /// The last one.
-  const Capture* last = nullptr;
+  std::shared_ptr<const Capture> last;
 
   /// The sink to pass to `push`.
   CaptureSink sink() {
-    return [this](const Capture& capture) {
-      first_indexes.push_back(capture.first_index);
-      last = &capture;
+    return [this](const std::shared_ptr<const Capture>& capture) {
+      first_indexes.push_back(capture->first_index);
+      last = capture;
     };
   }
 };
@@ -196,13 +196,13 @@ TEST(CaptureAssemblerTest, PushHandsOnEveryCaptureAsItCompletes) {
       assembler.push(rising_block(0, 7), acquisition, kChannelOne, kUntriggeredEveryRecord,
                      CaptureLimit::kEvery, handed_on.sink());
   EXPECT_THAT(handed_on.first_indexes, ElementsAre(0U, 2U, 4U));
-  EXPECT_EQ(handed_on.last, three.capture.get());  // The last one handed on is returned.
+  EXPECT_EQ(handed_on.last, three.capture);  // The last one handed on is returned.
 
   const Pushed one =
       assembler.push(rising_block(7, 1), acquisition, kChannelOne, kUntriggeredEveryRecord,
                      CaptureLimit::kEvery, handed_on.sink());
   EXPECT_THAT(handed_on.first_indexes, ElementsAre(0U, 2U, 4U, 6U));
-  EXPECT_EQ(handed_on.last, one.capture.get());
+  EXPECT_EQ(handed_on.last, one.capture);
 
   const Pushed none =
       assembler.push(rising_block(8, 1), acquisition, kChannelOne, kUntriggeredEveryRecord,
@@ -221,7 +221,7 @@ TEST(CaptureAssemblerTest, PushOfTheFirstCaptureOnlyHandsOnThatCapture) {
 
   EXPECT_EQ(pushed.end, 2U);
   EXPECT_THAT(handed_on.first_indexes, ElementsAre(0U));
-  EXPECT_EQ(handed_on.last, pushed.capture.get());
+  EXPECT_EQ(handed_on.last, pushed.capture);
 }
 
 }  // namespace
