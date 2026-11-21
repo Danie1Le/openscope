@@ -4,7 +4,7 @@
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
+#include <array>
 #include <cmath>
 #include <complex>
 #include <cstddef>
@@ -12,10 +12,14 @@
 #include <stdexcept>
 #include <vector>
 
+#include "decibels.hpp"
+
 namespace openscope {
 namespace {
 
 using Complex = std::complex<double>;
+using test::dbv;
+using test::kOneVoltPeakSineDb;
 
 constexpr double kTwoPi = 2.0 * std::numbers::pi;
 
@@ -44,8 +48,8 @@ std::vector<float> sine(std::size_t count, double cycles, std::size_t period, do
   return samples;
 }
 
-/// `volts` RMS in dBV.
-double dbv(double volts) { return 20.0 * std::log10(volts); }
+constexpr std::array<FftWindow, 3> kAllWindows{FftWindow::kRectangular, FftWindow::kHann,
+                                               FftWindow::kBlackmanHarris};
 
 TEST(FftTest, MatchesTheDirectDftAtEveryPowerOfTwoUpTo1024) {
   for (std::size_t length = 1; length <= 1024; length *= 2) {
@@ -129,7 +133,7 @@ TEST_P(BinCentredToneTest, ReadsItsRmsLevelAndSpreadsOnlyOverTheMainLobe) {
       magnitude_spectrum_db(sine(kLength, kToneBin, kLength, 1.0), lobe.window);
 
   ASSERT_EQ(spectrum.size(), (kLength / 2) + 1);
-  const double tone = dbv(1.0 / std::numbers::sqrt2);  // 1 V peak is -3.0103 dBV RMS.
+  const double tone = kOneVoltPeakSineDb;
   EXPECT_NEAR(spectrum[kToneBin], tone, 1e-4);
   for (std::size_t k = 0; k < spectrum.size(); ++k) {
     const std::size_t distance = k > kToneBin ? k - kToneBin : kToneBin - k;
@@ -171,7 +175,7 @@ TEST_P(OffBinToneTest, LeaksAsTheWindowPredicts) {
   const std::vector<float> spectrum = magnitude_spectrum_db(
       sine(kLength, static_cast<double>(kLowerBin) + 0.5, kLength, 1.0), leakage.window);
 
-  const double tone = dbv(1.0 / std::numbers::sqrt2);
+  const double tone = kOneVoltPeakSineDb;
   EXPECT_NEAR(spectrum[kLowerBin], tone - leakage.scalloping_loss_db, 0.01);
   EXPECT_NEAR(spectrum[kLowerBin + 1], tone - leakage.scalloping_loss_db, 0.01);
   const double far = spectrum[kLowerBin + 11] - tone;  // 10.5 bins above the tone.
@@ -193,12 +197,17 @@ INSTANTIATE_TEST_SUITE_P(Windows, OffBinToneTest,
                                                  .far_min_db = -200.0,
                                                  .far_max_db = -92.0}));
 
-TEST(MagnitudeSpectrumTest, DcReadsItsVoltageInEveryWindow) {
-  for (const FftWindow window :
-       {FftWindow::kRectangular, FftWindow::kHann, FftWindow::kBlackmanHarris}) {
-    const std::vector<float> spectrum =
-        magnitude_spectrum_db(std::vector<float>(256, -0.5F), window);
-    EXPECT_NEAR(spectrum[0], dbv(0.5), 1e-4);
+// The shortest spectra too: below kMinWindowedLength the window is dropped, since a window over 1
+// to 3 samples no longer has a_0 as its mean (Hann over 1 sample is all zero).
+TEST(MagnitudeSpectrumTest, DcReadsItsVoltageInEveryWindowAtEveryLength) {
+  for (const FftWindow window : kAllWindows) {
+    for (const std::size_t count : std::array<std::size_t, 5>{1, 2, 3, 4, 256}) {
+      const std::vector<float> spectrum =
+          magnitude_spectrum_db(std::vector<float>(count, -0.5F), window);
+      ASSERT_EQ(spectrum.size(), (spectrum_length(count) / 2) + 1);
+      EXPECT_NEAR(spectrum[0], dbv(0.5), 1e-4)
+          << count << " samples, window " << static_cast<int>(window);
+    }
   }
 }
 
@@ -227,26 +236,6 @@ TEST(MagnitudeSpectrumTest, UsesOnlyTheFirstSpectrumLengthSamples) {
   const std::vector<float> power_of_two = magnitude_spectrum_db(samples, FftWindow::kHann);
   samples.resize(1500, 7.0F);  // Samples past 1024 must not change the spectrum.
   EXPECT_EQ(magnitude_spectrum_db(samples, FftWindow::kHann), power_of_two);
-}
-
-TEST(MagnitudeSpectrumTest, OneSampleIsOneDcBin) {
-  const std::vector<float> spectrum =
-      magnitude_spectrum_db(std::vector<float>{2.0F}, FftWindow::kRectangular);
-  ASSERT_EQ(spectrum.size(), 1);
-  EXPECT_NEAR(spectrum[0], dbv(2.0), 1e-4);
-}
-
-TEST(MagnitudeSpectrumTest, EveryWindowGivesFiniteLevelsForTheShortestRecords) {
-  for (const FftWindow window :
-       {FftWindow::kRectangular, FftWindow::kHann, FftWindow::kBlackmanHarris}) {
-    for (std::size_t count = 1; count <= 4; ++count) {
-      const std::vector<float> spectrum =
-          magnitude_spectrum_db(std::vector<float>(count, 1.0F), window);
-      EXPECT_TRUE(std::ranges::all_of(
-          spectrum, [](float level) { return std::isfinite(level) && level >= kSpectrumFloorDb; }))
-          << count << " samples";
-    }
-  }
 }
 
 TEST(MagnitudeSpectrumTest, RejectsNoSamples) {

@@ -20,7 +20,8 @@ using Complex = std::complex<double>;
 constexpr double kTwoPi = 2.0 * std::numbers::pi;
 
 /// The coefficients a_m of a cosine-sum window, w[n] = sum (-1)^m a_m cos(2 pi m n / N). a_0 is
-/// the window's coherent gain (its mean over N >= 4 points).
+/// the window's coherent gain: its mean over N points whenever N > m for every term, which holds
+/// from kMinWindowedLength on.
 std::span<const double> window_coefficients(FftWindow window) {
   static constexpr std::array<double, 1> kRectangular{1.0};
   static constexpr std::array<double, 2> kHann{0.5, 0.5};
@@ -99,7 +100,8 @@ std::vector<float> magnitude_spectrum_db(std::span<const float> samples, FftWind
     throw std::invalid_argument("no samples for the spectrum");
   }
   const std::size_t length = spectrum_length(samples.size());
-  const std::span<const double> coefficients = window_coefficients(window);
+  const std::span<const double> coefficients =
+      window_coefficients(length < kMinWindowedLength ? FftWindow::kRectangular : window);
   std::vector<Complex> data(length);
   for (std::size_t n = 0; n < length; ++n) {
     data[n] = samples[n] * window_at(coefficients, n, length);
