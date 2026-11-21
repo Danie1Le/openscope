@@ -1,0 +1,141 @@
+#include "openscope/capture.hpp"
+
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <memory>
+#include <stdexcept>
+#include <vector>
+
+#include "instrument_fixture.hpp"
+#include "openscope/channel.hpp"
+#include "openscope/instrument.hpp"
+#include "openscope/sample_block.hpp"
+
+namespace openscope {
+namespace {
+
+using testing::FloatNear;
+
+using CaptureTest = test::InstrumentFixture;
+
+TEST_F(CaptureTest, NoCaptureUntilOneRecordLengthHasBeenSampled) {
+  EXPECT_EQ(instrument.latest_capture(), nullptr);
+
+  instrument.advance(test::kResetRecordLength - 1);
+
+  EXPECT_EQ(instrument.latest_capture(), nullptr);
+}
+
+TEST_F(CaptureTest, AdvancingByZeroSamplesDoesNothing) {
+  instrument.advance(0);
+  instrument.advance(test::kResetRecordLength - 1);
+  instrument.advance(0);
+
+  EXPECT_EQ(instrument.latest_capture(), nullptr);
+}
+
+TEST_F(CaptureTest, CaptureSpansOneRecordLengthOfTheEnabledChannelsOnly) {
+  instrument.advance(test::kResetRecordLength);
+
+  const std::shared_ptr<const Capture> capture = instrument.latest_capture();
+  ASSERT_NE(capture, nullptr);
+  EXPECT_EQ(capture->first_index, 0U);
+  EXPECT_EQ(capture->sample_rate, 1e6);
+  EXPECT_EQ(capture->record_length, test::kResetRecordLength);
+  EXPECT_TRUE(capture->untriggered);
+  EXPECT_EQ(capture->trigger_position, 0U);
+  const CapturedChannel channel = test::captured(instrument, 1);
+  EXPECT_EQ(channel.settings.scale, 1.0);
+  EXPECT_EQ(channel.settings.offset, 0.0);
+  EXPECT_EQ(channel.samples.size(), test::kResetRecordLength);
+  for (std::size_t n = 1; n < kChannelCount; ++n) {
+    EXPECT_FALSE(capture->channels.at(n).has_value()) << "CH" << n + 1;
+  }
+}
+
+TEST_F(CaptureTest, ChannelOneCarriesGeneratorOnesSine) {
+  instrument.advance(test::kResetRecordLength);
+
+  const std::vector<float> samples = test::captured(instrument, 1).samples;
+  EXPECT_EQ(samples[0], 0.0F);
+  EXPECT_EQ(samples[250], 1.0F);
+  EXPECT_THAT(samples[500], FloatNear(0.0F, 1e-6F));
+  EXPECT_EQ(samples[750], -1.0F);
+  EXPECT_EQ(samples[1250], 1.0F);  // The next cycle.
+}
+
+TEST_F(CaptureTest, CapturesFollowEachOtherBackToBackAndOnlyTheLatestIsKept) {
+  instrument.advance((2 * test::kResetRecordLength) + 5000);
+  EXPECT_EQ(instrument.latest_capture()->first_index, test::kResetRecordLength);
+
+  instrument.advance(4999);
+  EXPECT_EQ(instrument.latest_capture()->first_index, test::kResetRecordLength);
+
+  instrument.advance(1);
+  EXPECT_EQ(instrument.latest_capture()->first_index, 2 * test::kResetRecordLength);
+}
+
+TEST_F(CaptureTest, APublishedCaptureNeverChanges) {
+  instrument.advance(test::kResetRecordLength);
+  const std::shared_ptr<const Capture> first = instrument.latest_capture();
+  const std::vector<float> samples = test::captured(instrument, 1).samples;
+
+  instrument.advance(3 * test::kResetRecordLength);
+
+  EXPECT_NE(instrument.latest_capture(), first);
+  EXPECT_EQ(first->first_index, 0U);
+  EXPECT_EQ(first->channels[0].value_or(CapturedChannel{}).samples, samples);
+}
+
+// A capture is the same however the sample clock was stepped, including steps longer than one
+// sample block and blocks that end part-way through a capture.
+TEST_F(CaptureTest, CaptureDoesNotDependOnHowTheClockWasStepped) {
+  constexpr std::size_t kSamples = (3 * Instrument::kMaxBlockLength) + 7;
+  instrument.advance(kSamples);
+
+  Instrument stepped;
+  for (std::size_t done = 0; done < kSamples; done += 999) {
+    stepped.advance(std::min<std::size_t>(999, kSamples - done));
+  }
+
+  const std::shared_ptr<const Capture> whole = instrument.latest_capture();
+  const std::shared_ptr<const Capture> pieces = stepped.latest_capture();
+  EXPECT_EQ(whole->first_index,
+            ((kSamples / test::kResetRecordLength) - 1) * test::kResetRecordLength);
+  EXPECT_EQ(pieces->first_index, whole->first_index);
+  EXPECT_EQ(test::captured(stepped, 1).samples, test::captured(instrument, 1).samples);
+}
+
+TEST(CaptureAssemblerTest, BlockWithoutAChannelOfTheCaptureInProgressIsALogicError) {
+  std::array<ChannelSettings, kChannelCount> channels{};
+  channels[1].enabled = true;
+  CaptureAssembler assembler;
+  SampleBlock block{.first_index = 0, .count = 2, .channels = {}};
+  block.channels[1] = {0.0F, 0.0F};
+  assembler.push(block, {.sample_rate = 1.0, .record_length = 4}, channels);
+
+  block.first_index = 2;
+  block.channels[1].clear();
+
+  EXPECT_THROW(assembler.push(block, {.sample_rate = 1.0, .record_length = 4}, channels),
+               std::logic_error);
+}
+
+TEST(CaptureAssemblerTest, RecordLengthOfZeroIsALogicError) {
+  std::array<ChannelSettings, kChannelCount> channels{};
+  channels[0].enabled = true;
+  CaptureAssembler assembler;
+  SampleBlock block{.first_index = 0, .count = 1, .channels = {}};
+  block.channels[0] = {0.0F};
+
+  EXPECT_THROW(assembler.push(block, {.sample_rate = 1.0, .record_length = 0}, channels),
+               std::logic_error);
+  EXPECT_EQ(assembler.latest(), nullptr);
+}
+
+}  // namespace
+}  // namespace openscope
