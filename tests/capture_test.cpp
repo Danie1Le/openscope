@@ -7,7 +7,6 @@
 #include <cstddef>
 #include <memory>
 #include <optional>
-#include <span>
 #include <stdexcept>
 #include <vector>
 
@@ -23,7 +22,6 @@ namespace {
 
 using testing::ElementsAre;
 using testing::FloatNear;
-using testing::IsEmpty;
 
 using CaptureTest = test::InstrumentFixture;
 
@@ -174,56 +172,51 @@ SampleBlock rising_block(SampleIndex first, std::size_t count) {
   return block;
 }
 
-/// The first sample index of each of `captures`.
-std::vector<SampleIndex> first_indexes(std::span<const std::shared_ptr<const Capture>> captures) {
-  std::vector<SampleIndex> indexes;
-  for (const auto& capture : captures) {
-    indexes.push_back(capture->first_index);
-  }
-  return indexes;
-}
+/// The captures an assembler hands on, by first sample index. Each must already be the latest
+/// capture when it is handed on: the assembler holds no capture back until the block ends.
+struct HandedOn {
+  const CaptureAssembler& assembler;
+  std::vector<SampleIndex> first_indexes;
 
-TEST(CaptureAssemblerTest, PushReportsEveryCaptureItCompletesOldestFirst) {
+  /// The sink to pass to `push`.
+  CaptureSink sink() {
+    return [this](const Capture& capture) {
+      EXPECT_EQ(assembler.latest().get(), &capture);
+      first_indexes.push_back(capture.first_index);
+    };
+  }
+};
+
+TEST(CaptureAssemblerTest, PushHandsOnEveryCaptureAsItCompletes) {
   CaptureAssembler assembler;
+  HandedOn handed_on{.assembler = assembler, .first_indexes = {}};
   const AcquisitionSettings acquisition{.sample_rate = 1.0, .record_length = 2};
 
-  assembler.push(rising_block(0, 7), acquisition, kChannelOne, kUntriggeredEveryRecord);
+  assembler.push(rising_block(0, 7), acquisition, kChannelOne, kUntriggeredEveryRecord,
+                 CaptureLimit::kEvery, handed_on.sink());
+  EXPECT_THAT(handed_on.first_indexes, ElementsAre(0U, 2U, 4U));
 
-  const std::vector<std::shared_ptr<const Capture>> completed = assembler.take_completed();
-  EXPECT_THAT(first_indexes(completed), ElementsAre(0U, 2U, 4U));
-  EXPECT_EQ(completed.empty() ? nullptr : completed.back(), assembler.latest());
-  EXPECT_THAT(assembler.take_completed(), IsEmpty());
+  assembler.push(rising_block(7, 1), acquisition, kChannelOne, kUntriggeredEveryRecord,
+                 CaptureLimit::kEvery, handed_on.sink());
+  EXPECT_THAT(handed_on.first_indexes, ElementsAre(0U, 2U, 4U, 6U));
 
-  assembler.push(rising_block(7, 1), acquisition, kChannelOne, kUntriggeredEveryRecord);
-
-  EXPECT_THAT(first_indexes(assembler.take_completed()), ElementsAre(6U));
-
-  assembler.push(rising_block(8, 1), acquisition, kChannelOne, kUntriggeredEveryRecord);
-
-  EXPECT_THAT(assembler.take_completed(), IsEmpty());
+  assembler.push(rising_block(8, 1), acquisition, kChannelOne, kUntriggeredEveryRecord,
+                 CaptureLimit::kEvery, handed_on.sink());
+  EXPECT_THAT(handed_on.first_indexes, ElementsAre(0U, 2U, 4U, 6U));
   ASSERT_NE(assembler.latest(), nullptr);
   EXPECT_EQ(assembler.latest()->first_index, 6U);
 }
 
-TEST(CaptureAssemblerTest, PushDropsCapturesNotTaken) {
+TEST(CaptureAssemblerTest, PushOfTheFirstCaptureOnlyHandsOnThatCapture) {
   CaptureAssembler assembler;
-  const AcquisitionSettings acquisition{.sample_rate = 1.0, .record_length = 2};
-
-  assembler.push(rising_block(0, 4), acquisition, kChannelOne, kUntriggeredEveryRecord);
-  assembler.push(rising_block(4, 2), acquisition, kChannelOne, kUntriggeredEveryRecord);
-
-  EXPECT_THAT(first_indexes(assembler.take_completed()), ElementsAre(4U));
-}
-
-TEST(CaptureAssemblerTest, PushOfTheFirstCaptureOnlyReportsThatCapture) {
-  CaptureAssembler assembler;
+  HandedOn handed_on{.assembler = assembler, .first_indexes = {}};
 
   const std::optional<std::size_t> end =
       assembler.push(rising_block(0, 7), {.sample_rate = 1.0, .record_length = 2}, kChannelOne,
-                     kUntriggeredEveryRecord, CaptureLimit::kFirst);
+                     kUntriggeredEveryRecord, CaptureLimit::kFirst, handed_on.sink());
 
   EXPECT_EQ(end, 2U);
-  EXPECT_THAT(first_indexes(assembler.take_completed()), ElementsAre(0U));
+  EXPECT_THAT(handed_on.first_indexes, ElementsAre(0U));
 }
 
 }  // namespace

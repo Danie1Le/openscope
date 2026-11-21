@@ -1,6 +1,7 @@
 // Measurement statistics through SCPI: MEAS:STAT? <type>,CHAN<n> replies
 // <current>,<mean>,<minimum>,<maximum>,<standard deviation>,<count> over the captures since the
-// last reset, which MEAS:STAT:RES, every setting change and *RST make.
+// last reset, which MEAS:STAT:RES, every instrument-wide setting change but the timebase, and *RST
+// make.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -41,9 +42,9 @@ using testing::DoubleNear;
 /// The record length these tests capture at: short, so many captures are quick.
 constexpr std::size_t kRecord = 1000;
 
-/// kRecord as the record length: with kUntriggeredCaptures, every kRecord samples complete one
+/// Sets kRecord as the record length: with kUntriggeredCaptures, every kRecord samples complete one
 /// untriggered capture.
-constexpr auto kShortRecords = "ACQ:POIN 1000";
+std::string short_records() { return std::format("ACQ:POIN {}", kRecord); }
 
 /// The fields of a MEAS:STAT? reply, in reply order.
 struct Statistics {
@@ -111,7 +112,7 @@ class StatisticsTest : public test::InstrumentFixture {
  protected:
   void SetUp() override {
     session.send(kUntriggeredCaptures);
-    session.send(kShortRecords);
+    session.send(short_records());
   }
 
   /// Advances through `captures` captures.
@@ -189,7 +190,7 @@ std::optional<std::string> stepped_statistics(std::size_t samples, std::size_t s
   Instrument instrument(7);
   ScpiSession session(instrument);
   session.send(kUntriggeredCaptures);
-  session.send(kShortRecords);
+  session.send(short_records());
   session.send("SOUR1:FREQ 1234;NOIS 0.2");
   test::advance_in_steps(instrument, samples, step);
   return session.send(
@@ -206,6 +207,33 @@ TEST(StatisticsSteppingTest, HowTheClockIsSteppedNeverChangesTheStatistics) {
   for (const std::size_t step : {std::size_t{1}, std::size_t{997}, kRecord - 1, kRecord,
                                  kRecord + 1, Instrument::kMaxBlockLength}) {
     EXPECT_EQ(stepped_statistics(kSamples, step), whole) << "step " << step;
+  }
+}
+
+/// The reply of a line held on a Single sent part-way through a capture, then MEAS:STAT? once the
+/// Single has stopped the instrument, on seed 7 with noise, with the clock stepped `step` samples
+/// at a time.
+std::string stepped_single(std::size_t step) {
+  Instrument instrument(7);
+  ScpiSession session(instrument);
+  session.send(kUntriggeredCaptures);
+  session.send(short_records());
+  session.send("SOUR1:FREQ 1234;NOIS 0.2");
+  test::advance_in_steps(instrument, (30 * kRecord) + 300, step);
+  const auto held = session.start("SINGle;*OPC?;:MEAS:STAT? VPP,CHAN1");
+  test::advance_in_steps(instrument, 3 * kRecord, step);
+  EXPECT_TRUE(held->ended) << "step " << step;
+  return held->text.value_or("") + " / " + session.send("MEAS:STAT? VPP,CHAN1").value_or("");
+}
+
+// The Single's capture ends a block early (ADR 0003): wherever the steps fall around it, the
+// statistics count the same captures and the held line reads them.
+TEST(StatisticsSteppingTest, HowTheClockIsSteppedAcrossASingleNeverChangesTheStatistics) {
+  const std::string whole = stepped_single(Instrument::kMaxBlockLength);
+  EXPECT_THAT(whole, testing::EndsWith(",31"));  // 30 captures, then the Single's.
+  for (const std::size_t step : {std::size_t{1}, std::size_t{299}, kRecord - 1, kRecord,
+                                 kRecord + 1}) {
+    EXPECT_EQ(stepped_single(step), whole) << "step " << step;
   }
 }
 
@@ -258,9 +286,10 @@ struct StatisticsCase {
 class StatisticsResetTest : public StatisticsTest,
                             public testing::WithParamInterface<StatisticsCase> {};
 
-// Spec #1, story 64: every instrument-wide setting resets them, even when it sets the value already
-// in place. Session-owned settings (ADR 0002), run control, faults, queries and rejected commands
-// change no setting and keep them.
+// Spec #1, story 64: every instrument-wide setting that shapes captures resets them, even when it
+// sets the value already in place. The timebase only zooms the display (ADR 0004), so it keeps
+// them, like Session-owned settings (ADR 0002), run control, faults, queries and rejected
+// commands, which change no such setting.
 TEST_P(StatisticsResetTest, OnlySettingChangesResetTheStatistics) {
   capture(3);
 
@@ -281,7 +310,7 @@ INSTANTIATE_TEST_SUITE_P(
                     StatisticsCase{"CHAN1:DISP ON", true}, StatisticsCase{"CHAN1:SCAL 1", true},
                     StatisticsCase{"CHAN1:OFFS 0", true}, StatisticsCase{"CHAN2:DISP OFF", true},
                     StatisticsCase{"ACQ:SRAT 1E6", true}, StatisticsCase{"ACQ:POIN 1000", true},
-                    StatisticsCase{"TIM:SCAL 0.001", true}, StatisticsCase{"TRIG:SOUR CHAN1", true},
+                    StatisticsCase{"TIM:SCAL 0.001", false}, StatisticsCase{"TRIG:SOUR CHAN1", true},
                     StatisticsCase{"TRIG:LEV 100", true}, StatisticsCase{"TRIG:SLOP POS", true},
                     StatisticsCase{"TRIG:MODE AUTO", true}, StatisticsCase{"TRIG:HOLD 0", true},
                     StatisticsCase{"TRIG:POS 0", true}, StatisticsCase{"*RST", true},
