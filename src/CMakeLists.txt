@@ -5,6 +5,7 @@ add_library(openscope
   openscope/generator.cpp
   openscope/instrument.cpp
   openscope/measurement.cpp
+  openscope/measurement_statistics.cpp
   openscope/sample_block.cpp
   openscope/scpi/command_tree.cpp
   openscope/scpi/parser.cpp
