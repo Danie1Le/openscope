@@ -37,7 +37,8 @@ double settled_level(std::span<const std::size_t> counts, std::span<const double
   return sums[static_cast<std::size_t>(fullest - counts.begin())] / static_cast<double>(*fullest);
 }
 
-/// The levels of `samples`, which hold at least one sample (a capture's record length is never 0).
+}  // namespace
+
 SignalLevels find_levels(std::span<const float> samples) {
   const auto [lowest, highest] = std::ranges::minmax(samples);
   SignalLevels levels{.minimum = lowest, .maximum = highest, .top = highest, .base = lowest};
@@ -64,6 +65,8 @@ SignalLevels find_levels(std::span<const float> samples) {
   return levels;
 }
 
+namespace {
+
 constexpr std::array kMeasurements{
     Measurement{.mnemonic = "VPP",
                 .measure = [](const MeasuredSignal& signal) -> std::optional<double> {
@@ -79,12 +82,14 @@ constexpr std::array kMeasurements{
                 }},
 };
 
-/// Measures `channel` with `measurement` and gives the result its status. No signal comes first,
-/// since a flat signal has no value even when it is clipped flat at a limit; Clipped only marks a
-/// value that exists.
+}  // namespace
+
+// No signal comes first, since a flat signal has no edges or cycles even when it is clipped flat
+// at a limit; Clipped only marks a value that exists.
 MeasurementResult evaluate(const Measurement& measurement, const CapturedChannel& channel,
                            const SignalLevels& levels) {
-  if (levels.top - levels.base < kNoSignalDivisions * channel.settings.scale) {
+  if (measurement.needs_signal &&
+      levels.top - levels.base < kNoSignalDivisions * channel.settings.scale) {
     return {.status = MeasurementStatus::kNoSignal, .value = std::nullopt};
   }
   const std::optional<double> value =
@@ -97,8 +102,6 @@ MeasurementResult evaluate(const Measurement& measurement, const CapturedChannel
                        levels.maximum >= channel.settings.upper_limit();
   return {.status = clipped ? MeasurementStatus::kClipped : MeasurementStatus::kOk, .value = value};
 }
-
-}  // namespace
 
 std::span<const Measurement> measurements() { return kMeasurements; }
 
