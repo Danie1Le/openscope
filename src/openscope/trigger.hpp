@@ -2,6 +2,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
+#include <vector>
 
 namespace openscope {
 
@@ -39,6 +41,31 @@ struct TriggerSettings {
   /// How far into the capture time zero sits, as a percentage of the record
   /// (`TRIGger:POSition`): the share of the capture taken before the trigger event.
   double position = 50.0;
+};
+
+/// Finds trigger events on the trigger channel: sample indexes where the signal reaches the level
+/// in the slope's direction after first passing at least one hysteresis band beyond it on the
+/// other side, so noise around the level does not fire it again. It sees every sample of the
+/// trigger channel in order and knows nothing about captures, which decide what to do with each
+/// event.
+class EdgeTrigger {
+ public:
+  /// A trigger at `level` volts on the `slope` edge with a band of `hysteresis` volts. It starts
+  /// unarmed: the first event needs the signal to pass the band first.
+  EdgeTrigger(double level, TriggerSlope slope, double hysteresis);
+
+  /// The offsets in `samples` of the trigger events among them, in order. `samples` are the next
+  /// samples on the trigger channel after those of the previous call.
+  std::vector<std::size_t> find(std::span<const float> samples);
+
+ private:
+  /// +1 for a positive slope, -1 for a negative one: samples and level are multiplied by it, so a
+  /// falling edge is found as a rising one.
+  double direction_;
+  double level_;
+  double hysteresis_;
+  /// True once the signal has passed the band since the last trigger event.
+  bool armed_ = false;
 };
 
 }  // namespace openscope
