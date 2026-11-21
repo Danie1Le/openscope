@@ -199,8 +199,8 @@ TEST_F(AcquisitionTest, ACaptureKeepsTheVerticalSettingsItWasTakenWith) {
 
   session.send("CHAN1:SCAL 3;OFFS 1");
 
-  EXPECT_EQ(captured(instrument, 1).scale, 2.0);
-  EXPECT_EQ(captured(instrument, 1).offset, 0.5);
+  EXPECT_EQ(captured(instrument, 1).settings.scale, 2.0);
+  EXPECT_EQ(captured(instrument, 1).settings.offset, 0.5);
 }
 
 // A capture takes its settings from its first sample, so a change part-way through one would mix
