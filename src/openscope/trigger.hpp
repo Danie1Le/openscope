@@ -43,11 +43,12 @@ struct TriggerSettings {
   double position = 50.0;
 };
 
-/// Finds trigger events on the trigger channel: sample indexes where the signal reaches the level
-/// in the slope's direction after first passing at least one hysteresis band beyond it on the
-/// other side, so noise around the level does not fire it again. It sees every sample of the
-/// trigger channel in order and knows nothing about captures, which decide what to do with each
-/// event.
+/// Finds trigger events on the trigger channel: the offsets, within the samples it is given, where
+/// the signal reaches the level in the slope's direction after first passing at least one
+/// hysteresis band beyond it on the other side, so noise around the level does not fire it again.
+/// The caller adds the first sample index of the samples to get a sample index. It sees every
+/// sample of the trigger channel in order and knows nothing about captures, which decide what to
+/// do with each event.
 class EdgeTrigger {
  public:
   /// A trigger at `level` volts on the `slope` edge with a band of `hysteresis` volts. It starts
@@ -60,10 +61,12 @@ class EdgeTrigger {
 
  private:
   /// +1 for a positive slope, -1 for a negative one: samples and level are multiplied by it, so a
-  /// falling edge is found as a rising one.
-  double direction_;
-  double level_;
-  double hysteresis_;
+  /// falling edge is found as a rising one. Negating a float is exact, so both slopes agree.
+  float direction_;
+  /// The thresholds, as floats like the samples they are compared with: a sample equal to the
+  /// level or the band edge must fire or arm whichever way the level rounds to float.
+  float fire_at_;
+  float arm_at_;
   /// True once the signal has passed the band since the last trigger event.
   bool armed_ = false;
 };
