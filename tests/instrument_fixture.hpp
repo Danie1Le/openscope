@@ -5,7 +5,10 @@
 #include <algorithm>
 #include <cstddef>
 #include <memory>
+#include <optional>
+#include <utility>
 
+#include "openscope/acquired_block.hpp"
 #include "openscope/capture.hpp"
 #include "openscope/instrument.hpp"
 #include "openscope/sample_clock.hpp"
@@ -64,6 +67,25 @@ inline SampleIndex first_index(const Instrument& instrument) {
 inline void advance_in_steps(Instrument& instrument, std::size_t samples, std::size_t step) {
   for (std::size_t done = 0; done < samples; done += step) {
     instrument.advance(std::min(step, samples - done));
+  }
+}
+
+/// The next `count` sample indexes of `instrument`, acquired as live mode's acquisition thread
+/// does. Fails the test when the instrument acquired nothing (it is Stopped).
+inline AcquiredBlock acquired(Instrument& instrument, std::size_t count) {
+  std::optional<AcquiredBlock> block = instrument.acquire(count);
+  if (!block) {
+    ADD_FAILURE() << "nothing acquired";
+    return {};
+  }
+  return std::move(*block);
+}
+
+/// Acquires `samples` sample indexes in blocks of at most `step` and processes each, as live
+/// mode's two threads do, on the calling thread.
+inline void acquire_and_process(Instrument& instrument, std::size_t samples, std::size_t step) {
+  for (std::size_t done = 0; done < samples; done += step) {
+    instrument.process(acquired(instrument, std::min(step, samples - done)));
   }
 }
 

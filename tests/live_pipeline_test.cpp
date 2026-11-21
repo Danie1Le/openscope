@@ -14,10 +14,12 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include "instrument_fixture.hpp"
 #include "openscope/capture.hpp"
 #include "openscope/instrument.hpp"
+#include "reply_numbers.hpp"
 #include "scpi_session.hpp"
 
 namespace openscope {
@@ -124,6 +126,48 @@ TEST_F(LivePipelineTest, CountsTheSamplesItFallsBehindOn) {
   const LivePipeline live(instrument);
 
   EXPECT_TRUE(eventually([&] { return live.skipped_samples() > 0; }));
+}
+
+// Spec story 64 in live mode: once a setting command has returned, the statistics count only
+// captures of the new signal, although blocks acquired before it were still on their way.
+TEST_F(LivePipelineTest, StatisticsCountOnlyTheNewSignalAfterASettingChange) {
+  const LivePipeline live(instrument);
+  for (const float offset : {0.25F, -0.5F, 1.0F}) {
+    session.send("SOUR1:OFFS " + std::to_string(offset));
+    std::vector<double> fields;
+
+    const bool counted = eventually([&] {
+      const std::optional<std::string> reply = session.send("MEAS:STAT? VAV,CHAN1");
+      fields = reply ? test::numbers(reply) : std::vector<double>{};
+      return fields.size() == 6 && fields[5] >= 2;  // The count.
+    });
+
+    ASSERT_TRUE(counted) << offset;
+    EXPECT_EQ(fields[2], offset);  // The minimum.
+    EXPECT_EQ(fields[3], offset);  // The maximum.
+  }
+}
+
+// The processing thread counts a capture before it publishes it, so MEAS:STAT? checks the channel
+// against the statistics: right after a channel change, the latest capture may still have the old
+// channels while the statistics already count a capture with the new ones.
+TEST_F(LivePipelineTest, StatisticsHoldTheChannelsOfTheCapturesTheyCount) {
+  session.send("ACQ:POIN 10");  // Many captures a block, so the race is often there to lose.
+  const LivePipeline live(instrument);
+  for (int round = 0; round < 50; ++round) {
+    const bool enabled = round % 2 == 0;
+    session.send(enabled ? "CHAN2:DISP ON" : "CHAN2:DISP OFF");
+    std::string error;
+
+    const bool counted = eventually([&] {
+      session.send("MEAS:STAT? VPP,CHAN2");
+      error = session.next_error();
+      return error != test::kDataStaleReply;
+    });
+
+    ASSERT_TRUE(counted) << round;
+    EXPECT_EQ(error, enabled ? test::kNoErrorReply : test::kSettingsConflictReply) << round;
+  }
 }
 
 TEST_F(LivePipelineTest, StopFreezesTheLatestCapture) {

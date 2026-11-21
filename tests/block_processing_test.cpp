@@ -5,14 +5,11 @@
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <cstddef>
 #include <memory>
-#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
-#include <utility>
 #include <vector>
 
 #include "instrument_fixture.hpp"
@@ -24,28 +21,12 @@
 namespace openscope {
 namespace {
 
+using test::acquire_and_process;
+using test::acquired;
 using test::first_index;
 using test::kResetRecordLength;
 using test::kUntriggeredDc;
 using test::ScpiSession;
-
-/// The next `count` sample indexes of `instrument`, acquired. Fails the test when the instrument
-/// acquired nothing (it is Stopped).
-AcquiredBlock acquired(Instrument& instrument, std::size_t count) {
-  std::optional<AcquiredBlock> block = instrument.acquire(count);
-  if (!block) {
-    ADD_FAILURE() << "nothing acquired";
-    return {};
-  }
-  return std::move(*block);
-}
-
-/// Acquires `samples` sample indexes in blocks of at most `step` and processes each.
-void acquire_and_process(Instrument& instrument, std::size_t samples, std::size_t step) {
-  for (std::size_t done = 0; done < samples; done += step) {
-    instrument.process(acquired(instrument, std::min(step, samples - done)));
-  }
-}
 
 using BlockProcessingTest = test::UntriggeredDcFixture;
 
