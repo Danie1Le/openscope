@@ -137,7 +137,7 @@ struct ToneBin {
 using ToneCase = std::tuple<MainLobe, ToneBin>;
 
 /// A 1 V peak sine centred on a bin of a spectrum under each window, at a small size and at the
-/// largest one (Capture::kMaxRecordLength, 2^20 points).
+/// largest one (AcquisitionSettings::kMaxRecordLength, 2^20 points).
 class BinCentredToneTest : public testing::TestWithParam<ToneCase> {
  protected:
   MainLobe lobe = std::get<0>(GetParam());
