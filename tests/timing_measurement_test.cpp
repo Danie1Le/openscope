@@ -47,6 +47,10 @@ constexpr auto kCycleQueries = "MEAS:FREQ? CHAN1;PER? CHAN1;DUTY? CHAN1";
 /// Every timing measurement of channel 1, short form, in one line.
 constexpr auto kTimingQueries = "MEAS:FREQ? CHAN1;PER? CHAN1;DUTY? CHAN1;RIS? CHAN1;FALL? CHAN1";
 
+/// How many queries kTimingQueries holds, and so how many status entries it pushes at most.
+constexpr std::ptrdiff_t kTimingQueryCount =
+    std::ranges::count(std::string_view{kTimingQueries}, ';') + 1;
+
 TEST_F(TimingMeasurementTest, SquareWaveRepliesAreExact) {
   session.send("SOUR1:FUNC SQU;:CHAN2:DISP ON;:SOUR2:FUNC SQU;FREQ 2.5KHZ");
   instrument.advance(kResetRecordLength);
@@ -266,12 +270,15 @@ TEST(NoisySquareTimingTest, DutyCycleIsHalf) {
 
 // NFR-6: rise and fall times within 2 sample periods (2 us) of the Generator's, whose square wave
 // steps in no time at all. A slow edge has no such bound: noise at 1% of the amplitude alone moves
-// its 10% and 90% crossings by several samples.
+// its 10% and 90% crossings by several samples. The step falls between two samples, so its 10% and
+// 90% crossings interpolate to 0.8 sample periods apart; noise changes the step height by about 1%
+// and so the reading by about 0.01 us. A reading further off than 0.05 us is noise moving the
+// crossings.
 TEST(NoisySquareTimingTest, EdgesAreWithinTwoSamplePeriods) {
   for (std::uint64_t seed = 1; seed <= kNoiseSeeds; ++seed) {
     for (const std::string_view query : {"MEAS:RIS?", "MEAS:FALL?"}) {
       const auto [seconds, error] = measure_noisy(seed, kNoisySquare, query);
-      EXPECT_THAT(seconds, DoubleNear(0.0, 2e-6)) << query << " seed " << seed;
+      EXPECT_THAT(seconds, DoubleNear(0.8e-6, 0.05e-6)) << query << " seed " << seed;
       EXPECT_EQ(error, kNoErrorReply) << query << " seed " << seed;
     }
   }
@@ -326,7 +333,7 @@ TEST_F(TimingMeasurementTest, ClippedSignalReturnsTheValueWithAWarning) {
   instrument.advance(kResetRecordLength);
 
   EXPECT_EQ(session.send(kTimingQueries), "1000;0.001;50;8E-07;8E-07");
-  for (int entry = 0; entry < 5; ++entry) {
+  for (std::ptrdiff_t entry = 0; entry < kTimingQueryCount; ++entry) {
     EXPECT_EQ(session.next_error(), kClippedReply) << entry;
   }
   EXPECT_EQ(session.next_error(), kNoErrorReply);
@@ -489,7 +496,7 @@ TEST(TooFewCyclesTest, EdgeCountsOnceItIsComplete) {
   EXPECT_THAT(measure("FALLtime", samples).value, testing::Optional(DoubleNear(0.8, 1e-9)));
 }
 
-/// Appends `samples` stepping from 0 V to 1 V in `steps` equal steps, then held at 1 V for 50
+/// Appends to `samples` a rise from 0 V to 1 V in `steps` equal steps, then 1 V for 50
 /// samples and back at 0 V for 50: an edge of 0.8 `steps` sample periods from 10% to 90%.
 void append_rise(std::vector<float>& samples, std::size_t steps) {
   for (std::size_t step = 1; step <= steps; ++step) {
