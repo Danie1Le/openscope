@@ -26,7 +26,11 @@ std::uint64_t Pacer::release(Clock::time_point now, double sample_rate, std::uin
   }
   const std::uint64_t fresh = due - released_;
   released_ = due;
-  return std::min(fresh, most);
+  if (fresh > most) {
+    skipped_ += fresh - most;
+    return most;
+  }
+  return fresh;
 }
 
 }  // namespace openscope

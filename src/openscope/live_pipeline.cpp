@@ -23,9 +23,11 @@ void LivePipeline::acquire_blocks(const std::stop_token& stop) {
   Pacer pacer(Pacer::Clock::now());
   while (!stop.stop_requested()) {
     // A round acquires at most what the ring buffer can hold, so a machine too slow for the sample
-    // rate runs behind the wall clock instead of piling up a backlog it would rush through later.
+    // rate runs behind the wall clock instead of piling up a backlog it would rush through later;
+    // the samples it skips are counted.
     std::uint64_t due = pacer.release(Pacer::Clock::now(), instrument_->sample_rate(),
                                       kQueueCapacity * Instrument::kMaxBlockLength);
+    skipped_samples_.store(pacer.skipped(), std::memory_order_relaxed);
     while (due > 0 && !stop.stop_requested()) {
       const auto count =
           static_cast<std::size_t>(std::min<std::uint64_t>(due, Instrument::kMaxBlockLength));

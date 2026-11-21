@@ -79,12 +79,39 @@ TEST(PacerTest, NewSampleRateAfterAPartSamplePeriodLosesNoTime) {
   EXPECT_EQ(pacer.release(kStart + milliseconds(3), 2000.0, kNoLimit), 2U);
 }
 
-// 10 ms behind with room for 4 ms: the other 6 ms are skipped, and pacing carries on from there.
-TEST(PacerTest, CallerTooFarBehindSkipsWhatIsOverTheLimit) {
+TEST(PacerTest, NothingIsSkippedWhileTheCallerKeepsUp) {
+  Pacer pacer(kStart);
+
+  ASSERT_EQ(pacer.release(kStart + milliseconds(4), 1e6, 4000), 4000U);
+
+  EXPECT_EQ(pacer.skipped(), 0U);
+}
+
+// 10 ms behind with room for 4 ms: the other 6 ms are skipped and counted, and pacing carries on
+// from there.
+TEST(PacerTest, CallerTooFarBehindSkipsAndCountsWhatIsOverTheLimit) {
   Pacer pacer(kStart);
 
   EXPECT_EQ(pacer.release(kStart + milliseconds(10), 1e6, 4000), 4000U);
+  EXPECT_EQ(pacer.skipped(), 6000U);
   EXPECT_EQ(pacer.release(kStart + milliseconds(11), 1e6, 4000), 1000U);
+  EXPECT_EQ(pacer.skipped(), 6000U);
+}
+
+// A sample rate the caller never sustains: each call is over the limit, and every sample that
+// fell due is either released or counted as skipped, across a rate change too.
+TEST(PacerTest, ReleasedAndSkippedAddUpToEverySampleDue) {
+  Pacer pacer(kStart);
+  std::uint64_t released = 0;
+  for (int ms = 1; ms <= 100; ++ms) {
+    released += pacer.release(kStart + milliseconds(ms), 1e8, 65536);
+  }
+  for (int ms = 101; ms <= 200; ++ms) {
+    released += pacer.release(kStart + milliseconds(ms), 1e9, 65536);
+  }
+
+  EXPECT_EQ(released, 200U * 65536U);
+  EXPECT_EQ(released + pacer.skipped(), 10'000'000U + 100'000'000U);
 }
 
 }  // namespace

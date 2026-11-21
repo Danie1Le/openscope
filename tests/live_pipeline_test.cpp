@@ -117,6 +117,15 @@ TEST_F(LivePipelineTest, SingleOpcRepliesFromTheProcessingThreadOnceTheCaptureIs
   EXPECT_NE(instrument.latest_capture(), nullptr);
 }
 
+// Four sine channels at 1 GS/s are far more than any machine samples in real time: acquisition
+// falls behind the wall clock every round, and the samples it skips are counted, never hidden.
+TEST_F(LivePipelineTest, CountsTheSamplesItFallsBehindOn) {
+  session.send("ACQ:SRAT 1E9;:CHAN2:DISP ON;:CHAN3:DISP ON;:CHAN4:DISP ON");
+  const LivePipeline live(instrument);
+
+  EXPECT_TRUE(eventually([&] { return live.skipped_samples() > 0; }));
+}
+
 TEST_F(LivePipelineTest, StopFreezesTheLatestCapture) {
   const LivePipeline live(instrument);
   ASSERT_NE(next_capture(instrument, nullptr), nullptr);

@@ -17,17 +17,22 @@ class Pacer {
 
   /// Releases the samples that have fallen due by `now` at `sample_rate` samples per second and
   /// not been released yet, and returns how many, but at most `most`: one per sample period that
-  /// has passed. A caller that has fallen further behind than `most` skips the rest, so it
-  /// carries on that far behind the wall clock rather than catching up in a burst. A new sample
-  /// rate counts from when the last sample released fell due, so a change neither drops nor
-  /// repeats samples.
+  /// has passed. More than `most` are due whenever a call comes late: after a stall, or every
+  /// time when the sample rate is more than the caller sustains. The rest are then skipped and
+  /// counted (`skipped`), so the caller carries on behind the wall clock rather than catching up
+  /// in a burst. A new sample rate counts from when the last sample released fell due, so a
+  /// change neither drops nor repeats samples.
   std::uint64_t release(Clock::time_point now, double sample_rate, std::uint64_t most);
+
+  /// How many samples that fell due `release` has skipped for being over `most`, in all.
+  [[nodiscard]] std::uint64_t skipped() const { return skipped_; }
 
  private:
   /// When the samples counted in released_ started falling due, at rate_.
   Clock::time_point anchor_;
   double rate_ = 0.0;
   std::uint64_t released_ = 0;
+  std::uint64_t skipped_ = 0;
 };
 
 }  // namespace openscope

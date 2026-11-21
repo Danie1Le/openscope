@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -15,7 +16,8 @@ namespace openscope {
 /// Runs an Instrument in real time (live mode, spec #1). An acquisition thread acquires sample
 /// blocks as the Pacer releases them and pushes them through an SPSC ring buffer; a processing
 /// thread pops them and assembles captures, so a slow capture never holds up the sample clock.
-/// When processing falls behind and the buffer is full, the block is dropped and counted. The
+/// When processing falls behind and the buffer is full, the block is dropped and counted; when
+/// acquisition falls behind the wall clock, the samples it skips are counted too. The
 /// threads start when the pipeline is built and stop when it is destroyed; blocks still in the
 /// buffer are dropped then, and lines held on a Single stay held until a command ends it.
 class LivePipeline {
@@ -33,12 +35,19 @@ class LivePipeline {
   /// Blocks dropped because the ring buffer was full. Any thread may read it.
   [[nodiscard]] std::uint64_t dropped_blocks() const { return blocks_.dropped(); }
 
+  /// Samples the wall clock released that were never acquired, because the acquisition thread
+  /// fell behind it (Pacer::skipped). Any thread may read it.
+  [[nodiscard]] std::uint64_t skipped_samples() const {
+    return skipped_samples_.load(std::memory_order_relaxed);
+  }
+
  private:
   void acquire_blocks(const std::stop_token& stop);
   void process_blocks(const std::stop_token& stop);
 
   SpscRingBuffer<AcquiredBlock> blocks_{kQueueCapacity};
   Instrument* instrument_;
+  std::atomic<std::uint64_t> skipped_samples_ = 0;
   // Declared last so they stop and join first, while what they use still exists; acquisition
   // stops before processing.
   std::jthread processing_;
