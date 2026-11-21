@@ -14,7 +14,6 @@
 #include "openscope/channel.hpp"
 #include "openscope/instrument.hpp"
 #include "openscope/sample_block.hpp"
-#include "openscope/trigger.hpp"
 
 namespace openscope {
 namespace {
@@ -51,6 +50,12 @@ TEST_F(CaptureTest, CaptureSpansOneRecordLengthOfTheEnabledChannelsOnly) {
   EXPECT_EQ(channel.settings.scale, 1.0);
   EXPECT_EQ(channel.settings.offset, 0.0);
   EXPECT_EQ(channel.samples.size(), test::kResetRecordLength);
+}
+
+TEST_F(CaptureTest, ChannelsDisabledAtRstAreNotInTheCapture) {
+  instrument.advance(test::kResetRecordLength);
+
+  const std::shared_ptr<const Capture> capture = test::latest(instrument);
   for (std::size_t n = 1; n < kChannelCount; ++n) {
     EXPECT_FALSE(capture->channels.at(n).has_value()) << "CH" << n + 1;
   }
