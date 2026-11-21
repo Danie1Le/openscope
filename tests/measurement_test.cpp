@@ -535,6 +535,25 @@ TEST(SignalLevelsTest, SpikeOnAFlatSignalIsNeitherTopNorBase) {
   EXPECT_DOUBLE_EQ(levels.base, 0.5);
 }
 
+// Spec story 57 on a Generator's own glitches: a one-sample glitch up from the square wave's high
+// level and a 20-sample glitch up from its low level (to 1.5 V, between the high level and the
+// spike) move neither top nor base.
+TEST_F(MeasurementTest, GeneratorGlitchesMoveNeitherTopNorBase) {
+  session.send("SOUR1:FUNC SQU");
+  instrument.advance(2250);  // A quarter into a 1 kHz cycle: the high level.
+  session.send("SOUR1:FAUL GLIT,2.5");
+  instrument.advance(5500);  // Three quarters into a cycle: the low level.
+  session.send("SOUR1:FAUL GLIT,2.5,20");
+  instrument.advance(kResetRecordLength - 7750);
+
+  const SignalLevels levels = find_levels(captured(instrument, 1).samples);
+
+  EXPECT_DOUBLE_EQ(levels.maximum, 3.5);
+  EXPECT_DOUBLE_EQ(levels.minimum, -1.0);
+  EXPECT_DOUBLE_EQ(levels.top, 1.0);
+  EXPECT_DOUBLE_EQ(levels.base, -1.0);
+}
+
 // A triangle spends equal time at every level, so its histogram has no mode to take: top and base
 // fall back to its extremes, and a spike past them is not one of them.
 TEST_F(MeasurementTest, SignalWithoutSettledLevelsFallsBackToItsExtremes) {

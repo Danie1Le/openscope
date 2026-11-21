@@ -10,6 +10,7 @@
 #include <numeric>
 #include <vector>
 
+#include "openscope/fault.hpp"
 #include "openscope/sample_clock.hpp"
 
 namespace openscope {
@@ -296,6 +297,241 @@ TEST(GeneratorTest, IndexesBeforeTheLastChangeFollowTheNewSettingsBackwards) {
                       kSampleRate, 8);  // The default sine is at phase 8 * 1 kHz / 1 kSa/s = 0.
 
   EXPECT_THAT(samples(generator, 6, 3), ElementsAre(0.5F, 0.75F, -1.0F));
+}
+
+/// A 250 Hz square wave of +-1 V at 1 kSa/s, which runs 1, 1, -1, -1 in a repeat of 4 samples, so
+/// a fault shows up in exact values.
+Generator make_square() {
+  return make({.function = GeneratorFunction::kSquare,
+               .frequency = 250.0,
+               .amplitude = 2.0,
+               .offset = 0.0,
+               .noise = 0.0});
+}
+
+/// The Fault `kind` of `magnitude` over `duration` samples from `start` at the test sample rate.
+Fault fault(FaultKind kind, double magnitude, std::size_t duration, SampleIndex start) {
+  return {kind, magnitude, duration, start, kSampleRate};
+}
+
+TEST(GeneratorFaultTest, GlitchAddsItsMagnitudeToTheSignalForItsDurationOnly) {
+  Generator generator = make_square();
+
+  ASSERT_TRUE(generator.inject(fault(FaultKind::kGlitch, 0.5, 2, 5)));
+
+  // Without the glitch: 1, 1, -1, -1, 1, 1, -1, -1, 1, 1.
+  EXPECT_THAT(samples(generator, 0, 10),
+              ElementsAre(1.0F, 1.0F, -1.0F, -1.0F, 1.0F, 1.5F, -0.5F, -1.0F, 1.0F, 1.0F));
+}
+
+TEST(GeneratorFaultTest, NegativeGlitchGoesBelowTheSignal) {
+  Generator generator = make_square();
+
+  ASSERT_TRUE(generator.inject(fault(FaultKind::kGlitch, -3.0, 1, 1)));
+
+  EXPECT_THAT(samples(generator, 0, 3), ElementsAre(1.0F, -2.0F, -1.0F));
+}
+
+TEST(GeneratorFaultTest, DropoutHoldsItsLevelForItsDurationOnly) {
+  Generator generator = make_square();
+
+  ASSERT_TRUE(generator.inject(fault(FaultKind::kDropout, 0.25, 3, 2)));
+
+  EXPECT_THAT(samples(generator, 0, 8),
+              ElementsAre(1.0F, 1.0F, 0.25F, 0.25F, 0.25F, 1.0F, -1.0F, -1.0F));
+}
+
+TEST(GeneratorFaultTest, DropoutReplacesTheNoiseToo) {
+  Generator generator = make({.function = GeneratorFunction::kSine,
+                              .frequency = 50.0,
+                              .amplitude = 1.0,
+                              .offset = 0.0,
+                              .noise = 0.2});
+  const std::vector<float> clean = samples(generator, 0, 12);
+
+  ASSERT_TRUE(generator.inject(fault(FaultKind::kDropout, 0.0, 4, 4)));
+
+  const std::vector<float> faulty = samples(generator, 0, 12);
+  EXPECT_EQ(std::vector<float>(faulty.begin() + 4, faulty.begin() + 8),
+            (std::vector<float>{0.0F, 0.0F, 0.0F, 0.0F}));
+  EXPECT_EQ(std::vector<float>(faulty.begin(), faulty.begin() + 4),
+            std::vector<float>(clean.begin(), clean.begin() + 4));
+  EXPECT_EQ(std::vector<float>(faulty.begin() + 8, faulty.end()),
+            std::vector<float>(clean.begin() + 8, clean.end()));
+}
+
+// +250 Hz for 2 samples from index 4 moves the square half a cycle for good: the samples of the
+// step (4, 5) follow the doubled frequency, and the waveform then carries on shifted.
+TEST(GeneratorFaultTest, FrequencyStepShiftsThePhaseWithoutAJumpAndKeepsTheShift) {
+  Generator generator = make_square();
+
+  ASSERT_TRUE(generator.inject(fault(FaultKind::kFrequencyStep, 250.0, 2, 4)));
+
+  // Phases: 4 -> 0, 5 -> 0.5, 6 -> 0.0 (0.5 + 0.5), 7 -> 0.25, 8 -> 0.5. Unfaulted: 1, 1, -1, -1.
+  EXPECT_THAT(samples(generator, 0, 12), ElementsAre(1.0F, 1.0F, -1.0F, -1.0F, 1.0F, -1.0F, 1.0F,
+                                                     1.0F, -1.0F, -1.0F, 1.0F, 1.0F));
+}
+
+TEST(GeneratorFaultTest, FrequencyStepMovesTheRampAContinuousStepAtAHigherSlope) {
+  Generator generator = make({.function = GeneratorFunction::kRamp,
+                              .frequency = 125.0,
+                              .amplitude = 2.0,
+                              .offset = 0.0,
+                              .noise = 0.0});
+
+  // 125 Hz is 0.125 cycles per sample; +125 Hz makes it 0.25 for 4 samples from index 2.
+  ASSERT_TRUE(generator.inject(fault(FaultKind::kFrequencyStep, 125.0, 4, 2)));
+
+  // Phases 0, .125, .25, then .5, .75, 1.0 (= 0) at .25 per sample, then .25, .375, .5 at .125
+  // per sample again: the step added half a cycle for good.
+  EXPECT_THAT(samples(generator, 0, 9),
+              ElementsAre(-1.0F, -0.75F, -0.5F, 0.0F, 0.5F, -1.0F, -0.5F, -0.25F, 0.0F));
+}
+
+TEST(GeneratorFaultTest, FrequencyStepsAddTheirShifts) {
+  Generator generator = make_square();
+
+  ASSERT_TRUE(generator.inject(fault(FaultKind::kFrequencyStep, 250.0, 1, 0)));
+  ASSERT_TRUE(generator.inject(fault(FaultKind::kFrequencyStep, 250.0, 1, 0)));
+
+  // Each adds a quarter cycle from index 1 on, half a cycle together.
+  EXPECT_THAT(samples(generator, 0, 6), ElementsAre(1.0F, -1.0F, 1.0F, 1.0F, -1.0F, -1.0F));
+}
+
+TEST(GeneratorFaultTest, FrequencyStepKeepsItsHertzWhenTheFrequencyChangesDuringIt) {
+  Generator generator = make({.function = GeneratorFunction::kRamp,
+                              .frequency = 250.0,
+                              .amplitude = 2.0,
+                              .offset = 0.0,
+                              .noise = 0.0});
+  ASSERT_TRUE(generator.inject(fault(FaultKind::kFrequencyStep, 250.0, 4, 4)));
+
+  generator.configure({.function = GeneratorFunction::kRamp,
+                       .frequency = 125.0,
+                       .amplitude = 2.0,
+                       .offset = 0.0,
+                       .noise = 0.0},
+                      kSampleRate, 6);
+
+  // Phase 0 at 6; then .125 + .25 per sample until the step ends at 8 (.375 -> .75), and .125
+  // per sample on the shifted phase after it (.75 + .125 = .875 at index 9).
+  EXPECT_THAT(samples(generator, 6, 4), ElementsAre(-1.0F, -0.25F, 0.5F, 0.75F));
+}
+
+TEST(GeneratorFaultTest, FrequencyStepKeepsItsHertzWhenTheSampleRateChangesDuringIt) {
+  const GeneratorSettings ramp{.function = GeneratorFunction::kRamp,
+                               .frequency = 250.0,
+                               .amplitude = 2.0,
+                               .offset = 0.0,
+                               .noise = 0.0};
+  Generator generator = make(ramp);
+  ASSERT_TRUE(generator.inject(fault(FaultKind::kFrequencyStep, 250.0, 4, 4)));
+
+  generator.configure(ramp, 2 * kSampleRate, 6);
+
+  // The same indexes as when the frequency halves: the step still adds .25 cycle per sample at
+  // the rate it was injected at, while the Generator's own advance drops to .125 per sample.
+  EXPECT_THAT(samples(generator, 6, 4), ElementsAre(-1.0F, -0.25F, 0.5F, 0.75F));
+}
+
+TEST(GeneratorFaultTest, FrequencyStepDoesNothingToDcOrNoise) {
+  for (const GeneratorFunction function : {GeneratorFunction::kDc, GeneratorFunction::kNoise}) {
+    const GeneratorSettings settings{
+        .function = function, .frequency = 250.0, .amplitude = 2.0, .offset = 0.5, .noise = 0.0};
+    Generator faulty = make(settings, 3);
+    const Generator clean = make(settings, 3);
+
+    ASSERT_TRUE(faulty.inject(fault(FaultKind::kFrequencyStep, 250.0, 4, 2)));
+
+    EXPECT_EQ(samples(faulty, 0, 12), samples(clean, 0, 12));
+  }
+}
+
+TEST(GeneratorFaultTest, GlitchAndDropoutApplyToDcToo) {
+  Generator generator = make({.function = GeneratorFunction::kDc,
+                              .frequency = 1.0,
+                              .amplitude = 0.0,
+                              .offset = 0.5,
+                              .noise = 0.0});
+
+  ASSERT_TRUE(generator.inject(fault(FaultKind::kGlitch, 1.0, 2, 1)));
+  ASSERT_TRUE(generator.inject(fault(FaultKind::kDropout, 0.0, 1, 2)));
+
+  EXPECT_THAT(samples(generator, 0, 5), ElementsAre(0.5F, 1.5F, 0.0F, 0.5F, 0.5F));
+}
+
+TEST(GeneratorFaultTest, FaultsApplyInTheOrderTheyWereInjected) {
+  Generator glitch_then_dropout = make_square();
+  Generator dropout_then_glitch = make_square();
+
+  ASSERT_TRUE(glitch_then_dropout.inject(fault(FaultKind::kGlitch, 1.0, 1, 0)));
+  ASSERT_TRUE(glitch_then_dropout.inject(fault(FaultKind::kDropout, 0.5, 1, 0)));
+  ASSERT_TRUE(dropout_then_glitch.inject(fault(FaultKind::kDropout, 0.5, 1, 0)));
+  ASSERT_TRUE(dropout_then_glitch.inject(fault(FaultKind::kGlitch, 1.0, 1, 0)));
+
+  EXPECT_THAT(samples(glitch_then_dropout, 0, 2), ElementsAre(0.5F, 1.0F));
+  EXPECT_THAT(samples(dropout_then_glitch, 0, 2), ElementsAre(1.5F, 1.0F));
+}
+
+TEST(GeneratorFaultTest, FaultsChangeNothingBeforeTheirStart) {
+  Generator generator = make_square();
+  const std::vector<float> clean = samples(generator, 0, 100);
+
+  ASSERT_TRUE(generator.inject(fault(FaultKind::kGlitch, 5.0, 3, 50)));
+  ASSERT_TRUE(generator.inject(fault(FaultKind::kFrequencyStep, 500.0, 3, 60)));
+
+  const std::vector<float> faulty = samples(generator, 0, 100);
+  EXPECT_EQ(std::vector<float>(faulty.begin(), faulty.begin() + 50),
+            std::vector<float>(clean.begin(), clean.begin() + 50));
+}
+
+TEST(GeneratorFaultTest, FaultOutputIsAFunctionOfTheSeedAndTheInjectionsOnly) {
+  const auto run = [](std::uint64_t seed) {
+    Generator generator = make({.function = GeneratorFunction::kSine,
+                                .frequency = 50.0,
+                                .amplitude = 1.0,
+                                .offset = 0.0,
+                                .noise = 0.2},
+                               seed);
+    EXPECT_TRUE(generator.inject(fault(FaultKind::kGlitch, 1.0, 5, 100)));
+    EXPECT_TRUE(generator.inject(fault(FaultKind::kFrequencyStep, 30.0, 40, 103)));
+    return generator;
+  };
+
+  const std::vector<float> first = samples(run(7), 0, 400);
+
+  EXPECT_EQ(samples(run(7), 0, 400), first);
+  // Any range of indexes reads the same as inside the whole run.
+  const std::vector<float> tail = samples(run(7), 120, 100);
+  EXPECT_EQ(tail, std::vector<float>(first.begin() + 120, first.begin() + 220));
+  EXPECT_NE(samples(run(8), 0, 400), first);
+}
+
+TEST(GeneratorFaultTest, FinishedFaultsAreForgottenWithTheirPhaseKept) {
+  Generator forgotten = make_square();
+  Generator kept = make_square();
+  ASSERT_TRUE(forgotten.inject(fault(FaultKind::kFrequencyStep, 250.0, 2, 4)));
+  ASSERT_TRUE(kept.inject(fault(FaultKind::kFrequencyStep, 250.0, 2, 4)));
+
+  // Index 100 is long after the step ended, so injecting there forgets it and folds its phase
+  // into the anchor.
+  ASSERT_TRUE(forgotten.inject(fault(FaultKind::kGlitch, 0.0, 1, 100)));
+
+  EXPECT_EQ(samples(forgotten, 100, 12), samples(kept, 100, 12));
+}
+
+TEST(GeneratorFaultTest, AtMostMaxFaultsAreInPlayAndFinishedOnesFreeASlot) {
+  Generator generator = make_square();
+  for (std::size_t i = 0; i < Generator::kMaxFaults; ++i) {
+    ASSERT_TRUE(generator.inject(fault(FaultKind::kGlitch, 1.0, 2, 10)));
+  }
+  const std::vector<float> full = samples(generator, 0, 20);
+
+  EXPECT_FALSE(generator.inject(fault(FaultKind::kGlitch, 1.0, 2, 10)));
+  EXPECT_FALSE(generator.inject(fault(FaultKind::kGlitch, 1.0, 2, 11)));  // Still running at 11.
+  EXPECT_EQ(samples(generator, 0, 20), full);
+
+  EXPECT_TRUE(generator.inject(fault(FaultKind::kGlitch, 1.0, 2, 12)));  // They ended at 12.
 }
 
 }  // namespace
