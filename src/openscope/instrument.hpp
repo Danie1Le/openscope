@@ -17,6 +17,7 @@
 #include "openscope/sample_clock.hpp"
 #include "openscope/scpi/command_tree.hpp"
 #include "openscope/session.hpp"
+#include "openscope/trigger.hpp"
 
 namespace openscope {
 
@@ -24,9 +25,9 @@ namespace openscope {
 enum class SessionId : std::uint32_t {};
 
 /// The single entry point for instrument behaviour. It owns every Session and the instrument-wide
-/// state (generators, channels, acquisition settings, the sample clock and the latest capture),
-/// and executes SCPI text on a Session's behalf, so transports and tests all reach the instrument
-/// through the same path.
+/// state (generators, channels, acquisition and trigger settings, the sample clock and the latest
+/// capture), and executes SCPI text on a Session's behalf, so transports and tests all reach the
+/// instrument through the same path.
 class Instrument {
  public:
   /// The longest line, in bytes without its terminator, that `execute` runs (4 KB).
@@ -73,6 +74,7 @@ class Instrument {
   void add_channel_commands();
   void add_acquisition_commands();
   void add_timebase_commands();
+  void add_trigger_commands();
   void add_waveform_commands();
 
   /// Replies what `reply` writes from the latest capture and the caller's `WAV:SOUR` channel in
@@ -93,12 +95,30 @@ class Instrument {
   void add_keyword_setting(std::string_view header, std::span<const std::string_view> keywords,
                            std::function<void(Session&, const scpi::Arguments&, std::size_t)> set,
                            std::function<std::size_t(Session&, const scpi::Arguments&)> get);
+  /// add_setting for the `double` `field` of a settings struct: the setter runs `change(arguments,
+  /// fn)`, which applies `fn` to the settings the command names, and the query replies the field of
+  /// `lookup(arguments)`.
+  template <typename Settings, typename Change, typename Lookup>
+  void add_number_setting(std::string_view header, const scpi::NumericParameter& range,
+                          double Settings::*field, Change change, Lookup lookup);
   /// add_setting for one numeric field of the Generator a `SOURce<n>` header names.
-  void add_generator_number(std::string_view header, scpi::NumericParameter range,
+  void add_generator_number(std::string_view header, const scpi::NumericParameter& range,
                             double GeneratorSettings::*field);
   /// add_setting for one numeric field of the channel a `CHANnel<n>` header names.
-  void add_channel_number(std::string_view header, scpi::NumericParameter range,
+  void add_channel_number(std::string_view header, const scpi::NumericParameter& range,
                           double ChannelSettings::*field);
+  /// add_setting for a choice of channel, `CHANnel<1-4>`: `set` receives the channel number sent
+  /// (1 when the suffix is left out), and the query replies `CHAN<n>` for the number `get` returns.
+  void add_channel_choice(std::string_view header, std::function<void(Session&, std::size_t)> set,
+                          std::function<std::size_t(Session&)> get);
+  /// add_setting for one numeric field of the trigger settings.
+  void add_trigger_number(std::string_view header, const scpi::NumericParameter& range,
+                          double TriggerSettings::*field);
+  /// add_keyword_setting for one enum field of the trigger settings, whose enumerators are in the
+  /// order of `keywords`.
+  template <typename Keyword>
+  void add_trigger_keyword(std::string_view header, std::span<const std::string_view> keywords,
+                           Keyword TriggerSettings::*field);
 
   /// Applies `change` to the settings of the Generator a `SOURce<n>` command names, from the next
   /// sample index on.
@@ -116,6 +136,9 @@ class Instrument {
   /// Applies `change` to the acquisition settings and discards the capture in progress.
   /// Generators keep their phase across a sample-rate change.
   void change_acquisition(const std::function<void(AcquisitionSettings&)>& change);
+  /// Applies `change` to the trigger settings and discards the capture in progress, which restarts
+  /// the trigger.
+  void change_trigger(const std::function<void(TriggerSettings&)>& change);
   /// `*RST`: restores every instrument-wide setting, restarts every Generator as if it had run at
   /// its defaults since sample index 0 with no Faults, and drops the latest capture. The sample
   /// clock keeps counting and Sessions keep their own state (ADR 0002).
@@ -133,6 +156,7 @@ class Instrument {
   std::array<Generator, kChannelCount> generators_;
   /// Seconds per division of the display viewport. It never changes what is captured (ADR 0004).
   double timebase_scale_ = kDefaultTimebaseScale;
+  TriggerSettings trigger_;
   CaptureAssembler captures_;
 };
 
