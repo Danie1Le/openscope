@@ -368,26 +368,26 @@ void Instrument::add_fft_commands() {
 void Instrument::add_measurement_commands() {
   const std::span<const Measurement> all = measurements();
   for (std::size_t measurement = 0; measurement < all.size(); ++measurement) {
-    commands_.add(
-        {.header = std::format("MEASure:{}?", all[measurement].mnemonic),
-         .parameters = {channel_parameter()},
-         .handler = [this, measurement](Session& caller, const Arguments& arguments) {
-           const std::size_t channel = value_of<scpi::Choice>(arguments).suffix;
-           return reply_with_source(channel, [&](const Capture&, const CapturedChannel&) {
-             // The engine keys its cache on the shared capture, which is the one reply_with_source
-             // just checked: nothing advances the sample clock in between.
-             const MeasurementResult result =
-                 measurements_.measure(captures_.latest(), channel, measurement);
-             // The status entry reports on a reply that was given, so unlike an execution
-             // error it goes on the queue without stopping the line.
-             if (std::optional<ScpiError> entry = status_entry(result.status)) {
-               caller.push_error(std::move(*entry));
-             }
-             // Written as float32, the precision of the samples the value comes from.
-             return result.value ? scpi::format_real(static_cast<float>(*result.value))
-                                 : std::string(scpi::kNotANumber);
-           });
-         }});
+    commands_.add({.header = std::format("MEASure:{}?", all[measurement].mnemonic),
+                   .parameters = {channel_parameter()},
+                   .handler = [this, measurement](Session& caller, const Arguments& arguments) {
+                     const std::size_t channel = value_of<scpi::Choice>(arguments).suffix;
+                     return reply_with_source(channel, [&](const Capture&, const CapturedChannel&) {
+                       // The engine keys its cache on the shared capture, which is the one
+                       // reply_with_source just checked: nothing advances the sample clock in
+                       // between.
+                       const MeasurementResult result =
+                           measurements_.measure(captures_.latest(), channel, measurement);
+                       // The status entry reports on a reply that was given, so unlike an execution
+                       // error it goes on the queue without stopping the line.
+                       if (std::optional<ScpiError> entry = status_entry(result.status)) {
+                         caller.push_error(std::move(*entry));
+                       }
+                       // Written as float32, the precision of the samples the value comes from.
+                       return result.value ? scpi::format_real(static_cast<float>(*result.value))
+                                           : std::string(scpi::kNotANumber);
+                     });
+                   }});
   }
 }
 
