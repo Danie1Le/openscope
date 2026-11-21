@@ -57,7 +57,7 @@ struct Capture {
 enum class CaptureLimit : std::uint8_t {
   /// Every one (the Running run state).
   kEvery,
-  /// The first; the samples after it are left for the caller (the Armed-single run state).
+  /// The first, after which push stops (the Armed-single run state).
   kFirst,
 };
 
@@ -73,9 +73,10 @@ class CaptureAssembler {
   /// settings from the block that starts it, and the trigger keeps its state from block to block,
   /// so the caller discards the capture in progress whenever it changes a setting or skips
   /// samples. Each capture that completes becomes the latest capture; a block may complete
-  /// several, of which `limit` says how many to publish. Returns the offset in `block` just past
-  /// the first capture it published (under kFirst, how many samples it used), or nullopt when it
-  /// published none. Throws std::logic_error when `acquisition` has a record length of zero, when
+  /// several, of which `limit` says how many to publish. Under kFirst, once a capture completes,
+  /// it discards and returns the offset in `block` just past that capture, so the caller can push
+  /// the samples after it as a new block; otherwise it uses the whole block and returns nullopt.
+  /// Throws std::logic_error when `acquisition` has a record length of zero, when
   /// `block` lacks the trigger channel's samples, or when it lacks samples for a channel of the
   /// capture in progress, which means a channel was enabled or disabled without a discard.
   std::optional<std::size_t> push(const SampleBlock& block, const AcquisitionSettings& acquisition,
