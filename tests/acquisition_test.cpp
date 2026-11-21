@@ -48,8 +48,8 @@ TEST_F(AcquisitionTest, ChannelNIsFedByGeneratorN) {
 }
 
 TEST_F(AcquisitionTest, FunctionFrequencyAmplitudeAndOffsetShapeTheCapturedSignal) {
-  // 250 kHz at 1 MSa/s is four samples per cycle.
-  session.send("SOUR1:FUNC SQU;FREQ 250KHZ;AMPL 2;OFFS 1");
+  // 250 kHz at 1 MSa/s is four samples per cycle. AMPL is peak to peak: 4 V around 1 V.
+  session.send("SOUR1:FUNC SQU;FREQ 250KHZ;AMPL 4;OFFS 1");
   session.send(":ACQ:POIN 8");
 
   instrument.advance(8);

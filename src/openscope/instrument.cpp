@@ -111,7 +111,7 @@ void Instrument::add_generator_commands() {
       });
   add_generator_number("SOURce<1-4>:FREQuency", {.min = 1e-3, .max = 1e9, .unit = "HZ"},
                        &GeneratorSettings::frequency);
-  add_generator_number("SOURce<1-4>:AMPLitude", {.min = 0.0, .max = 50.0, .unit = "V"},
+  add_generator_number("SOURce<1-4>:AMPLitude", {.min = 0.0, .max = 100.0, .unit = "V"},
                        &GeneratorSettings::amplitude);
   add_generator_number("SOURce<1-4>:OFFSet", {.min = -50.0, .max = 50.0, .unit = "V"},
                        &GeneratorSettings::offset);

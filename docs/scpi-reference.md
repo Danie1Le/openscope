@@ -126,7 +126,7 @@ Query replies write numbers in the shortest form that reads back as the same val
 |---|---|---|---|
 | `SOURce<n>:FUNCtion` | `SINusoid`, `SQUare`, `TRIangle`, `RAMP`, `DC`, `NOISe` | `SIN` | The shape Generator n feeds Channel n, below |
 | `SOURce<n>:FREQuency` | 0.001 Hz to 1 GHz (unit `HZ`) | 1 kHz | Ignored by `DC` and `NOISe`. Changing it keeps the phase continuous |
-| `SOURce<n>:AMPLitude` | 0 V to 50 V (unit `V`) | 1 V | Peak amplitude: the signal swings from offset - amplitude to offset + amplitude. Ignored by `DC` |
+| `SOURce<n>:AMPLitude` | 0 V to 100 V peak to peak (unit `V`) | 2 V | Peak-to-peak amplitude, as on a bench generator: the signal swings from offset - amplitude/2 to offset + amplitude/2. Ignored by `DC` |
 | `SOURce<n>:OFFSet` | -50 V to 50 V (unit `V`) | 0 V | Added to the whole signal |
 | `SOURce<n>:NOISe` | 0 V to 50 V (unit `V`) | 0 V | RMS of Gaussian noise added to the signal |
 | `CHANnel<n>:DISPlay` | boolean | CH1 `ON`, CH2 to CH4 `OFF` | Only enabled channels are kept in a capture |
@@ -142,7 +142,7 @@ Query replies write numbers in the shortest form that reads back as the same val
 
 Generator n always feeds Channel n. Its output depends only on the instrument's seed, its settings and the sample index; time is the sample index divided by the sample rate (ADR 0003). The same seed and the same commands at the same sample indexes give bit-identical samples on every run.
 
-A setting change takes effect at the next sample index. Frequency and sample-rate changes keep the phase continuous: the waveform carries on from where it was at the new rate, with no jump. Over one cycle, with A the amplitude and the offset added on top:
+A setting change takes effect at the next sample index. Frequency and sample-rate changes keep the phase continuous: the waveform carries on from where it was at the new rate, with no jump. Over one cycle, with A half the peak-to-peak amplitude and the offset added on top:
 
 - `SINusoid`: A sin(2π phase), starting at zero and rising.
 - `SQUare`: +A for the first half of the cycle, -A for the second.
