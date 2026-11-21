@@ -46,8 +46,14 @@ std::vector<float> wave(ScpiSession& session, unsigned channel = 1) {
 /// `count` copies of `value`.
 std::vector<float> flat(std::size_t count, float value) { return std::vector<float>(count, value); }
 
+/// Time zero on the first sample and a trigger level no test signal reaches: Auto takes each record
+/// as it fills, so these tests do not depend on trigger events (#6).
+constexpr auto kPlainAuto = "TRIG:LEV 50;POS 0";
+
 class FaultCommandTest : public test::InstrumentFixture {
  protected:
+  void SetUp() override { session.send(kPlainAuto); }
+
   /// CH1 is a 0.5 V DC level, captured 8 samples at a time.
   void use_dc_level() { session.send("SOUR1:FUNC DC;OFFS 0.5;:ACQ:POIN 8"); }
 
@@ -331,6 +337,7 @@ TEST_F(FaultCommandTest, SameSeedAndCommandsPutTheFaultAtTheSameIndexWithTheSame
   const auto run = [](std::uint64_t seed) {
     Instrument device{seed};
     ScpiSession client{device};
+    client.send(kPlainAuto);
     client.send("SOUR1:NOIS 0.1;:ACQ:POIN 1000");
     device.advance(123);
     client.send("SOUR1:FAUL GLIT,3,4");
@@ -361,18 +368,21 @@ TEST_F(FaultCommandTest, RstClearsFaultsStillInPlay) {
   Instrument faulted{kSeed};
   ScpiSession faulted_client{faulted};
   faulted_client.send(kSetup);
+  faulted_client.send(kPlainAuto);
   faulted.advance(100);
   faulted_client.send(
       "SOUR1:FAUL DROP,0,100000;:SOUR1:FAUL FST,333,100000;:SOUR1:FAUL GLIT,5,100000");
   faulted.advance(50);
   faulted_client.send("*RST");
   faulted_client.send(kSetup);
+  faulted_client.send(kPlainAuto);
   faulted.advance(1000);
 
   Instrument fresh{kSeed};
   ScpiSession fresh_client{fresh};
   fresh.advance(150);
   fresh_client.send(kSetup);
+  fresh_client.send(kPlainAuto);
   fresh.advance(1000);
 
   EXPECT_EQ(wave(faulted_client), wave(fresh_client));
