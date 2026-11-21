@@ -26,8 +26,9 @@ struct GeneratorSettings {
 };
 
 /// The simulated signal producer feeding one channel. Its output is a pure function of its seed,
-/// its settings and the sample index (ADR 0003): the same seed and the same configure calls give
-/// bit-identical samples on every run, and the noise at an index never depends on which other
+/// the settings it has been given since construction, the sample indexes they took effect at, and
+/// the sample index (ADR 0003): the same seed and the same configure calls at the same indexes
+/// give bit-identical samples on every run, and the noise at an index never depends on which other
 /// indexes were generated.
 class Generator {
  public:

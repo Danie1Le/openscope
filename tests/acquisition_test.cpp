@@ -314,5 +314,34 @@ TEST_F(AcquisitionTest, RstGivesTheSameNextCaptureAsAFreshInstrument) {
   }
 }
 
+// *RST rebuilds the Generators from the instrument's seed, not from the default seed (ADR 0003):
+// noise on every channel is derived from it, so a reset that forgot the seed would differ.
+TEST_F(AcquisitionTest, RstKeepsTheInstrumentSeedForNoise) {
+  constexpr std::uint64_t kSeed = 7;
+  constexpr auto kNoiseOnEveryChannel =
+      "SOUR1:NOIS 0.1;:SOUR2:NOIS 0.1;:SOUR3:NOIS 0.1;:SOUR4:FUNC NOIS";
+
+  Instrument reset{kSeed};
+  ScpiSession reset_client{reset};
+  reset_client.send("SOUR1:FUNC SQU;FREQ 1234;:SOUR2:NOIS 0.3;:ACQ:SRAT 3E6");
+  reset.advance(2 * kResetRecordLength);
+  reset_client.send("*RST");
+  reset_client.send(kEnableChannelsTwoToFour);
+  reset_client.send(kNoiseOnEveryChannel);
+  reset.advance(kResetRecordLength);
+
+  Instrument fresh{kSeed};
+  ScpiSession fresh_client{fresh};
+  fresh.advance(2 * kResetRecordLength);
+  fresh_client.send(kEnableChannelsTwoToFour);
+  fresh_client.send(kNoiseOnEveryChannel);
+  fresh.advance(kResetRecordLength);
+
+  for (std::size_t channel = 1; channel <= kChannelCount; ++channel) {
+    EXPECT_EQ(captured(reset, channel).samples, captured(fresh, channel).samples)
+        << "CH" << channel;
+  }
+}
+
 }  // namespace
 }  // namespace openscope
