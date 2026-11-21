@@ -9,11 +9,9 @@
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <format>
-#include <memory>
 #include <numbers>
 #include <optional>
 #include <random>
@@ -25,12 +23,14 @@
 #include "openscope/capture.hpp"
 #include "openscope/instrument.hpp"
 #include "openscope/scpi/response.hpp"
+#include "reply_numbers.hpp"
 #include "scpi_session.hpp"
 
 namespace openscope {
 namespace {
 
 using test::captured;
+using test::kClippedReply;
 using test::kDataStaleReply;
 using test::kDataTypeErrorReply;
 using test::kIllegalParameterValueReply;
@@ -39,33 +39,16 @@ using test::kNoErrorReply;
 using test::kParameterNotAllowedReply;
 using test::kResetRecordLength;
 using test::kSettingsConflictReply;
+using test::kUntriggeredCaptures;
+using test::number;
 using test::ScpiSession;
 using testing::DoubleNear;
 using testing::Optional;
 using testing::StartsWith;
 
-constexpr auto kClippedReply = R"(-231,"Data questionable;Clipped")";
-
 /// Every amplitude measurement query, short form.
 constexpr std::array<std::string_view, 5> kAmplitudeQueries{"MEAS:VPP?", "MEAS:VMIN?", "MEAS:VMAX?",
                                                             "MEAS:VAV?", "MEAS:VRMS?"};
-
-/// The number a measurement query replied, as a client parses it. Fails the test and returns NaN
-/// when the reply is missing or not one number.
-double number(const std::optional<std::string>& reply) {
-  const std::string text = reply.value_or("");
-  double value = std::nan("");
-  const char* const end = std::to_address(text.cend());
-  if (text.empty() || std::from_chars(text.data(), end, value).ptr != end) {
-    ADD_FAILURE() << "not a number: " << text;
-  }
-  return value;
-}
-
-/// Trigger settings under which Auto takes untriggered captures back to back from sample 0: time
-/// zero on the first sample and a level no signal reaches. Measurements read the whole capture, so
-/// these tests need each capture to complete one record length after the last.
-constexpr auto kUntriggeredCaptures = "TRIG:POS 0;LEV 100";
 
 class MeasurementTest : public test::InstrumentFixture {
  protected:

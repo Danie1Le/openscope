@@ -4,9 +4,6 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <algorithm>
-#include <charconv>
-#include <cstddef>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -15,6 +12,7 @@
 #include "binary_block.hpp"
 #include "instrument_fixture.hpp"
 #include "openscope/capture.hpp"
+#include "reply_numbers.hpp"
 #include "scpi_session.hpp"
 
 namespace openscope {
@@ -33,22 +31,6 @@ using test::kSettingsConflictReply;
 using test::ScpiSession;
 using testing::Optional;
 using testing::StartsWith;
-
-/// Parses comma-separated floats, as a client reading `WAV:FORM ASC` does.
-std::vector<float> parse_csv(std::string_view text) {
-  std::vector<float> values;
-  for (std::size_t start = 0; start <= text.size();) {
-    const std::size_t end = std::min(text.find(',', start), text.size());
-    const std::string_view field = text.substr(start, end - start);
-    const char* const field_end = field.data() + field.size();
-    float value = 0.0F;
-    EXPECT_EQ(std::from_chars(field.data(), field_end, value).ptr, field_end)
-        << "not a number: " << field;
-    values.push_back(value);
-    start = end + 1;
-  }
-  return values;
-}
 
 using WaveformTest = test::InstrumentFixture;
 
@@ -114,7 +96,7 @@ TEST_F(WaveformTest, SourceAndFormatBelongToEachSession) {
 
   EXPECT_EQ(session.send("WAV:SOUR?;FORM?"), "CHAN1;ASC");
   EXPECT_EQ(other.send("WAV:SOUR?;FORM?"), "CHAN2;REAL");
-  EXPECT_EQ(parse_csv(session.send("WAV:DATA?").value_or("")), captured(instrument, 1).samples);
+  EXPECT_EQ(test::numbers<float>(session.send("WAV:DATA?")), captured(instrument, 1).samples);
   EXPECT_EQ(decode_float32_block(other.send("WAV:DATA?").value_or("")),
             (std::vector<float>{0.5F, 0.5F}));
 }
@@ -210,7 +192,7 @@ TEST_F(WaveformTest, AsciiDataReadsBackAsExactlyTheCapturedSamples) {
   const std::optional<std::string> reply = session.send("WAV:DATA?");
 
   ASSERT_TRUE(reply.has_value());
-  EXPECT_EQ(parse_csv(reply.value_or("")), captured(instrument, 1).samples);
+  EXPECT_EQ(test::numbers<float>(reply), captured(instrument, 1).samples);
 }
 
 TEST_F(WaveformTest, RealDataIsAFloat32BlockOfTheCapturedSamples) {

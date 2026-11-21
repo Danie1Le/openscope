@@ -20,6 +20,11 @@ inline constexpr std::size_t kResetRecordLength = 10'000;
 /// triggers: the 5000 pre-trigger samples, then one record length without a trigger event.
 inline constexpr std::size_t kResetAutoTimeout = 15'000;
 
+/// Trigger settings under which Auto takes untriggered captures back to back from sample 0: time
+/// zero on the first sample and a level no signal reaches. Measurements read the whole capture, so
+/// their tests need each capture to complete one record length after the last.
+inline constexpr auto kUntriggeredCaptures = "TRIG:POS 0;LEV 100";
+
 /// `instrument`'s latest capture. Fails the test and returns an empty capture when there is none,
 /// so a test can read its fields without crashing the test binary.
 inline std::shared_ptr<const Capture> latest(const Instrument& instrument) {

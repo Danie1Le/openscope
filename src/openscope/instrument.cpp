@@ -23,6 +23,8 @@
 #include "openscope/fft_window.hpp"
 #include "openscope/generator.hpp"
 #include "openscope/measurement.hpp"
+#include "openscope/measurement_statistics.hpp"
+#include "openscope/running_statistics.hpp"
 #include "openscope/sample_block.hpp"
 #include "openscope/sample_clock.hpp"
 #include "openscope/scpi/command_tree.hpp"
@@ -119,19 +121,29 @@ Value value_of(const Arguments& arguments, std::size_t index = 0) {
 /// A parameter naming a channel: `CHANnel<1-4>`.
 scpi::KeywordParameter channel_parameter() { return {.choices = {"CHANnel<1-4>"}}; }
 
-/// The error queue entry that reports a measurement's `status`, or nullopt for OK.
-std::optional<ScpiError> status_entry(MeasurementStatus status) {
+/// Pushes the error queue entry that reports a measurement's `status` onto `caller`'s queue; OK
+/// has none. The entry reports on a reply that was given, so unlike an execution error it does not
+/// stop the line.
+void report_status(Session& caller, MeasurementStatus status) {
   switch (status) {
     case MeasurementStatus::kOk:
       break;
     case MeasurementStatus::kNoSignal:
-      return kNoSignal;
+      caller.push_error(kNoSignal);
+      break;
     case MeasurementStatus::kClipped:
-      return kClipped;
+      caller.push_error(kClipped);
+      break;
     case MeasurementStatus::kTooFewCycles:
-      return kTooFewCycles;
+      caller.push_error(kTooFewCycles);
+      break;
   }
-  return std::nullopt;
+}
+
+/// A measured value as a query replies it: at float32 precision, the precision of the samples it
+/// comes from, or SCPI's not-a-number when there is no value.
+std::string value_reply(std::optional<double> value) {
+  return value ? scpi::format_real(static_cast<float>(*value)) : std::string(scpi::kNotANumber);
 }
 
 /// A count of samples sent as a number: a fraction rounds to the nearest whole number, half away
@@ -300,6 +312,7 @@ void Instrument::add_timebase_commands() {
       "TIMebase:SCALe", NumericParameter{.min = 1e-9, .max = 100.0, .unit = "S"},
       [this](Session&, const Arguments& arguments) {
         timebase_scale_ = value_of<double>(arguments);
+        setting_changed();
       },
       [this](Session&, const Arguments&) { return scpi::format_real(timebase_scale_); });
 }
@@ -409,17 +422,54 @@ void Instrument::add_measurement_commands() {
                        // between.
                        const MeasurementResult result =
                            measurements_.measure(captures_.latest(), channel, measurement);
-                       // The status entry reports on a reply that was given, so unlike an execution
-                       // error it goes on the queue without stopping the line.
-                       if (std::optional<ScpiError> entry = status_entry(result.status)) {
-                         caller.push_error(std::move(*entry));
-                       }
-                       // Written as float32, the precision of the samples the value comes from.
-                       return result.value ? scpi::format_real(static_cast<float>(*result.value))
-                                           : std::string(scpi::kNotANumber);
+                       report_status(caller, result.status);
+                       return value_reply(result.value);
                      });
                    }});
   }
+  add_statistics_commands();
+}
+
+void Instrument::add_statistics_commands() {
+  std::vector<std::string_view> mnemonics;
+  for (const Measurement& measurement : measurements()) {
+    mnemonics.push_back(measurement.mnemonic);
+  }
+  commands_.add(
+      {.header = "MEASure:STATistics?",
+       .parameters = {scpi::KeywordParameter{.choices = std::move(mnemonics)}, channel_parameter()},
+       .handler = [this](Session& caller, const Arguments& arguments) -> scpi::HandlerResult {
+         if (statistics_.empty()) {
+           return kDataCorruptOrStale;  // No capture since the statistics were last reset.
+         }
+         const std::size_t measurement = value_of<scpi::Choice>(arguments, 0).index;
+         const std::size_t channel = value_of<scpi::Choice>(arguments, 1).suffix;
+         // Every capture published is added to the statistics, so the latest capture is the most
+         // recent one they hold and has the same channels as every capture they hold.
+         return reply_with_source(channel, [&](const Capture&, const CapturedChannel&) {
+           const MeasurementSeries& series = statistics_.at(channel, measurement);
+           report_status(caller, series.current.status);
+           // A Clipped value counted earlier makes the statistics questionable too.
+           if (series.clipped && series.current.status != MeasurementStatus::kClipped) {
+             caller.push_error(kClipped);
+           }
+           const RunningStatistics& values = series.values;
+           // With nothing counted, the statistics have no value.
+           const auto statistic = [counted = values.count() > 0](double value) {
+             return value_reply(counted ? std::optional(value) : std::nullopt);
+           };
+           return std::format("{},{},{},{},{},{}", value_reply(series.current.value),
+                              statistic(values.mean()), statistic(values.minimum()),
+                              statistic(values.maximum()), statistic(values.standard_deviation()),
+                              values.count());
+         });
+       }});
+  commands_.add({.header = "MEASure:STATistics:RESet",
+                 .parameters = {},
+                 .handler = [this](Session&, const Arguments&) -> scpi::HandlerResult {
+                   statistics_.reset();
+                   return std::nullopt;
+                 }});
 }
 
 scpi::HandlerResult Instrument::reply_with_source(
@@ -554,13 +604,13 @@ void Instrument::change_generator(const Arguments& arguments,
   GeneratorSettings settings = generator.settings();
   change(settings);
   generator.configure(settings, acquisition_.sample_rate, clock_.now());
-  captures_.discard();
+  capture_setting_changed();
 }
 
 void Instrument::change_channel(const Arguments& arguments,
                                 const std::function<void(ChannelSettings&)>& change) {
   change(channels_.at(channel_of(arguments)));
-  captures_.discard();
+  capture_setting_changed();
 }
 
 void Instrument::change_acquisition(const std::function<void(AcquisitionSettings&)>& change) {
@@ -568,12 +618,19 @@ void Instrument::change_acquisition(const std::function<void(AcquisitionSettings
   for (Generator& generator : generators_) {
     generator.configure(generator.settings(), acquisition_.sample_rate, clock_.now());
   }
-  captures_.discard();
+  capture_setting_changed();
 }
 
 void Instrument::change_trigger(const std::function<void(TriggerSettings&)>& change) {
   change(trigger_);
+  capture_setting_changed();
+}
+
+void Instrument::setting_changed() { statistics_.reset(); }
+
+void Instrument::capture_setting_changed() {
   captures_.discard();
+  setting_changed();
 }
 
 void Instrument::reset() {
@@ -585,6 +642,7 @@ void Instrument::reset() {
   // up by earlier settings past *RST, so the output would depend on the commands sent before it.
   generators_ = make_generators(seed_, acquisition_.sample_rate);
   captures_ = {};
+  setting_changed();
   run_state_ = RunState::kRunning;
 }
 
@@ -655,6 +713,11 @@ void Instrument::advance(std::size_t samples) {
           sample_channels(generators_, channels_, trigger_.source, clock_.now(), count);
       single_end = captures_.push(block, acquisition_, channels_, trigger_,
                                   pending() ? CaptureLimit::kFirst : CaptureLimit::kEvery);
+      // Every capture counts, not only the last of the block, so the statistics do not depend on
+      // how `advance` is chunked; and before held lines resume, so they see the Single's capture.
+      for (const std::shared_ptr<const Capture>& capture : captures_.take_completed()) {
+        statistics_.add(measure_all(*capture));
+      }
       // The Single's capture ends the operation at its last sample: the lines it resumes run with
       // the clock there, and the next block starts there under whatever they changed, so how
       // `advance` is chunked never changes a capture or a reply (ADR 0003).

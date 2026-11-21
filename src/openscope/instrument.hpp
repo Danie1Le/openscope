@@ -16,6 +16,7 @@
 #include "openscope/channel.hpp"
 #include "openscope/generator.hpp"
 #include "openscope/measurement.hpp"
+#include "openscope/measurement_statistics.hpp"
 #include "openscope/sample_clock.hpp"
 #include "openscope/scpi/command_tree.hpp"
 #include "openscope/session.hpp"
@@ -35,8 +36,8 @@ using ReplyHandler = std::function<void(std::optional<std::string> reply)>;
 
 /// The single entry point for instrument behaviour. It owns every Session and the instrument-wide
 /// state (generators, channels, acquisition and trigger settings, the run state, the sample clock,
-/// the latest capture and its measurements), and executes SCPI text on a Session's behalf, so
-/// transports and tests all reach the instrument through the same path.
+/// the latest capture and its measurements, the measurement statistics), and executes SCPI text
+/// on a Session's behalf, so transports and tests all reach the instrument through the same path.
 class Instrument {
  public:
   /// The longest line, in bytes without its terminator, that `execute` runs (4 KB).
@@ -122,6 +123,8 @@ class Instrument {
   void add_waveform_commands();
   void add_fft_commands();
   void add_measurement_commands();
+  /// `MEASure:STATistics?` and `MEASure:STATistics:RESet`.
+  void add_statistics_commands();
 
   /// Replies what `reply` writes from the latest capture and channel `source` (1 to 4) in it.
   /// Before the first capture completes it reports -230; when the source channel is not in the
@@ -185,9 +188,16 @@ class Instrument {
   /// Applies `change` to the trigger settings and discards the capture in progress, which restarts
   /// the trigger.
   void change_trigger(const std::function<void(TriggerSettings&)>& change);
+  /// What every change of an instrument-wide setting does: resets the statistics, so they never
+  /// mix data from two settings (spec #1, story 64). The timebase only does this (ADR 0004).
+  void setting_changed();
+  /// What every change of a setting that shapes captures does: discards the capture in progress,
+  /// which no longer matches the settings, and runs setting_changed().
+  void capture_setting_changed();
   /// `*RST`: restores every instrument-wide setting and the Running run state, restarts every
   /// Generator as if it had run at its defaults since sample index 0 with no Faults, and drops the
-  /// latest capture. The sample clock keeps counting and Sessions keep their own state (ADR 0002).
+  /// latest capture and the statistics. The sample clock keeps counting and Sessions keep their
+  /// own state (ADR 0002).
   void reset();
   /// Enters `state`. Stopped and Armed-single drop the capture in progress, so the next capture
   /// starts with the samples after the change; Running keeps it.
@@ -214,6 +224,8 @@ class Instrument {
   RunState run_state_ = RunState::kRunning;
   CaptureAssembler captures_;
   MeasurementEngine measurements_;
+  /// Every capture published since the last setting change, `*RST` or `MEAS:STAT:RES`.
+  MeasurementStatistics statistics_;
   /// At most one per Session: a Session with a held line sends no other.
   std::vector<HeldLine> held_;
 };
