@@ -479,7 +479,9 @@ void Instrument::close_session(SessionId session) {
   }
 }
 
-void Instrument::execute(SessionId session, std::string_view line, const ReplyHandler& on_reply) {
+// By value, as the facade fixes it: a line that waits keeps its handler until it ends.
+// NOLINTNEXTLINE(performance-unnecessary-value-param)
+void Instrument::execute(SessionId session, std::string_view line, ReplyHandler on_reply) {
   Session& caller = sessions_.at(session);
   if (line.size() > kMaxLineLength) {
     caller.push_error(kInputBufferOverrun);
