@@ -2,7 +2,7 @@
 
 OpenScope is controlled with SCPI text, one line at a time. This document lists the grammar the instrument accepts, the error codes it reports and the commands it implements. It follows IEEE 488.2 and SCPI-99; where those leave a choice, the choice OpenScope made is stated here.
 
-Examples in the grammar sections use commands that later releases add (such as `MEAS:FREQ?`) to show the rules; until a command exists it answers `-113,"Undefined header"`. The [Commands](#commands) table lists what the instrument implements now.
+Examples in the grammar sections may use commands that later releases add to show the rules; until a command exists it answers `-113,"Undefined header"`. The [Commands](#commands) table lists what the instrument implements now.
 
 ## Lines
 
@@ -272,17 +272,22 @@ The holdoff and the Auto timeout are counted on the sample clock, not the wall c
 | `MEASure:VMAX? CHANnel<n>` | volts | The highest sample |
 | `MEASure:VAVerage? CHANnel<n>` | volts | The mean of the samples |
 | `MEASure:VRMS? CHANnel<n>` | volts | The root mean square of the samples, DC included |
+| `MEASure:FREQuency? CHANnel<n>` | hertz | 1 / `PERiod` |
+| `MEASure:PERiod? CHANnel<n>` | seconds | The mean length of the whole cycles, between 50% crossings |
+| `MEASure:DUTYcycle? CHANnel<n>` | percent | Positive duty cycle: the share of the whole cycles spent above the 50% level |
+| `MEASure:RISetime? CHANnel<n>` | seconds | The mean time of the complete rising edges from the 10% level to the 90% level |
+| `MEASure:FALLtime? CHANnel<n>` | seconds | The mean time of the complete falling edges from the 90% level to the 10% level |
 
 The channel parameter is required; `CHAN` alone means `CHAN1`. Each measurement reads every sample of the channel in the latest capture at the moment the query runs, so the timebase never changes it (ADR 0004). Like the waveform queries, a measurement before any capture has completed, or after `*RST` until the next one does, replies nothing and reports `-230`, and one on a channel not in the latest capture replies nothing and reports `-221`. Results are computed once per capture: asking again before the next capture completes returns the same result.
 
-Values are written like settings (shortest form, upper-case exponent) at float32 precision, the precision of the samples they come from: `1.6`, `-0.5`, `1.118034`.
+Values are written like settings (shortest form, upper-case exponent) at float32 precision, the precision of the samples they come from: `1.6`, `-0.5`, `1.118034`, `4E-04`.
 
 #### Measurement status
 
 Every result carries a measurement status, decided in this order:
 
-1. **No signal**: only for a measurement that needs edges or cycles (the timing measurements). Top minus base is under 0.2 vertical divisions of the channel's scale (the scale the capture was taken at): a flat signal, noise alone, or a signal held flat at an input-range limit. The amplitude measurements above never report it: a flat signal's `VPP` is 0 and its `VMIN`, `VMAX`, `VAV` and `VRMS` are its level.
-2. **Too few cycles**: the measurement needs more of the signal than the capture holds (under one whole cycle, or no complete edge). The amplitude measurements above never report it.
+1. **No signal**: only for a measurement that needs edges or cycles (the timing measurements: `FREQ`, `PER`, `DUTY`, `RIS` and `FALL`). Top minus base is under 0.2 vertical divisions of the channel's scale (the scale the capture was taken at): a flat signal, noise alone, or a signal held flat at an input-range limit. The amplitude measurements above never report it: a flat signal's `VPP` is 0 and its `VMIN`, `VMAX`, `VAV` and `VRMS` are its level.
+2. **Too few cycles**: the measurement needs more of the signal than the capture holds: under one whole cycle for `FREQ`, `PER` and `DUTY`, no complete rising edge for `RIS` and no complete falling edge for `FALL` (see [Edges and cycles](#edges-and-cycles)). `FREQ`, `PER` and `DUTY` also report it when the number of whole cycles is not known (a doubtful cycle, below). The amplitude measurements above never report it.
 3. **Clipped**: a sample of the channel in the capture hit an input-range limit (offset plus or minus four divisions), so the value may be wrong.
 4. **OK**.
 
@@ -305,7 +310,18 @@ Top and base are a signal's settled high and low levels, taken from histograms o
 2. Outliers are set aside: at each end of the histogram, samples cut off from the rest by empty bins that add up to fewer than a settled level. When the samples left could not hold a settled level (a capture of two or three samples), every sample is kept.
 3. A second histogram of 256 bins spans the samples that are left. In each half of it (128 bins), the fullest bin and the 4 bins either side of it are a level when, together, they hold a settled level's share of the samples, at least 24 samples, and twice what as many bins of that half hold on average. Counting the neighbouring bins finds a level that noise spreads over several bins; the last two tests keep chance clusters in a short capture from counting. The level is the mean of the samples in the fullest bin. A half with no level (a triangle or ramp sweeps evenly through its range) takes the highest or lowest sample that is left instead, never a value from the middle of the span.
 
-A real level held by fewer than 1/128 of the samples and cut off from the rest, such as the top of a pulse train with a duty cycle under 1/128, is set aside the same way.
+A real level held by fewer than 1/128 of the samples and cut off from the rest, such as the top of a pulse train with a duty cycle under 1/128, is set aside the same way: top and base are then both the other level, so the timing measurements report No signal.
+
+#### Edges and cycles
+
+The timing measurements work from levels between base and top: the 10%, 50% and 90% reference levels, and the 30%, 40%, 60% and 70% levels for counting whole cycles.
+
+- **Edges.** An edge is a move of the signal across a hysteresis band, from beyond one of its two levels to beyond the other: a rising edge goes from under the lower level to over the upper one, a falling edge the reverse. Noise, ringing or a glitch that crosses the 50% level without reaching the far level is no edge, so rising and falling edges alternate. A capture that starts between the two levels has no edge until the signal first passes one of them: which side it came from is unknown. A move that the capture ends in the middle of is no edge either: an edge is complete once it reaches its far level. Times are linear interpolations between samples.
+- **Rise and fall time** use edges across the 10% and 90% levels. An edge's time runs from where it last left its starting level to where it first reached the far level. Rise and fall time are the mean of those times over every complete edge of that direction.
+- **Cycles** use edges across the 30% and 70% levels: centred on 50%, so that a cycle whose sampled peak falls short of 90% (a noisy triangle or ramp at about 10 samples per cycle) still counts, and wide enough that noise around 50% does not. An edge happens where it last crossed the 50% level. One whole cycle runs from one edge's 50% crossing to the next in the same direction. `PER` is the time from the first edge's crossing to the crossing that ends the last whole cycle, divided by the number of whole cycles; `FREQ` is its inverse. `DUTY` is the time above the 50% level (from a rising crossing to the next falling one) within those cycles, as a percentage of that span.
+- **Doubtful cycles.** Between two such edges the signal may cross the 40% and 60% levels and turn back without reaching 30% or 70%. When that move lasts at least an eighth of the mean cycle, it may be a cycle whose peak the samples missed, so the number of whole cycles is not known: `FREQ`, `PER` and `DUTY` report Too few cycles rather than a value that may be a whole cycle off. A shorter move is taken as noise: noise on a slow edge crosses 40% and 60% back and forth only while the edge is near 50%, at most a tenth of a cycle. A glitch that crosses 50% without reaching 40% (or 60%) changes nothing; one that passes 30% and 70% is a cycle of its own, however short. A missed cycle still goes unseen when its peak stays short of 60% (40%), or when it is narrower than an eighth of a cycle, such as one pulse that falls short of 70% in a train under 12.5% duty.
+
+On a clean sine with at least 10 cycles and 10 samples per cycle, `FREQ` is within 0.1% of the Generator's frequency; with noise at 1% of the amplitude it is within 0.5%. Triangles and ramps with that noise keep every cycle down to 10 samples per cycle. A step edge's 50% crossing is known only to within the sample interval it falls in, so a square wave or ramp over few cycles can read up to one sample period off over the span of its whole cycles. With noise at 1% of the amplitude a square wave's rise and fall times stay within 2 sample periods of its ideal edge (its Generator steps between two samples, which interpolation reads as 0.8 sample periods). A slow edge has no such bound: noise moves where it last leaves its starting level later and where it first reaches the far level earlier, by as much as the noise divided by the edge's slope, so a slow noisy edge reads shorter than it is.
 
 ### FFT
 
