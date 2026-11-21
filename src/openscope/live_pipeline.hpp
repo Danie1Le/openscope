@@ -1,0 +1,48 @@
+#pragma once
+
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <stop_token>
+#include <thread>
+
+#include "openscope/acquired_block.hpp"
+#include "openscope/instrument.hpp"
+#include "openscope/spsc_ring_buffer.hpp"
+
+namespace openscope {
+
+/// Runs an Instrument in real time (live mode, spec #1). An acquisition thread acquires sample
+/// blocks as the Pacer releases them and pushes them through an SPSC ring buffer; a processing
+/// thread pops them and assembles captures, so a slow capture never holds up the sample clock.
+/// When processing falls behind and the buffer is full, the block is dropped and counted. The
+/// threads start when the pipeline is built and stop when it is destroyed; blocks still in the
+/// buffer are dropped then, and lines held on a Single stay held until a command ends it.
+class LivePipeline {
+ public:
+  /// Blocks the ring buffer holds before it drops one: at least kQueueCapacity ticks of samples.
+  static constexpr std::size_t kQueueCapacity = 64;
+  /// How long the acquisition thread sleeps between rounds. Each round acquires what fell due
+  /// since the last, so at 1 MS/s a block is about 1000 samples.
+  static constexpr std::chrono::milliseconds kTick{1};
+
+  /// Starts running `instrument` live. It must outlive the pipeline, and nothing may `advance` it
+  /// meanwhile. Reply handlers of held lines run on the processing thread.
+  explicit LivePipeline(Instrument& instrument);
+
+  /// Blocks dropped because the ring buffer was full. Any thread may read it.
+  [[nodiscard]] std::uint64_t dropped_blocks() const { return blocks_.dropped(); }
+
+ private:
+  void acquire_blocks(const std::stop_token& stop);
+  void process_blocks(const std::stop_token& stop);
+
+  SpscRingBuffer<AcquiredBlock> blocks_{kQueueCapacity};
+  Instrument* instrument_;
+  // Declared last so they stop and join first, while what they use still exists; acquisition
+  // stops before processing.
+  std::jthread processing_;
+  std::jthread acquisition_;
+};
+
+}  // namespace openscope
