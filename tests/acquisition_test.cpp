@@ -1,5 +1,5 @@
-// What the generator, channel, acquisition and timebase settings do to captures, driven through
-// SCPI with the sample clock stepped by hand.
+// What the generator, channel, acquisition, timebase and trigger settings do to captures, driven
+// through SCPI with the sample clock stepped by hand.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -20,6 +20,7 @@ namespace openscope {
 namespace {
 
 using test::captured;
+using test::kResetAutoTimeout;
 using test::kResetRecordLength;
 using test::ScpiSession;
 using testing::Each;
@@ -29,21 +30,14 @@ using testing::Eq;
 /// Enables the channels *RST leaves off, so a capture holds all four.
 constexpr auto kEnableChannelsTwoToFour = "CHAN2:DISP ON;:CHAN3:DISP ON;:CHAN4:DISP ON";
 
-class AcquisitionTest : public test::InstrumentFixture {
- protected:
-  /// The first sample index of the latest capture, or -1 when there is none.
-  [[nodiscard]] std::int64_t latest_first_index() const {
-    const std::shared_ptr<const Capture> capture = instrument.latest_capture();
-    return capture == nullptr ? -1 : static_cast<std::int64_t>(capture->first_index);
-  }
-};
+using AcquisitionTest = test::InstrumentFixture;
 
 TEST_F(AcquisitionTest, ChannelNIsFedByGeneratorN) {
   session.send(kEnableChannelsTwoToFour);
   session.send("SOUR1:FUNC DC;OFFS 0.5;:SOUR2:FUNC DC;OFFS 1;:SOUR3:FUNC DC;OFFS 1.5");
   session.send("SOUR4:FUNC DC;OFFS 2");
 
-  instrument.advance(kResetRecordLength);
+  instrument.advance(kResetAutoTimeout);
 
   EXPECT_THAT(captured(instrument, 1).samples, Each(Eq(0.5F)));
   EXPECT_THAT(captured(instrument, 2).samples, Each(Eq(1.0F)));
@@ -83,8 +77,9 @@ TEST_F(AcquisitionTest, FrequencyChangeIsPhaseContinuous) {
   EXPECT_THAT(captured(instrument, 1).samples, ElementsAre(-1.0F, -0.5F, 0.0F, 0.25F, 0.5F));
 }
 
+// Time zero on the first sample, so Auto captures the 3 samples after the change as they come.
 TEST_F(AcquisitionTest, SampleRateChangeIsPhaseContinuous) {
-  session.send("ACQ:SRAT 4000;:SOUR1:FUNC RAMP;FREQ 1000");
+  session.send("ACQ:SRAT 4000;:SOUR1:FUNC RAMP;FREQ 1000;:TRIG:POS 0");
   instrument.advance(3);  // The ramp reaches phase 0.75 at index 3.
 
   session.send("ACQ:SRAT 8000;POIN 3");
@@ -137,7 +132,7 @@ TEST_F(AcquisitionTest, SamplesAboveTheInputRangeAreClippedToItsUpperLimit) {
 TEST_F(AcquisitionTest, SampleExactlyAtTheLimitIsKeptAndOneBeyondIsHeldThere) {
   session.send("SOUR1:FUNC DC;OFFS 4;:SOUR2:FUNC DC;OFFS -4.5;:CHAN2:DISP ON");
 
-  instrument.advance(kResetRecordLength);
+  instrument.advance(kResetAutoTimeout);
 
   EXPECT_THAT(captured(instrument, 1).samples, Each(Eq(4.0F)));
   EXPECT_THAT(captured(instrument, 2).samples, Each(Eq(-4.0F)));
@@ -146,7 +141,7 @@ TEST_F(AcquisitionTest, SampleExactlyAtTheLimitIsKeptAndOneBeyondIsHeldThere) {
 TEST_F(AcquisitionTest, NoiseIsClippedLikeTheSignal) {
   session.send("SOUR1:FUNC DC;NOIS 1;:CHAN1:SCAL 0.1");
 
-  instrument.advance(kResetRecordLength);
+  instrument.advance(2 * kResetRecordLength);  // Noise crosses the trigger level: time zero moves.
 
   const auto [low, high] = std::ranges::minmax(captured(instrument, 1).samples);
   EXPECT_EQ(low, -0.4F);
@@ -178,8 +173,10 @@ TEST_F(AcquisitionTest, WithNoChannelEnabledCapturesStillCompleteButHoldNoSample
   }
 }
 
+// With time zero on the first sample there are no pre-trigger samples to wait for, and the sine's
+// first trigger event is at 1000: Auto takes each 100 samples as an untriggered capture.
 TEST_F(AcquisitionTest, RecordLengthSetsTheSpanOfACapture) {
-  session.send("ACQ:POIN 100");
+  session.send("ACQ:POIN 100;:TRIG:POS 0");
 
   instrument.advance(250);
 
@@ -208,21 +205,25 @@ TEST_F(AcquisitionTest, ACaptureKeepsTheVerticalSettingsItWasTakenWith) {
 }
 
 // A capture takes its settings from its first sample, so a change part-way through one would mix
-// old and new settings: the capture in progress is dropped and the next starts at the change.
-TEST_F(AcquisitionTest, ChannelAndAcquisitionChangesRestartTheCaptureInProgress) {
+// old and new settings: the capture in progress is dropped and the next starts at the change. A DC
+// signal never triggers, so the next capture is Auto's untriggered one: the record length after
+// the 5000 pre-trigger samples that follow the change.
+TEST_F(AcquisitionTest, ChannelAcquisitionAndTriggerChangesRestartTheCaptureInProgress) {
   for (const char* change : {"CHAN2:DISP ON", "CHAN1:DISP ON", "CHAN1:SCAL 2", "CHAN3:OFFS 1",
-                             "ACQ:SRAT 2E6", "ACQ:POIN 10000"}) {
+                             "ACQ:SRAT 2E6", "ACQ:POIN 10000", "TRIG:SOUR CHAN1", "TRIG:LEV 0",
+                             "TRIG:SLOP NEG", "TRIG:MODE AUTO", "TRIG:HOLD 1E-3", "TRIG:POS 50"}) {
     Instrument fresh;
     ScpiSession client{fresh};
+    client.send("SOUR1:FUNC DC");
     fresh.advance(5000);
 
     client.send(change);
-    fresh.advance(kResetRecordLength - 1);
+    fresh.advance(kResetAutoTimeout - 1);
     EXPECT_EQ(fresh.latest_capture(), nullptr) << change;
 
     fresh.advance(1);
     ASSERT_NE(fresh.latest_capture(), nullptr) << change;
-    EXPECT_EQ(fresh.latest_capture()->first_index, 5000U) << change;
+    EXPECT_EQ(fresh.latest_capture()->first_index, 10000U) << change;
   }
 }
 
@@ -242,7 +243,7 @@ TEST_F(AcquisitionTest, GeneratorAndTimebaseChangesKeepTheCaptureInProgress) {
   session.send("SOUR1:AMPL 2;FUNC SQU;FREQ 2KHZ;OFFS 1;NOIS 0.1;:TIM:SCAL 1");
   instrument.advance(5000);
 
-  EXPECT_EQ(latest_first_index(), 0);
+  EXPECT_EQ(test::first_index(instrument), 0U);
 }
 
 TEST_F(AcquisitionTest, RejectedChangesKeepTheCaptureInProgress) {
@@ -253,7 +254,7 @@ TEST_F(AcquisitionTest, RejectedChangesKeepTheCaptureInProgress) {
   session.send("CHAN5:DISP ON");
   instrument.advance(5000);
 
-  EXPECT_EQ(latest_first_index(), 0);
+  EXPECT_EQ(test::first_index(instrument), 0U);
 }
 
 // ADR 0004: the timebase is a display viewport.
@@ -279,10 +280,11 @@ TEST_F(AcquisitionTest, RstDropsTheLatestCaptureAndTheCaptureInProgress) {
   session.send("*RST");
 
   EXPECT_EQ(instrument.latest_capture(), nullptr);
-  instrument.advance(kResetRecordLength - 1);
+  session.send("SOUR1:FUNC DC");  // Never triggers: Auto's untriggered capture starts at 5150.
+  instrument.advance(kResetAutoTimeout - 1);
   EXPECT_EQ(instrument.latest_capture(), nullptr);
   instrument.advance(1);
-  EXPECT_EQ(latest_first_index(), 150);
+  EXPECT_EQ(test::first_index(instrument), 5150U);
 }
 
 // Spec story 4: *RST is a known state. Frequency and sample-rate history would otherwise leave
@@ -291,6 +293,7 @@ TEST_F(AcquisitionTest, RstGivesTheSameNextCaptureAsAFreshInstrument) {
   constexpr std::size_t kBeforeChange = 12'345;  // Where the second batch of changes lands.
   session.send("SOUR1:FUNC SQU;FREQ 1234;:SOUR2:FUNC RAMP;FREQ 777;:SOUR3:FREQ 3.3KHZ");
   session.send(":SOUR4:NOIS 0.5;:CHAN2:DISP ON;:ACQ:SRAT 3E6;POIN 333");
+  session.send(":TRIG:SOUR CHAN2;LEV 0.3;SLOP NEG;MODE NORM;HOLD 5MS;POS 20");
   instrument.advance(kBeforeChange);
   session.send("SOUR1:FREQ 4321;:ACQ:SRAT 2E5");
   instrument.advance((2 * kResetRecordLength) - kBeforeChange);
