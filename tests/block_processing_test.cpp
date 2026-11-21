@@ -49,6 +49,10 @@ void acquire_and_process(Instrument& instrument, std::size_t samples, std::size_
 
 using BlockProcessingTest = test::UntriggeredDcFixture;
 
+/// Normal trigger mode, time zero at the first sample and ten-sample captures: each capture is
+/// placed by one trigger event.
+constexpr auto kNormalTenSamples = "TRIG:MODE NORM;POS 0;:ACQ:POIN 10";
+
 // The two halves together make the same captures as stepping the clock, whatever the block size.
 TEST(BlockProcessingStepTest, ProcessingAcquiredBlocksGivesTheCapturesAdvanceGives) {
   constexpr auto kSetup = "SOUR1:NOIS 0.05;:CHAN2:DISP ON;:TRIG:POS 30";
@@ -150,7 +154,6 @@ TEST_F(BlockProcessingTest, DroppedBlockBetweenCapturesDiscardsNothing) {
 // event. CH1's 1 kHz sine arms the trigger below -0.1 V before sample 990 and crosses 0 V rising
 // at sample 1000, inside the dropped block.
 TEST(BlockProcessingTriggerTest, TriggerSeesNoEdgeAcrossADroppedBlock) {
-  constexpr auto kNormalTenSamples = "TRIG:MODE NORM;POS 0;:ACQ:POIN 10";
   Instrument reference;
   ScpiSession(reference).send(kNormalTenSamples);
   reference.advance(2100);
@@ -255,9 +258,9 @@ TEST_F(BlockProcessingTest, RunDuringASinglesBlockCapturesTheRestOfTheBlock) {
 // holdoff from the Single's trigger event does not hold off the rest of the block. CH1's 1 kHz
 // sine rises through 0 V at samples 1000 and 2000; a 2.5 ms holdoff would skip the second.
 TEST(BlockProcessingTriggerTest, RestOfASinglesBlockStartsWithTheTriggerRestarted) {
-  constexpr auto kNormalTenSamples = "TRIG:MODE NORM;POS 0;HOLD 0.0025;:ACQ:POIN 10";
+  const std::string setup = std::string(kNormalTenSamples) + ";:TRIG:HOLD 0.0025";
   Instrument reference;
-  ScpiSession(reference).send(kNormalTenSamples);
+  ScpiSession(reference).send(setup);
   reference.advance(1500);
   const std::size_t first_event = first_index(reference);
   ScpiSession(reference).send("SINGle");
@@ -266,7 +269,7 @@ TEST(BlockProcessingTriggerTest, RestOfASinglesBlockStartsWithTheTriggerRestarte
   ASSERT_LT(first_event, second_event);
   Instrument instrument;
   ScpiSession session(instrument);
-  session.send(std::string(kNormalTenSamples) + ";:SINGle");
+  session.send(setup + ";:SINGle");
   const AcquiredBlock armed = acquired(instrument, 2100);
   session.send("RUN");
 

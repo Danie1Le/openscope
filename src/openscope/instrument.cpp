@@ -644,25 +644,20 @@ std::optional<AcquiredBlock> Instrument::acquire(std::size_t count) {
   if (count > kMaxBlockLength) {
     throw std::invalid_argument("sample block longer than kMaxBlockLength");
   }
-  std::optional<AcquiredBlock> block;
-  std::optional<std::array<Generator, kChannelCount>> generators;
-  SampleIndex first = 0;
-  {
-    const std::scoped_lock lock(mutex_);
-    block = snapshot();
-    if (block) {
-      generators.emplace(generators_);
-    }
-    first = clock_.now();
-    clock_.take(count);
+  std::unique_lock lock(mutex_);
+  const SampleIndex first = clock_.now();
+  clock_.take(count);
+  std::optional<AcquiredBlock> block = snapshot();
+  if (!block) {
+    return std::nullopt;
   }
+  const std::array<Generator, kChannelCount> generators = generators_;
+  lock.unlock();
   // Sampling is most of the cost, so it runs without the mutex and commands never wait on it. The
   // copies sample what generators_ would: a command changes a Generator from the sample clock's
   // next index on, after this block (ADR 0003).
-  if (block) {
-    block->samples =
-        sample_channels(*generators, block->channels, block->trigger.source, first, count);
-  }
+  block->samples =
+      sample_channels(generators, block->channels, block->trigger.source, first, count);
   return block;
 }
 
@@ -697,7 +692,8 @@ double Instrument::sample_rate() const {
 std::optional<AcquiredBlock> Instrument::sample(std::size_t count) {
   std::optional<AcquiredBlock> block = snapshot();
   if (block) {
-    block->samples = sample_channels(generators_, channels_, trigger_.source, clock_.now(), count);
+    block->samples =
+        sample_channels(generators_, block->channels, block->trigger.source, clock_.now(), count);
   }
   return block;
 }
