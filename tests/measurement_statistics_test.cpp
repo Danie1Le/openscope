@@ -88,7 +88,6 @@ TEST(MeasurementStatisticsTest, StartsEmpty) {
   const MeasurementStatistics statistics;
 
   EXPECT_TRUE(statistics.empty());
-  EXPECT_FALSE(statistics.holds(1));
   EXPECT_THROW((void)statistics.at(1, position_of("VPP")), std::out_of_range);
 }
 
@@ -116,9 +115,6 @@ TEST(MeasurementStatisticsTest, ChannelsAndMeasurementsAreKeptApart) {
   EXPECT_EQ(statistics.at(1, position_of("VPP")).values.mean(), 1.0);
   EXPECT_EQ(statistics.at(1, position_of("VMAX")).values.mean(), 2.0);
   EXPECT_EQ(statistics.at(4, position_of("VPP")).values.mean(), 7.0);
-  EXPECT_TRUE(statistics.holds(1));
-  EXPECT_FALSE(statistics.holds(2));
-  EXPECT_TRUE(statistics.holds(4));
   EXPECT_THROW((void)statistics.at(2, position_of("VPP")), std::out_of_range);
   EXPECT_THROW((void)statistics.at(1, measurements().size()), std::out_of_range);
 }
