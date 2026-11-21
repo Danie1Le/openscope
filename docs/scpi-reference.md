@@ -308,7 +308,7 @@ The entry does not stop the line: `MEAS:VPP? CHAN1;VRMS? CHAN1` on a clipped sig
 
 | Command | Reply | Notes |
 |---|---|---|
-| `MEASure:STATistics? <type>,CHANnel<n>` | `<current>,<mean>,<minimum>,<maximum>,<standard deviation>,<count>` | `<type>` is a measurement's mnemonic from the table above (`VPP`, `VMAX`, `VAVerage`, ...); both parameters are required |
+| `MEASure:STATistics? <type>,CHANnel<n>` | `<current>,<mean>,<minimum>,<maximum>,<standard deviation>,<count>` | `<type>` is a measurement's mnemonic from the table above (`VPP`, `VAVerage`, `FREQuency`, `RISetime`, ...); both parameters are required |
 | `MEASure:STATistics:RESet` | none | Resets the statistics of every measurement on every channel |
 
 Measurement statistics follow every measurement of every enabled channel across the captures since the last reset, so a script can check how stable a value is. Every capture that completes counts, untriggered captures included, even when several complete between two queries and only the last becomes the latest capture. They are instrument-wide: every Session reads the same statistics, and a reset from one Session resets them for all.
