@@ -47,9 +47,13 @@ constexpr auto kCycleQueries = "MEAS:FREQ? CHAN1;PER? CHAN1;DUTY? CHAN1";
 /// Every timing measurement of channel 1, short form, in one line.
 constexpr auto kTimingQueries = "MEAS:FREQ? CHAN1;PER? CHAN1;DUTY? CHAN1;RIS? CHAN1;FALL? CHAN1";
 
-/// How many queries kTimingQueries holds, and so how many status entries it pushes at most.
-constexpr std::ptrdiff_t kTimingQueryCount =
-    std::ranges::count(std::string_view{kTimingQueries}, ';') + 1;
+/// How many queries `line` holds, and so how many status entries it pushes at most.
+constexpr std::ptrdiff_t query_count(std::string_view line) {
+  return std::ranges::count(line, ';') + 1;
+}
+
+/// The sample rate at `*RST` (`ACQ:SRAT`), in samples per second.
+constexpr double kResetSampleRate = 1e6;
 
 TEST_F(TimingMeasurementTest, SquareWaveRepliesAreExact) {
   session.send("SOUR1:FUNC SQU;:CHAN2:DISP ON;:SOUR2:FUNC SQU;FREQ 2.5KHZ");
@@ -139,7 +143,7 @@ TEST_F(TimingMeasurementTest, EveryShapeHasTheGeneratorsFrequency) {
   }
 }
 
-/// A noisy signal at 1 MS/s and the record length that captures it.
+/// A noisy signal at kResetSampleRate and the record length that captures it.
 struct NoisySignal {
   std::string_view function;
   double frequency;
@@ -169,7 +173,7 @@ class NoisySignalTimingTest : public testing::TestWithParam<NoisySignal> {};
 
 // NFR-6: frequency within 0.5% of the Generator's with noise at 1% of the amplitude, over several
 // seeds. Noise makes a slow edge cross its 50% level several times; the hysteresis between the 30%
-// and 70% levels counts each crossing once.
+// and 70% levels counts each edge once.
 TEST_P(NoisySignalTimingTest, FrequencyIsWithinHalfAPercent) {
   const NoisySignal signal = GetParam();
   for (std::uint64_t seed = 1; seed <= kNoiseSeeds; ++seed) {
@@ -186,17 +190,28 @@ INSTANTIATE_TEST_SUITE_P(OnePercentNoise, NoisySignalTimingTest,
                                          NoisySignal{"SQU", 1e3, 10'000},
                                          NoisySignal{"TRI", 1e3, 10'000}));
 
-// #48 review: at 10 to 16 samples per cycle the sampled peaks of a noisy triangle or ramp can fall
-// short of the 90% level, and counting cycles between the 10% and 90% levels lost those cycles
-// (TRI at 96432 Hz read 85748 Hz, 8/9 of it). Each record holds ten whole cycles plus a sample, or
-// a hundred times that.
+// At 10 to 16 samples per cycle the sampled peaks of a noisy triangle or ramp can fall short of the
+// 90% level (a cycle lost there reads 8/9 of 96432 Hz); every cycle still counts. Each record holds
+// ten whole cycles plus a sample, or a hundred times that.
 INSTANTIATE_TEST_SUITE_P(
     FewSamplesPerCycle, NoisySignalTimingTest,
-    testing::Values(NoisySignal{"TRI", 96432, 105}, NoisySignal{"TRI", 96432, 10'500},
-                    NoisySignal{"TRI", 81301, 124}, NoisySignal{"TRI", 81301, 12'400},
-                    NoisySignal{"RAMP", 96432, 105, 0.01}, NoisySignal{"RAMP", 96432, 10'500, 0.01},
-                    NoisySignal{"RAMP", 81301, 124}, NoisySignal{"RAMP", 81301, 12'400},
-                    NoisySignal{"RAMP", 63694, 159}, NoisySignal{"RAMP", 63694, 15'900}));
+    testing::Values(
+        NoisySignal{"TRI", 96432, 105}, NoisySignal{"TRI", 96432, 10'500},
+        NoisySignal{"TRI", 81301, 124}, NoisySignal{"TRI", 81301, 12'400},
+        NoisySignal{.function = "RAMP", .frequency = 96432, .record_length = 105, .noise = 0.01},
+        NoisySignal{.function = "RAMP", .frequency = 96432, .record_length = 10'500, .noise = 0.01},
+        NoisySignal{"RAMP", 81301, 124}, NoisySignal{"RAMP", 81301, 12'400},
+        NoisySignal{"RAMP", 63694, 159}, NoisySignal{"RAMP", 63694, 15'900}));
+
+// A slow edge with noise at 3.5% to 7.5% of the amplitude spends many samples near 50%, where the
+// noise crosses 40% or 60% and back; those moves are short next to a cycle, so they are no
+// doubtful cycle and the frequency stays within 0.5%.
+INSTANTIATE_TEST_SUITE_P(
+    SlowEdgesWithMoreNoise, NoisySignalTimingTest,
+    testing::Values(
+        NoisySignal{.function = "SIN", .frequency = 1e3, .record_length = 100'000, .noise = 0.1},
+        NoisySignal{.function = "SIN", .frequency = 100, .record_length = 100'000, .noise = 0.07},
+        NoisySignal{.function = "SIN", .frequency = 1e4, .record_length = 10'000, .noise = 0.15}));
 
 /// A sweep over noisy signals: their noise, how close a frequency they reply must be, and whether
 /// Too few cycles is an allowed reply.
@@ -213,7 +228,7 @@ struct FrequencySweep {
 testing::AssertionResult is_right_or_flagged(std::uint64_t seed, const NoisySignal& signal,
                                              const FrequencySweep& sweep) {
   const auto [frequency, error] = measure_noisy(seed, signal, "MEAS:FREQ?");
-  const double samples_per_cycle = 1e6 / signal.frequency;
+  const double samples_per_cycle = kResetSampleRate / signal.frequency;
   const double resolution =
       1.0 / (static_cast<double>(signal.record_length) - (2 * samples_per_cycle));
   const bool right =
@@ -239,7 +254,7 @@ TEST_P(FrequencySweepTest, IsRightOrTooFewCycles) {
       for (const double cycles : {10.0, 1000.0}) {
         const NoisySignal signal{
             .function = shape,
-            .frequency = 1e6 / samples_per_cycle,
+            .frequency = kResetSampleRate / samples_per_cycle,
             .record_length = static_cast<std::size_t>(std::ceil(cycles * samples_per_cycle)) + 1,
             .noise = sweep.noise};
         for (std::uint64_t seed = 1; seed <= kNoiseSeeds; ++seed) {
@@ -284,33 +299,21 @@ TEST(NoisySquareTimingTest, EdgesAreWithinTwoSamplePeriods) {
   }
 }
 
-/// Replies to `kTimingQueries` and the error queue after a square wave on channel 1 had a 20-sample
-/// glitch of `volts` a quarter into its high level (at sample 1250).
-std::string after_square_wave_glitch(double volts) {
-  Instrument instrument;
-  ScpiSession session{instrument};
-  session.send(kUntriggeredCaptures);
-  session.send("SOUR1:FUNC SQU");
-  instrument.advance(1250);
-  session.send(std::format("SOUR1:FAUL GLIT,{},20", volts));
-  instrument.advance(kResetRecordLength - 1250);
-  return session.send(std::format("{};:SYST:ERR?", kTimingQueries)).value_or("");
-}
-
 // Spec story 57: spikes past top and base move no reference level and cross none, and glitches
-// that cross the 50% level without reaching 40% or 60% (a dip to -0.1 V from the high level, a
-// bump to 0.1 V from the low one) are inside the hysteresis, so none of them is an edge and none
-// changes a timing measurement.
+// that cross the 50% level without reaching the far level of the 30%-70% band (a dip to -0.2 V
+// from the high level, a bump to 0.2 V from the low one) are no edge. Those glitches cross 40% or
+// 60% and back, but in 20 samples of a 1000-sample cycle, too short to be a cycle missed, so none
+// of them changes a timing measurement.
 TEST_F(TimingMeasurementTest, SpikesAndShallowGlitchesAreNotEdges) {
   session.send("SOUR1:FUNC SQU");
   instrument.advance(1250);  // A quarter into a cycle: the high level.
   session.send("SOUR1:FAUL GLIT,2.5");
   instrument.advance(100);
-  session.send("SOUR1:FAUL GLIT,-1.1,20");
+  session.send("SOUR1:FAUL GLIT,-1.2,20");
   instrument.advance(500);  // The low level.
   session.send("SOUR1:FAUL GLIT,-2.5");
   instrument.advance(100);
-  session.send("SOUR1:FAUL GLIT,1.1,20");
+  session.send("SOUR1:FAUL GLIT,1.2,20");
   instrument.advance(kResetRecordLength - 1950);
 
   EXPECT_EQ(session.send("MEAS:FREQ? CHAN1;DUTY? CHAN1;RIS? CHAN1;FALL? CHAN1"),
@@ -318,14 +321,38 @@ TEST_F(TimingMeasurementTest, SpikesAndShallowGlitchesAreNotEdges) {
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 
-// FR-13: a dip from the high level to -0.3 V (35%) crosses 40% but not 30%, so it may be a cycle
-// whose low level was not reached or a glitch; the whole cycles are not known and every timing
-// measurement of cycles is Too few cycles. The dip does not reach 10%, so rise and fall time are
-// unchanged. A dip to -0.5 V (25%) is an edge pair and a cycle of its own.
-TEST(DoubtfulCyclesTest, AMoveThatMayBeACycleIsTooFewCycles) {
-  EXPECT_EQ(after_square_wave_glitch(-1.3),
+/// Replies to `kTimingQueries` and then `SYST:ERR?` once a square wave on channel 1 had `fault`
+/// (`SOUR1:FAUL` parameters) injected a tenth into its second high level, at sample 1100.
+std::string after_square_wave_fault(std::string_view fault) {
+  Instrument instrument;
+  ScpiSession session{instrument};
+  session.send(kUntriggeredCaptures);
+  session.send("SOUR1:FUNC SQU");
+  instrument.advance(1100);
+  session.send(std::format("SOUR1:FAUL {}", fault));
+  instrument.advance(kResetRecordLength - 1100);
+  return session.send(std::format("{};:SYST:ERR?", kTimingQueries)).value_or("");
+}
+
+// FR-13: the high level dropping to -0.3 V (35%) for 300 samples crosses 40% and back without
+// reaching 30%, for as long as a cycle whose low level the samples missed would; the whole cycles
+// are not known and every measurement of cycles is Too few cycles. For 100 samples, under an eighth
+// of a cycle, it is noise-like and changes nothing. The drop does not reach 10%, so rise and fall
+// time are unchanged either way.
+TEST(DoubtfulCyclesTest, ALongMoveThatMayBeACycleIsTooFewCycles) {
+  EXPECT_EQ(after_square_wave_fault("DROP,-0.3,300"),
             std::format("{0};{0};{0};8E-07;8E-07;{1}", scpi::kNotANumber, kTooFewCyclesReply));
-  EXPECT_THAT(after_square_wave_glitch(-1.5), testing::EndsWith(kNoErrorReply));
+  EXPECT_EQ(after_square_wave_fault("DROP,-0.3,100"),
+            std::format("1000;0.001;50;8E-07;8E-07;{}", kNoErrorReply));
+}
+
+// A glitch down to -0.5 V (25%) passes both levels of the 30%-70% band, so it is an edge pair and
+// a cycle of its own, however short: the 9 whole cycles from the falling crossing at 499.5 to the
+// one at 9499.5 become 10 over the same 9000 samples.
+TEST(DoubtfulCyclesTest, AGlitchAcrossTheBandIsACycle) {
+  const std::string replies = after_square_wave_fault("GLIT,-1.5,20");
+  EXPECT_THAT(replies, testing::StartsWith("1111.11"));
+  EXPECT_THAT(replies, testing::EndsWith(kNoErrorReply));
 }
 
 TEST_F(TimingMeasurementTest, ClippedSignalReturnsTheValueWithAWarning) {
@@ -333,7 +360,7 @@ TEST_F(TimingMeasurementTest, ClippedSignalReturnsTheValueWithAWarning) {
   instrument.advance(kResetRecordLength);
 
   EXPECT_EQ(session.send(kTimingQueries), "1000;0.001;50;8E-07;8E-07");
-  for (std::ptrdiff_t entry = 0; entry < kTimingQueryCount; ++entry) {
+  for (std::ptrdiff_t entry = 0; entry < query_count(kTimingQueries); ++entry) {
     EXPECT_EQ(session.next_error(), kClippedReply) << entry;
   }
   EXPECT_EQ(session.next_error(), kNoErrorReply);
@@ -359,7 +386,7 @@ TEST_F(TimingMeasurementTest, UnderOneWholeCycleIsTooFewCycles) {
   session.send("ACQ:POIN 1500");
   instrument.advance(1500);
   EXPECT_EQ(session.send(kCycleQueries), std::format("{0};{0};{0}", scpi::kNotANumber));
-  for (int entry = 0; entry < 3; ++entry) {
+  for (std::ptrdiff_t entry = 0; entry < query_count(kCycleQueries); ++entry) {
     EXPECT_EQ(session.next_error(), kTooFewCyclesReply) << entry;
   }
   EXPECT_EQ(session.next_error(), kNoErrorReply);
