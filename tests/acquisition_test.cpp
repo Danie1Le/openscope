@@ -288,11 +288,12 @@ TEST_F(AcquisitionTest, RstDropsTheLatestCaptureAndTheCaptureInProgress) {
 // Spec story 4: *RST is a known state. Frequency and sample-rate history would otherwise leave
 // every Generator at a phase that depends on the commands sent before *RST.
 TEST_F(AcquisitionTest, RstGivesTheSameNextCaptureAsAFreshInstrument) {
+  constexpr std::size_t kBeforeChange = 12'345;  // Where the second batch of changes lands.
   session.send("SOUR1:FUNC SQU;FREQ 1234;:SOUR2:FUNC RAMP;FREQ 777;:SOUR3:FREQ 3.3KHZ");
   session.send(":SOUR4:NOIS 0.5;:CHAN2:DISP ON;:ACQ:SRAT 3E6;POIN 333");
-  instrument.advance(12'345);
+  instrument.advance(kBeforeChange);
   session.send("SOUR1:FREQ 4321;:ACQ:SRAT 2E5");
-  instrument.advance((2 * kResetRecordLength) - 12'345);
+  instrument.advance((2 * kResetRecordLength) - kBeforeChange);
 
   session.send("*RST");
   session.send(kEnableChannelsTwoToFour);
