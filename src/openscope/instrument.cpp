@@ -122,6 +122,20 @@ Value value_of(const Arguments& arguments, std::size_t index = 0) {
 /// from zero.
 std::size_t whole_samples(double count) { return static_cast<std::size_t>(std::llround(count)); }
 
+/// The samples of `block` from offset `from` (at most its count) on, as a block of their own.
+SampleBlock samples_from(const SampleBlock& block, std::size_t from) {
+  SampleBlock rest{
+      .first_index = block.first_index + from, .count = block.count - from, .channels = {}};
+  for (std::size_t channel = 0; channel < kChannelCount; ++channel) {
+    const std::span<const float> samples(block.channels.at(channel));
+    if (!samples.empty()) {  // An empty one is a channel the block does not carry.
+      const std::span<const float> kept = samples.subspan(from);
+      rest.channels.at(channel).assign(kept.begin(), kept.end());
+    }
+  }
+  return rest;
+}
+
 }  // namespace
 
 Instrument::Instrument(std::uint64_t seed)
@@ -630,17 +644,47 @@ std::optional<AcquiredBlock> Instrument::acquire(std::size_t count) {
   if (count > kMaxBlockLength) {
     throw std::invalid_argument("sample block longer than kMaxBlockLength");
   }
-  const std::scoped_lock lock(mutex_);
-  std::optional<AcquiredBlock> block = sample(count);
-  clock_.take(count);
+  std::optional<AcquiredBlock> block;
+  std::optional<std::array<Generator, kChannelCount>> generators;
+  SampleIndex first = 0;
+  {
+    const std::scoped_lock lock(mutex_);
+    block = snapshot();
+    if (block) {
+      generators.emplace(generators_);
+    }
+    first = clock_.now();
+    clock_.take(count);
+  }
+  // Sampling is most of the cost, so it runs without the mutex and commands never wait on it. The
+  // copies sample what generators_ would: a command changes a Generator from the sample clock's
+  // next index on, after this block (ADR 0003).
+  if (block) {
+    block->samples =
+        sample_channels(*generators, block->channels, block->trigger.source, first, count);
+  }
   return block;
 }
 
 void Instrument::process(const AcquiredBlock& block) {
   const Pushed pushed = assemble(block);
-  if (pushed.capture != nullptr || pushed.end) {
+  if (pushed.capture == nullptr && !pushed.end) {
+    return;
+  }
+  bool rest_runs = false;
+  {
     const std::scoped_lock lock(mutex_);
-    conclude(block, pushed);
+    rest_runs = conclude(block, pushed);
+  }
+  // RUN came after the block was acquired for a Single: the samples after the Single's capture
+  // are captured as Running, as `advance` would sample them afresh, so none goes missing.
+  if (rest_runs && *pushed.end < block.samples.count) {
+    const Pushed rest = captures_.push(samples_from(block.samples, *pushed.end), block.acquisition,
+                                       block.channels, block.trigger);
+    if (rest.capture != nullptr) {
+      const std::scoped_lock lock(mutex_);
+      conclude(block, rest);
+    }
   }
 }
 
@@ -650,13 +694,21 @@ double Instrument::sample_rate() const {
 }
 
 std::optional<AcquiredBlock> Instrument::sample(std::size_t count) {
+  std::optional<AcquiredBlock> block = snapshot();
+  if (block) {
+    block->samples = sample_channels(generators_, channels_, trigger_.source, clock_.now(), count);
+  }
+  return block;
+}
+
+std::optional<AcquiredBlock> Instrument::snapshot() {
   // Stopped samples nothing: Generators are pure functions of the sample index (ADR 0003), and
   // the capture in progress was dropped when the instrument stopped.
   if (run_state_ == RunState::kStopped) {
     return std::nullopt;
   }
   return AcquiredBlock{
-      .samples = sample_channels(generators_, channels_, trigger_.source, clock_.now(), count),
+      .samples = {},
       .acquisition = acquisition_,
       .channels = channels_,
       .trigger = trigger_,
@@ -683,21 +735,27 @@ Pushed Instrument::assemble(const AcquiredBlock& block) {
                         block.limit);
 }
 
-void Instrument::conclude(const AcquiredBlock& block, const Pushed& pushed) {
+bool Instrument::conclude(const AcquiredBlock& block, const Pushed& pushed) {
   // A command since the block was acquired has discarded what it belongs to: its capture would
   // show settings older than that command, and the Single it would end was restarted or ended.
   if (block.generation != generation_) {
-    return;
+    return false;
   }
   if (pushed.capture != nullptr) {
     latest_.store(pushed.capture);
   }
-  // RUN leaves Armed-single without discarding, so a block acquired while the Single was armed
-  // may complete a capture after it: that capture is kept, but there is no Single left to end.
-  if (pushed.end && pending()) {
+  if (!pushed.end) {
+    return false;
+  }
+  if (pending()) {
     enter(RunState::kStopped);
     resume_held();
+    return false;
   }
+  // RUN leaves Armed-single without discarding, so a block acquired while the Single was armed
+  // may complete a capture after it: that capture is kept, but there is no Single left to end,
+  // and the instrument runs on through the rest of the block.
+  return true;
 }
 
 }  // namespace openscope

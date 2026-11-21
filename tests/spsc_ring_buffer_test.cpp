@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <thread>
@@ -33,8 +34,13 @@ struct Stamped {
 constexpr std::uint64_t kItems = 100'000;
 constexpr std::size_t kPayloadLength = 16;
 
+/// The payload item `sequence` carries.
+std::vector<std::uint64_t> payload_of(std::uint64_t sequence) {
+  return std::vector<std::uint64_t>(kPayloadLength, sequence);
+}
+
 Stamped stamped(std::uint64_t sequence) {
-  return {.sequence = sequence, .payload = std::vector<std::uint64_t>(kPayloadLength, sequence)};
+  return {.sequence = sequence, .payload = payload_of(sequence)};
 }
 
 /// Pops every item `ring` delivers until the producer has finished (`done`) and the queue is
@@ -53,7 +59,7 @@ std::vector<std::uint64_t> consume(SpscRingBuffer<Stamped>& ring, const std::ato
       std::this_thread::yield();
       continue;
     }
-    EXPECT_EQ(item->payload, std::vector<std::uint64_t>(kPayloadLength, item->sequence));
+    EXPECT_EQ(item->payload, payload_of(item->sequence));
     sequences.push_back(item->sequence);
   }
 }
@@ -92,6 +98,14 @@ Delivery deliver(SpscRingBuffer<Stamped>& ring, Refused refused_item) {
 
 TEST(SpscRingBufferTest, CapacityOfZeroIsRejected) {
   EXPECT_THROW(SpscRingBuffer<int>(0), std::invalid_argument);
+}
+
+// The spare slot must fit: SIZE_MAX + 1 would wrap to an empty vector that the first push
+// overruns.
+TEST(SpscRingBufferTest, CapacityWithNoRoomForTheSpareSlotIsRejected) {
+  EXPECT_THROW(SpscRingBuffer<int>(std::numeric_limits<std::size_t>::max()),
+               std::invalid_argument);
+  EXPECT_THROW(SpscRingBuffer<int>(std::vector<int>().max_size()), std::invalid_argument);
 }
 
 TEST(SpscRingBufferTest, EmptyQueuePopsNothing) {
@@ -138,7 +152,7 @@ TEST(SpscRingBufferTest, DroppedItemIsLeftWithTheProducer) {
   EXPECT_FALSE(ring.try_push(std::move(refused)));
 
   // NOLINTNEXTLINE(bugprone-use-after-move): try_push leaves a refused item as it was.
-  EXPECT_EQ(refused.payload, std::vector<std::uint64_t>(kPayloadLength, 2));
+  EXPECT_EQ(refused.payload, payload_of(2));
 }
 
 TEST(SpscRingBufferTest, RoomFreedByAPopTakesTheNextItem) {
@@ -194,6 +208,7 @@ TEST(SpscRingBufferThreadsTest, GapsInWhatArrivesAddUpToTheDropCount) {
 
   const Delivery delivery = deliver(ring, Refused::kGiveUp);
 
+  ASSERT_GT(delivery.refused, 0U) << "no drops: the test did not exercise the full queue";
   std::uint64_t gaps = 0;
   std::uint64_t expected = 0;
   for (const std::uint64_t sequence : delivery.sequences) {

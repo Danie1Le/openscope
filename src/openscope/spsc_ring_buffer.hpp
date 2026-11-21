@@ -19,7 +19,8 @@ template <typename T>
 // NOLINTNEXTLINE(clang-analyzer-optin.performance.Padding): the padding keeps the indexes apart.
 class SpscRingBuffer {
  public:
-  /// A queue that holds up to `capacity` items. Throws std::invalid_argument for a capacity of 0.
+  /// A queue that holds up to `capacity` items. Throws std::invalid_argument for a capacity of 0,
+  /// or one too large for the spare slot to fit in a vector.
   explicit SpscRingBuffer(std::size_t capacity) : slots_(slot_count(capacity)) {}
 
   /// Producer only: appends `item`, or, when the queue is full, leaves `item` untouched, counts it
@@ -49,15 +50,16 @@ class SpscRingBuffer {
     return item;
   }
 
-  /// How many items try_push has dropped because the queue was full. Any thread may read it.
+  /// How many pushes try_push refused because the queue was full. An item is lost only if the
+  /// producer then gives it up. Any thread may read it.
   [[nodiscard]] std::uint64_t dropped() const { return dropped_.load(std::memory_order_relaxed); }
 
  private:
   /// One slot more than the capacity, so a full queue (tail just behind head) differs from an
   /// empty one (tail at head) without a shared count.
   static std::size_t slot_count(std::size_t capacity) {
-    if (capacity == 0) {
-      throw std::invalid_argument("ring buffer capacity of zero");
+    if (capacity == 0 || capacity >= std::vector<T>().max_size()) {
+      throw std::invalid_argument("ring buffer capacity out of range");
     }
     return capacity + 1;
   }

@@ -56,7 +56,7 @@ std::size_t CaptureAssembler::fill(Capture& capture, const SampleBlock& block, s
   const std::size_t to = std::min(block.count, used + (capture.record_length - filled_));
   append(capture, block, used, to);
   if (filled_ == capture.record_length) {
-    publish(capture);
+    complete(capture);
   }
   return to;
 }
@@ -87,14 +87,14 @@ std::size_t CaptureAssembler::collect(Capture& capture, const SampleBlock& block
     holdoff_end_ = block.first_index + to + holdoff;
   } else if (filled_ == limit && mode == TriggerMode::kAuto) {
     drop_oldest(capture, pre_trigger_);  // The latest record becomes an untriggered capture.
-    publish(capture);
+    complete(capture);
   } else if (filled_ == limit) {
     drop_oldest(capture, capture.record_length);  // Normal keeps what may precede an event.
   }
   return to;
 }
 
-void CaptureAssembler::publish(Capture& capture) {
+void CaptureAssembler::complete(Capture& capture) {
   capture.trigger_position = pre_trigger_;
   capture.untriggered = !placed_;
   completed_ = std::make_shared<const Capture>(std::move(capture));

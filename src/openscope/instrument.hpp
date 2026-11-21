@@ -98,18 +98,21 @@ class Instrument {
 
   /// Live mode's acquisition half: takes the next `count` sample indexes on the sample clock and
   /// returns them sampled, with a snapshot of the settings `process` needs. While Stopped it
-  /// still takes them, but samples nothing and returns nullopt. Throws std::invalid_argument when
-  /// `count` exceeds kMaxBlockLength.
+  /// still takes them, but samples nothing and returns nullopt. It holds the mutex that commands
+  /// take only to take the indexes and the snapshot, not while it samples, so a command never
+  /// waits for a block to be sampled. Throws std::invalid_argument when `count` exceeds
+  /// kMaxBlockLength.
   [[nodiscard]] std::optional<AcquiredBlock> acquire(std::size_t count);
 
   /// Live mode's processing half: assembles `block`, from `acquire`, into captures without the
   /// mutex that commands take; it takes it only to publish a capture or end a Single, which
-  /// happens about once a capture. A capture completes into the latest capture only
-  /// when no command has discarded the capture in progress since the block was acquired, so it
-  /// never holds settings older than a command that has already returned. A Single's capture
-  /// stops the instrument and ends the lines held on it, on this thread. Blocks must come in the
-  /// order they were acquired; a block that never arrives is a dropped block, and the capture
-  /// that would span it is discarded and counted.
+  /// happens about once a capture. A capture completes into the latest capture only when no
+  /// command has discarded the capture in progress since the block was acquired, so it never
+  /// holds settings older than a command that has already returned. A Single's capture stops the
+  /// instrument and ends the lines held on it, on this thread; when `RUN` has ended the Single
+  /// since the block was acquired, the rest of the block is captured as Running. Blocks must come
+  /// in the order they were acquired; a block that never arrives is a dropped block, and the
+  /// capture that would span it is discarded and counted.
   void process(const AcquiredBlock& block);
 
   /// Samples per second on the sample clock (`ACQuire:SRATe`), which live mode paces against.
@@ -149,12 +152,17 @@ class Instrument {
   /// Samples `count` indexes from the sample clock's next one, without taking them, under the
   /// current settings; nullopt while Stopped. Needs mutex_.
   std::optional<AcquiredBlock> sample(std::size_t count);
+  /// A block of no samples with the current settings and the next sequence number, to sample
+  /// into; nullopt while Stopped. Needs mutex_.
+  std::optional<AcquiredBlock> snapshot();
   /// Feeds `block` to the capture assembler. Touches the processing state only, so it needs no
   /// lock.
   Pushed assemble(const AcquiredBlock& block);
   /// Publishes what assembling `block` produced and ends a Single its capture completes, unless a
-  /// command has discarded the capture in progress since `block` was acquired. Needs mutex_.
-  void conclude(const AcquiredBlock& block, const Pushed& pushed);
+  /// command has discarded the capture in progress since `block` was acquired. Returns true when
+  /// the block's Single capture ended inside it but `RUN` had already ended the Single, so the
+  /// samples after `pushed.end` are still to be captured as Running. Needs mutex_.
+  bool conclude(const AcquiredBlock& block, const Pushed& pushed);
   /// Discards the capture in progress: the blocks acquired from now on start a new generation,
   /// and a capture never mixes two generations.
   void discard_capture() { ++generation_; }
@@ -276,7 +284,7 @@ class Instrument {
   std::uint64_t assembled_generation_ = 0;
   std::uint64_t expected_sequence_ = 0;
 
-  // Shared without the mutex, so readers never wait on the threads that update them.
+  // Read without the Instrument's mutex, so readers never wait on commands or capture processing.
   std::atomic<std::shared_ptr<const Capture>> latest_;
   std::atomic<std::uint64_t> discarded_captures_ = 0;
 };
