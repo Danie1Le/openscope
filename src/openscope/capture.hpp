@@ -53,7 +53,7 @@ struct Capture {
   std::array<std::optional<CapturedChannel>, kChannelCount> channels;
 };
 
-/// How many of the captures a sample block completes `CaptureAssembler::push` publishes.
+/// How many of the captures a sample block could complete `CaptureAssembler::push` completes.
 enum class CaptureLimit : std::uint8_t {
   /// Every one (the Running run state).
   kEvery,
@@ -61,40 +61,45 @@ enum class CaptureLimit : std::uint8_t {
   kFirst,
 };
 
-/// Assembles sample blocks into captures placed by the edge trigger, and keeps the latest
-/// capture. A capture starts collecting samples as soon as the one before completes. A trigger
-/// event places its time zero once it holds the pre-trigger samples and the holdoff since the
-/// last capture's trigger event has passed. In Auto trigger mode, one record length of samples
-/// after the pre-trigger samples have filled without such an event makes the latest record length
-/// of samples an untriggered capture.
+/// What `CaptureAssembler::push` made of one sample block.
+struct Pushed {
+  /// The last capture the block completed, or null when it completed none. It never changes, so
+  /// readers may keep it as long as they like.
+  std::shared_ptr<const Capture> capture;
+  /// Under CaptureLimit::kFirst, once a capture completes: the offset in the block just past it.
+  std::optional<std::size_t> end;
+};
+
+/// Assembles sample blocks into captures placed by the edge trigger. A capture starts collecting
+/// samples as soon as the one before completes. A trigger event places its time zero once it holds
+/// the pre-trigger samples and the holdoff since the last capture's trigger event has passed. In
+/// Auto trigger mode, one record length of samples after the pre-trigger samples have filled
+/// without such an event makes the latest record length of samples an untriggered capture.
 class CaptureAssembler {
  public:
   /// Appends `block`, taken under `acquisition`, `channels` and `trigger`. A capture takes its
   /// settings from the block that starts it, and the trigger keeps its state from block to block,
   /// so the caller discards the capture in progress whenever it changes a setting or skips
-  /// samples. Each capture that completes becomes the latest capture; a block may complete
-  /// several, of which `limit` says how many to publish. Under kFirst, once a capture completes,
-  /// it discards and returns the offset in `block` just past that capture, so the caller can push
-  /// the samples after it as a new block; otherwise it uses the whole block and returns nullopt.
-  /// Throws std::logic_error when `acquisition` has a record length of zero, when
-  /// `block` lacks the trigger channel's samples, or when it lacks samples for a channel of the
-  /// capture in progress, which means a channel was enabled or disabled without a discard.
-  std::optional<std::size_t> push(const SampleBlock& block, const AcquisitionSettings& acquisition,
-                                  std::span<const ChannelSettings, kChannelCount> channels,
-                                  const TriggerSettings& trigger,
-                                  CaptureLimit limit = CaptureLimit::kEvery);
+  /// samples. A block may complete several captures, of which `limit` says how many to make:
+  /// under kFirst, once a capture completes, it discards and returns the offset in `block` just
+  /// past that capture, so the caller can push the samples after it as a new block; otherwise it
+  /// uses the whole block. Either way it returns the last capture it completed. Throws
+  /// std::logic_error when `acquisition` has a record length of zero, when `block` lacks the
+  /// trigger channel's samples, or when it lacks samples for a channel of the capture in progress,
+  /// which means a channel was enabled or disabled without a discard.
+  Pushed push(const SampleBlock& block, const AcquisitionSettings& acquisition,
+              std::span<const ChannelSettings, kChannelCount> channels,
+              const TriggerSettings& trigger, CaptureLimit limit = CaptureLimit::kEvery);
 
   /// Drops the capture in progress and restarts the trigger, unarmed and with no holdoff
-  /// running; the next block starts a new capture. The latest capture stays.
-  void discard() {
+  /// running; the next block starts a new capture. Returns whether a capture was in progress.
+  bool discard() {
+    const bool in_progress = building_.has_value();
     building_.reset();
     trigger_.reset();
     holdoff_end_ = 0;
+    return in_progress;
   }
-
-  /// The most recently completed capture, or null before the first one completes. It never
-  /// changes once published, so readers may keep it as long as they like.
-  [[nodiscard]] std::shared_ptr<const Capture> latest() const { return latest_; }
 
  private:
   /// Offsets of trigger events within the block being pushed.
@@ -116,24 +121,23 @@ class CaptureAssembler {
   void append(Capture& capture, const SampleBlock& block, std::size_t from, std::size_t to);
   /// Drops the `count` oldest samples of `capture`.
   void drop_oldest(Capture& capture, std::size_t count);
-  /// Makes `capture`, the capture in progress, the latest capture.
-  void publish(Capture& capture);
+  /// Completes `capture`, the capture in progress: it becomes completed_.
+  void complete(Capture& capture);
 
   /// The trigger since the last discard (created by the first block after it), and the first
   /// sample index its holdoff lets place a capture.
   std::optional<EdgeTrigger> trigger_;
   SampleIndex holdoff_end_ = 0;
   /// The capture being collected, and how many samples it holds. Its `trigger_position` and
-  /// `untriggered` are set when it is published, from the placement state below.
+  /// `untriggered` are set when it completes, from the placement state below.
   std::optional<Capture> building_;
   std::size_t filled_ = 0;
   /// The pre-trigger sample count of the capture being collected.
   std::size_t pre_trigger_ = 0;
   /// True once a trigger event has placed the capture being collected.
   bool placed_ = false;
-  std::shared_ptr<const Capture> latest_;
-  /// How many captures have been published, so `push` can tell whether it published one.
-  std::size_t published_ = 0;
+  /// The last capture the block being pushed has completed.
+  std::shared_ptr<const Capture> completed_;
 };
 
 }  // namespace openscope
