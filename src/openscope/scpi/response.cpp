@@ -22,11 +22,12 @@ std::string float32_block(std::span<const float> values) {
   constexpr std::size_t kBytesPerValue = 4;
   static_assert(sizeof(float) == kBytesPerValue && std::numeric_limits<float>::is_iec559);
   std::string block = definite_length_header(values.size() * kBytesPerValue);
-  block.reserve(block.size() + (values.size() * kBytesPerValue));
+  std::size_t at = block.size();
+  block.resize(at + (values.size() * kBytesPerValue));
   for (const float value : values) {
     const auto bits = std::bit_cast<std::uint32_t>(value);
     for (std::size_t byte = 0; byte < kBytesPerValue; ++byte) {
-      block.push_back(static_cast<char>((bits >> (8U * byte)) & 0xFFU));
+      block[at++] = static_cast<char>((bits >> (8U * byte)) & 0xFFU);
     }
   }
   return block;

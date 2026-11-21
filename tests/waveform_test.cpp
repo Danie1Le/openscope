@@ -22,6 +22,7 @@ namespace {
 
 using test::captured;
 using test::decode_float32_block;
+using test::kResetRecordLength;
 using test::ScpiSession;
 using testing::Optional;
 using testing::StartsWith;
@@ -29,7 +30,6 @@ using testing::StartsWith;
 constexpr auto kNoErrorReply = R"(0,"No error")";
 constexpr auto kSettingsConflictReply = R"(-221,"Settings conflict")";
 constexpr auto kDataStaleReply = R"(-230,"Data corrupt or stale")";
-constexpr std::size_t kRecordLength = 10'000;  // *RST
 
 /// Parses comma-separated floats, as a client reading `WAV:FORM ASC` does.
 std::vector<float> parse_csv(std::string_view text) {
@@ -124,7 +124,7 @@ TEST_F(WaveformTest, RstLeavesTheSessionsWaveformSettingsAlone) {
 }
 
 TEST_F(WaveformTest, QueriesBeforeTheFirstCaptureReportStaleData) {
-  instrument.advance(kRecordLength - 1);
+  instrument.advance(kResetRecordLength - 1);
 
   EXPECT_EQ(session.send("WAV:DATA?"), std::nullopt);
   EXPECT_EQ(session.send("WAV:PRE?"), std::nullopt);
@@ -142,7 +142,7 @@ TEST_F(WaveformTest, AnErrorStopsTheRestOfTheLine) {
 }
 
 TEST_F(WaveformTest, ChannelNotInTheLatestCaptureIsASettingsConflict) {
-  instrument.advance(kRecordLength);
+  instrument.advance(kResetRecordLength);
 
   session.send("WAV:SOUR CHAN2");
   EXPECT_EQ(session.send("WAV:DATA?"), std::nullopt);
@@ -153,7 +153,7 @@ TEST_F(WaveformTest, ChannelNotInTheLatestCaptureIsASettingsConflict) {
 }
 
 TEST_F(WaveformTest, EnablingAChannelDoesNotAddItToTheLatestCapture) {
-  instrument.advance(kRecordLength);
+  instrument.advance(kResetRecordLength);
 
   session.send("CHAN2:DISP ON;:WAV:SOUR CHAN2");
 
@@ -186,7 +186,7 @@ TEST_F(WaveformTest, AsciiDataOfAOnePointCaptureHasNoComma) {
 
 TEST_F(WaveformTest, AsciiDataReadsBackAsExactlyTheCapturedSamples) {
   session.send("SOUR1:NOIS 0.1");
-  instrument.advance(kRecordLength);
+  instrument.advance(kResetRecordLength);
 
   const std::optional<std::string> reply = session.send("WAV:DATA?");
 
@@ -224,7 +224,7 @@ TEST_F(WaveformTest, DataReadsTheLatestCaptureWhenTheQueryRuns) {
 }
 
 TEST_F(WaveformTest, PreambleDescribesTheLatestCapture) {
-  instrument.advance(kRecordLength);
+  instrument.advance(kResetRecordLength);
 
   EXPECT_EQ(session.send("WAV:PRE?"), "1E+06,10000,1,0,0,1");
 }
@@ -246,7 +246,7 @@ TEST_F(WaveformTest, PreambleAndDataShareOneLine) {
 }
 
 TEST_F(WaveformTest, DataAndPreambleTakeNoParameters) {
-  instrument.advance(kRecordLength);
+  instrument.advance(kResetRecordLength);
 
   session.send("WAV:DATA? 1");
   session.send("WAV:PRE? CHAN1");

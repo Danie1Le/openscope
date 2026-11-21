@@ -41,6 +41,7 @@ static_assert(kFormatKeywords.size() == static_cast<std::size_t>(WaveformFormat:
 /// Samples as comma-separated values, each in the shortest form that reads back as the same float.
 std::string ascii_values(std::span<const float> samples) {
   std::string text;
+  text.reserve(samples.size() * 16);  // A typical value plus its comma.
   for (const float sample : samples) {
     if (!text.empty()) {
       text += ',';
