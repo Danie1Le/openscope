@@ -36,17 +36,20 @@ using test::kParameterNotAllowedReply;
 using test::kSettingsConflictReply;
 using test::kUndefinedHeaderReply;
 using test::kUntriggeredCaptures;
+using test::ScpiSession;
 using test::Statistics;
 using test::statistics_of;
-using test::ScpiSession;
 using testing::DoubleNear;
 
 /// The record length these tests capture at: short, so many captures are quick.
 constexpr std::size_t kRecord = 1000;
 
-/// Sets kRecord as the record length: with kUntriggeredCaptures, every kRecord samples complete one
-/// untriggered capture.
-std::string short_records() { return std::format("ACQ:POIN {}", kRecord); }
+/// Sets `session`'s instrument to complete one untriggered capture every kRecord samples, from
+/// sample 0.
+void send_short_records(ScpiSession& session) {
+  session.send(kUntriggeredCaptures);
+  session.send(std::format("ACQ:POIN {}", kRecord));
+}
 
 /// The count a MEAS:STAT? reply ends with (-1 and a test failure for anything else).
 double count_of(const std::optional<std::string>& reply) { return statistics_of(reply).count; }
@@ -86,10 +89,7 @@ void expect_statistics(const std::optional<std::string>& reply, const Statistics
 
 class StatisticsTest : public test::InstrumentFixture {
  protected:
-  void SetUp() override {
-    session.send(kUntriggeredCaptures);
-    session.send(short_records());
-  }
+  void SetUp() override { send_short_records(session); }
 
   /// Advances through `captures` captures.
   void capture(std::size_t captures) { instrument.advance(captures * kRecord); }
@@ -167,8 +167,7 @@ using Driver = void (*)(Instrument& instrument, std::size_t samples, std::size_t
 /// Sets `session`'s instrument, built with seed 7, to untriggered kRecord captures of a noisy sine
 /// that no two captures see alike, so a capture counted twice or missed changes the statistics.
 void send_noisy_short_records(ScpiSession& session) {
-  session.send(kUntriggeredCaptures);
-  session.send(short_records());
+  send_short_records(session);
   session.send("SOUR1:FREQ 1234;NOIS 0.2");
 }
 
