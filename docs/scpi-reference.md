@@ -102,7 +102,7 @@ The queue holds 20 entries. When it is full, the newest entry is replaced by `-3
 | `-113` | Undefined header | No command matches the header, including a suffix on a mnemonic that takes none |
 | `-114` | Header suffix out of range | The header matches a command except that a mnemonic's suffix is outside its range (`CHAN5`) |
 | `-131` | Invalid suffix | A number's suffix is not the parameter's unit with an optional multiplier |
-| `-221` | Settings conflict | A query reads a channel that is not in the latest capture (it was not enabled when the capture was taken) |
+| `-221` | Settings conflict | A query reads a channel that is not in the latest capture (it was not enabled when the capture was taken), or `SOUR<n>:FAUL` finds its Generator already holding 64 faults |
 | `-222` | Data out of range | A number outside the command's range or beyond a double's range |
 | `-224` | Illegal parameter value | A keyword that is not one of the parameter's choices |
 | `-230` | Data corrupt or stale | A query reads capture data before the first capture has completed (or since `*RST`) |
@@ -114,7 +114,7 @@ The queue holds 20 entries. When it is full, the newest entry is replaced by `-3
 | Command | Reply | Notes |
 |---|---|---|
 | `*IDN?` | `OpenScope,OS-4,<serial>,<version>` | |
-| `*RST` | none | Restores every instrument-wide setting to its `*RST` value below, restarts every Generator from phase zero at sample index 0 (see Generators), and drops the latest capture and the capture in progress; leaves the calling Session's error queue, `WAV` and `FFT` settings alone (ADR 0002) |
+| `*RST` | none | Restores every instrument-wide setting to its `*RST` value below, restarts every Generator from phase zero at sample index 0 with no faults (see Generators), and drops the latest capture and the capture in progress; leaves the calling Session's error queue, `WAV` and `FFT` settings alone (ADR 0002) |
 | `*CLS` | none | Empties the calling Session's error queue |
 | `SYSTem:ERRor[:NEXT]?` | `<code>,"<message>"` | Removes and returns the oldest error |
 
@@ -150,7 +150,7 @@ Query replies write numbers in the shortest form that reads back as the same val
 
 Generator n always feeds Channel n. Time is the sample index divided by the sample rate (ADR 0003). The same seed and the same commands at the same sample indexes give bit-identical samples on every run.
 
-A setting change takes effect at the next sample index. Frequency and sample-rate changes keep the phase continuous: the waveform carries on from where it was at the new rate, with no jump. So a Generator's output depends on the instrument's seed, the sample index and the settings sent since the last `*RST`, including the sample indexes they were sent at. `*RST` restarts every Generator as if it had run at its defaults since sample index 0, so the samples after `*RST` are the ones a freshly started instrument with the same seed produces at the same sample indexes.
+A setting change takes effect at the next sample index. Frequency and sample-rate changes keep the phase continuous: the waveform carries on from where it was at the new rate, with no jump. So a Generator's output depends on the instrument's seed, the sample index, the settings and [faults](#faults) sent since the last `*RST`, and the sample indexes they were sent at. `*RST` restarts every Generator as if it had run at its defaults since sample index 0, so the samples after `*RST` are the ones a freshly started instrument with the same seed produces at the same sample indexes.
 
 Over one cycle, with A half the peak-to-peak amplitude and the offset added on top:
 
@@ -160,6 +160,24 @@ Over one cycle, with A half the peak-to-peak amplitude and the offset added on t
 - `RAMP`: rises linearly from -A to +A across the cycle, then drops back.
 - `DC`: the offset alone.
 - `NOISe`: uniform random values from -A to +A, independent from one sample index to the next.
+
+### Faults
+
+`SOURce<n>:FAULt GLITch|DROPout|FSTep[,<magnitude>[,<duration>]]` injects one fault into Generator n: a one-off disturbance of its signal, for testing trigger and measurement behaviour against glitches, dropouts and frequency steps. It is an action, so it has no query and no `*RST` value. The fault starts at the next sample index and the next capture that covers that index shows it in `WAV:DATA?`. It does not drop the capture in progress.
+
+`<magnitude>` and `<duration>` are plain numbers: neither takes a unit suffix (`-131`), because the unit of the magnitude depends on the kind of fault. `<duration>` is a count of sample indexes from 1 to 1048576; as for `ACQ:POIN`, the range applies to the value as sent and a fraction inside it rounds to the nearest whole number, half away from zero. A left-out parameter takes the default of the kind of fault. A magnitude beyond the limit of its kind, or a duration outside its range, reports `-222`; a keyword that is not a kind reports `-224`; nothing is injected and the rest of the line is discarded.
+
+| Kind | Magnitude | Default magnitude | Default duration | What it does |
+|---|---|---|---|---|
+| `GLITch` | -100 to 100 V | 2 V | 1 sample | A short spike: the magnitude is added to the signal over the duration |
+| `DROPout` | -100 to 100 V | 0 V | 100 samples | A flat segment: the signal, noise included, is replaced by the level in the magnitude over the duration |
+| `FSTep` | -1E9 to 1E9 Hz | 1000 Hz | 1000 samples | A phase-continuous change of frequency: the magnitude is added to the frequency over the duration, then the frequency returns to what it was. The phase gained stays, so the waveform carries on shifted, with no jump at either end. Does nothing to `DC` and `NOISe` |
+
+Each fault is one-shot: it covers its duration once and never repeats. A glitch or dropout leaves the signal as it was afterwards; a frequency step leaves the phase shift. A glitch or dropout is applied to the sample after the function, offset and noise, in the order they were injected, and before the channel clips it to its input range, so a spike beyond the range is held at the limit; a frequency step acts on the phase the function is computed from. A frequency step adds a fixed number of cycles per sample, worked out from the magnitude at the sample rate in force when it was injected; changing the frequency or the sample rate during the step does not change it.
+
+A fault is placed by the sample index, so with the same seed and the same commands at the same sample indexes it lands at the same index with the same shape on every run (ADR 0003). A fault on a Generator whose channel is not enabled still passes with the sample clock and shows in a capture that covers its indexes once the channel is enabled. `*RST` forgets every fault, those still running included, along with the rest of the Generator state. A Generator keeps at most 64 faults at once: a fault that has ended frees its slot (its phase shift is kept), and injecting into a Generator that already holds 64 reports `-221,"Settings conflict"` and injects nothing.
+
+`SOUR1:FAUL GLIT,1.5,2` adds 1.5 V to two samples; `SOUR2:FAUL FST,500,200` runs Generator 2 500 Hz faster for 200 samples.
 
 ### Channels and captures
 
