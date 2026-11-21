@@ -67,14 +67,15 @@ TEST_F(AcquisitionTest, SampleRateSetsTheTimeBetweenSamples) {
 
 // The ramp is half way through its cycle (0 V) when its frequency halves, and keeps rising from
 // there at the new rate. Restarting the phase at the new frequency would give -0.5 V at index 2.
+// The change discards the capture in progress, so the capture starts at index 2.
 TEST_F(AcquisitionTest, FrequencyChangeIsPhaseContinuous) {
-  session.send("ACQ:POIN 5;:SOUR1:FUNC RAMP;FREQ 250KHZ");
+  session.send("ACQ:POIN 5;:SOUR1:FUNC RAMP;FREQ 250KHZ;:TRIG:POS 0");
   instrument.advance(2);
 
   session.send("SOUR1:FREQ 125KHZ");
-  instrument.advance(3);
+  instrument.advance(5);
 
-  EXPECT_THAT(captured(instrument, 1).samples, ElementsAre(-1.0F, -0.5F, 0.0F, 0.25F, 0.5F));
+  EXPECT_THAT(captured(instrument, 1).samples, ElementsAre(0.0F, 0.25F, 0.5F, 0.75F, -1.0F));
 }
 
 // Time zero on the first sample, so Auto captures the 3 samples after the change as they come.
@@ -235,15 +236,6 @@ TEST_F(AcquisitionTest, EnablingAChannelMidCaptureAddsItToTheNextCapture) {
 
   EXPECT_EQ(captured(instrument, 1).samples.size(), kResetRecordLength);
   EXPECT_EQ(captured(instrument, 2).samples.size(), kResetRecordLength);
-}
-
-TEST_F(AcquisitionTest, GeneratorAndTimebaseChangesKeepTheCaptureInProgress) {
-  instrument.advance(5000);
-
-  session.send("SOUR1:AMPL 2;FUNC SQU;FREQ 2KHZ;OFFS 1;NOIS 0.1;:TIM:SCAL 1");
-  instrument.advance(5000);
-
-  EXPECT_EQ(test::first_index(instrument), 0U);
 }
 
 TEST_F(AcquisitionTest, RejectedChangesKeepTheCaptureInProgress) {
