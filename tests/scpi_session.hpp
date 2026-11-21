@@ -27,6 +27,7 @@ inline constexpr auto kOutOfRangeReply = R"(-222,"Data out of range")";
 inline constexpr auto kClippedReply = R"(-231,"Data questionable;Clipped")";
 inline constexpr auto kNoSignalReply = R"(-200,"Execution error;No signal")";
 inline constexpr auto kTooFewCyclesReply = R"(-200,"Execution error;Too few cycles")";
+inline constexpr auto kInputBufferOverrunReply = R"(-363,"Input buffer overrun")";
 
 /// The reply to one line, as the Instrument delivers it.
 struct LineReply {

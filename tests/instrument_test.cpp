@@ -16,6 +16,7 @@
 namespace openscope {
 namespace {
 
+using test::kInputBufferOverrunReply;
 using test::kNoErrorReply;
 using test::kParameterNotAllowedReply;
 using test::kUndefinedHeaderReply;
@@ -189,7 +190,7 @@ TEST_F(InstrumentTest, LineOverTheMaximumLengthQueuesInputBufferOverrunAndRunsNo
   EXPECT_EQ(session.send(line), std::nullopt);
 
   EXPECT_EQ(session.next_error(), kUndefinedHeaderReply);
-  EXPECT_EQ(session.next_error(), R"(-363,"Input buffer overrun")");
+  EXPECT_EQ(session.next_error(), kInputBufferOverrunReply);
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 
