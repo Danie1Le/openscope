@@ -110,7 +110,8 @@ class Instrument {
   /// command has discarded the capture in progress since the block was acquired, so it never
   /// holds settings older than a command that has already returned. A Single's capture stops the
   /// instrument and ends the lines held on it, on this thread; when `RUN` has ended the Single
-  /// since the block was acquired, the rest of the block is captured as Running. Blocks must come
+  /// since the block was acquired, the rest of the block is captured as Running, with the trigger
+  /// restarted at the Single's capture as after any Single. Blocks must come
   /// in the order they were acquired; a block that never arrives is a dropped block, and the
   /// capture that would span it is discarded and counted.
   void process(const AcquiredBlock& block);

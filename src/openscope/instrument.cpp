@@ -676,8 +676,9 @@ void Instrument::process(const AcquiredBlock& block) {
     const std::scoped_lock lock(mutex_);
     rest_runs = conclude(block, pushed);
   }
-  // RUN came after the block was acquired for a Single: the samples after the Single's capture
-  // are captured as Running, as `advance` would sample them afresh, so none goes missing.
+  // RUN came after the block was acquired for a Single. The Single still ends at its capture, and
+  // the trigger restarts there as after any Single, but the instrument runs on: the samples after
+  // that capture are captured, not lost.
   if (rest_runs && *pushed.end < block.samples.count) {
     const Pushed rest = captures_.push(samples_from(block.samples, *pushed.end), block.acquisition,
                                        block.channels, block.trigger);
