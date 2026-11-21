@@ -14,7 +14,7 @@ namespace openscope {
 /// A run of consecutive sample indexes carrying one sample per enabled channel at each index.
 struct SampleBlock {
   /// The sample index of the first sample.
-  SampleIndex first = 0;
+  SampleIndex first_index = 0;
   /// How many sample indexes the block spans.
   std::size_t count = 0;
   /// Each channel's samples in volts, indexed by channel number - 1: `count` samples for an

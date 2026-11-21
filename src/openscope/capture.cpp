@@ -16,7 +16,7 @@ void CaptureAssembler::push(const SampleBlock& block, const AcquisitionSettings&
                             std::span<const ChannelSettings, kChannelCount> channels) {
   for (std::size_t used = 0; used < block.count;) {
     if (!building_) {
-      building_.emplace(Capture{.first_index = block.first + used,
+      building_.emplace(Capture{.first_index = block.first_index + used,
                                 .sample_rate = acquisition.sample_rate,
                                 .record_length = acquisition.record_length,
                                 .trigger_position = 0,

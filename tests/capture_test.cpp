@@ -114,11 +114,11 @@ TEST(CaptureAssemblerTest, BlockWithoutAChannelOfTheCaptureInProgressIsALogicErr
   std::array<ChannelSettings, kChannelCount> channels{};
   channels[1].enabled = true;
   CaptureAssembler assembler;
-  SampleBlock block{.first = 0, .count = 2, .channels = {}};
+  SampleBlock block{.first_index = 0, .count = 2, .channels = {}};
   block.channels[1] = {0.0F, 0.0F};
   assembler.push(block, {.sample_rate = 1.0, .record_length = 4}, channels);
 
-  block.first = 2;
+  block.first_index = 2;
   block.channels[1].clear();
 
   EXPECT_THROW(assembler.push(block, {.sample_rate = 1.0, .record_length = 4}, channels),
