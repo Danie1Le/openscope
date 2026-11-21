@@ -7,7 +7,9 @@
 #include <cstdint>
 #include <format>
 #include <functional>
+#include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -31,6 +33,22 @@ using scpi::NumericParameter;
 constexpr std::array<std::string_view, 6> kFunctionKeywords{"SINusoid", "SQUare", "TRIangle",
                                                             "RAMP",     "DC",     "NOISe"};
 static_assert(kFunctionKeywords.size() == static_cast<std::size_t>(GeneratorFunction::kNoise) + 1);
+
+/// The `WAVeform:FORMat` keywords, in WaveformFormat order.
+constexpr std::array<std::string_view, 2> kFormatKeywords{"ASCii", "REAL"};
+static_assert(kFormatKeywords.size() == static_cast<std::size_t>(WaveformFormat::kReal) + 1);
+
+/// Samples as comma-separated values, each in the shortest form that reads back as the same float.
+std::string ascii_values(std::span<const float> samples) {
+  std::string text;
+  for (const float sample : samples) {
+    if (!text.empty()) {
+      text += ',';
+    }
+    text += scpi::format_real(sample);
+  }
+  return text;
+}
 
 /// The `*RST` channel settings: CH1 enabled, the others disabled.
 std::array<ChannelSettings, kChannelCount> default_channels() {
@@ -91,6 +109,7 @@ Instrument::Instrument(std::uint64_t seed)
   add_channel_commands();
   add_acquisition_commands();
   add_timebase_commands();
+  add_waveform_commands();
 }
 
 void Instrument::add_generator_commands() {
@@ -166,6 +185,65 @@ void Instrument::add_timebase_commands() {
         timebase_scale_ = value_of<double>(arguments);
       },
       [this](Session&, const Arguments&) { return scpi::format_real(timebase_scale_); });
+}
+
+void Instrument::add_waveform_commands() {
+  // ADR 0002: the source and format belong to the calling Session.
+  add_setting(
+      "WAVeform:SOURce", scpi::KeywordParameter{.choices = {"CHANnel<1-4>"}},
+      [](Session& caller, const Arguments& arguments) {
+        caller.waveform().source = value_of<scpi::Choice>(arguments).suffix;
+      },
+      [](Session& caller, const Arguments&) {
+        return std::format("CHAN{}", caller.waveform().source);
+      });
+  add_setting(
+      "WAVeform:FORMat",
+      scpi::KeywordParameter{.choices = {kFormatKeywords.begin(), kFormatKeywords.end()}},
+      [](Session& caller, const Arguments& arguments) {
+        caller.waveform().format =
+            static_cast<WaveformFormat>(value_of<scpi::Choice>(arguments).index);
+      },
+      [](Session& caller, const Arguments&) {
+        const auto format = static_cast<std::size_t>(caller.waveform().format);
+        return std::string(scpi::short_form(kFormatKeywords.at(format)));
+      });
+  commands_.add({.header = "WAVeform:DATA?",
+                 .parameters = {},
+                 .handler = [this](Session& caller, const Arguments&) {
+                   return reply_with_source(
+                       caller, [&caller](const Capture&, const CapturedChannel& channel) {
+                         return caller.waveform().format == WaveformFormat::kReal
+                                    ? scpi::float32_block(channel.samples)
+                                    : ascii_values(channel.samples);
+                       });
+                 }});
+  commands_.add({.header = "WAVeform:PREamble?",
+                 .parameters = {},
+                 .handler = [this](Session& caller, const Arguments&) {
+                   return reply_with_source(caller, [](const Capture& capture,
+                                                       const CapturedChannel& channel) {
+                     return std::format("{},{},{},{},{},{}", scpi::format_real(capture.sample_rate),
+                                        capture.record_length, scpi::format_real(channel.scale),
+                                        scpi::format_real(channel.offset), capture.trigger_position,
+                                        capture.untriggered ? 1 : 0);
+                   });
+                 }});
+}
+
+scpi::HandlerResult Instrument::reply_with_source(
+    Session& caller,
+    const std::function<std::string(const Capture&, const CapturedChannel&)>& reply) const {
+  const std::shared_ptr<const Capture> capture = captures_.latest();
+  if (capture == nullptr) {
+    return kDataCorruptOrStale;
+  }
+  const std::optional<CapturedChannel>& channel =
+      capture->channels.at(caller.waveform().source - 1);
+  if (!channel) {
+    return kSettingsConflict;
+  }
+  return std::optional<std::string>(reply(*capture, *channel));
 }
 
 void Instrument::add_setting(std::string_view header, scpi::ParameterSpec parameter,

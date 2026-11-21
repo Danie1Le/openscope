@@ -72,6 +72,14 @@ class Instrument {
   void add_channel_commands();
   void add_acquisition_commands();
   void add_timebase_commands();
+  void add_waveform_commands();
+
+  /// Replies what `reply` writes from the latest capture and the caller's `WAV:SOUR` channel in
+  /// it. Before the first capture completes it reports -230; when the source channel is not in
+  /// the latest capture, -221 (a query never reads a channel that was not captured).
+  scpi::HandlerResult reply_with_source(
+      Session& caller,
+      const std::function<std::string(const Capture&, const CapturedChannel&)>& reply) const;
 
   /// Registers `<header> <parameter>`, which runs `set`, and `<header>?`, which replies what `get`
   /// returns. Both receive the calling Session, for the settings a Session owns (ADR 0002).
