@@ -199,12 +199,18 @@ struct Band {
 /// wide enough that noise around 50% does not.
 constexpr Band kCycleBand{.lower = 0.3, .upper = 0.7};
 
-/// A band inside kCycleBand. A move across it that turns back before crossing kCycleBand may be a
-/// cycle that kCycleBand missed or a glitch: whole cycles are then not known (FR-13).
+/// A band inside kCycleBand. A move across it that turns back before crossing kCycleBand, and lasts
+/// at least kDoubtfulCycleShare of a cycle, may be a cycle that kCycleBand missed: whole cycles are
+/// then not known (FR-13).
 constexpr Band kDoubtBand{.lower = 0.4, .upper = 0.6};
 
+/// The share of the mean cycle a move across kDoubtBand and back must last to be a doubtful cycle.
+/// Noise on a slow edge crosses kDoubtBand and back only while the edge is within 10% of the span
+/// from 50%, which is at most a tenth of a cycle (a triangle's edge; a sine's takes 6%).
+constexpr double kDoubtfulCycleShare = 0.125;
+
 /// The band rise and fall time are measured across: the 10% and 90% reference levels.
-constexpr Band kTransitionBand{.lower = 0.1, .upper = 0.9};
+constexpr Band kRiseFallBand{.lower = 0.1, .upper = 0.9};
 
 /// One move of the signal from beyond one level of a band to beyond the other. Its times are in
 /// sample periods.
@@ -279,26 +285,51 @@ struct WholeCycles {
   double length;
 };
 
+/// Whether `signal` crossed kDoubtBand and back, between the first and the last of `edges` (its
+/// edges across kCycleBand), for at least `shortest` sample periods.
+///
+/// Every edge across kCycleBand crosses kDoubtBand first, with the same or an earlier 50% crossing,
+/// after the edge before it. So the kDoubtBand edges after an edge across kCycleBand and up to the
+/// next one, `closing`, run in `closing`'s direction, the other, and so on, ending in `closing`'s:
+/// each one in the other direction ends a move across kDoubtBand and back that began at the edge
+/// before it.
+bool crossed_doubt_band_and_back(const MeasuredSignal& signal, std::span<const Edge> edges,
+                                 double shortest) {
+  const std::vector<Edge> doubt_edges = find_edges(signal, kDoubtBand);
+  std::size_t closing = 1;
+  for (std::size_t index = 1; index < doubt_edges.size(); ++index) {
+    const Edge& edge = doubt_edges[index];
+    if (edge.middle <= edges.front().middle) {
+      continue;
+    }
+    while (closing < edges.size() && edges[closing].middle < edge.middle) {
+      ++closing;
+    }
+    if (closing == edges.size()) {
+      return false;
+    }
+    if (edge.direction != edges[closing].direction &&
+        edge.middle - doubt_edges[index - 1].middle >= shortest) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /// The whole cycles in `signal`, or nullopt when there is not one or they are not known: the signal
-/// crossed kDoubtBand and back between two edges across kCycleBand.
+/// crossed kDoubtBand and back between two edges across kCycleBand for long enough to be a cycle.
 std::optional<WholeCycles> whole_cycles(const MeasuredSignal& signal) {
   std::vector<Edge> edges = find_edges(signal, kCycleBand);
   if (edges.size() < 3) {
     return std::nullopt;
   }
   edges.resize(edges.size() - ((edges.size() - 1) % 2));
-  // Every edge across kCycleBand crosses kDoubtBand first, with the same or an earlier 50%
-  // crossing, so between the first and the last edge kDoubtBand has exactly one edge per later
-  // edge; more means a move across kDoubtBand that went back.
-  const auto doubt_edges =
-      std::ranges::count_if(find_edges(signal, kDoubtBand), [&](const Edge& edge) {
-        return edge.middle > edges.front().middle && edge.middle <= edges.back().middle;
-      });
-  if (std::cmp_not_equal(doubt_edges, edges.size() - 1)) {
-    return std::nullopt;
-  }
   const double length = edges.back().middle - edges.front().middle;
   const std::size_t count = edges.size() / 2;
+  if (crossed_doubt_band_and_back(signal, edges,
+                                  kDoubtfulCycleShare * length / static_cast<double>(count))) {
+    return std::nullopt;
+  }
   return WholeCycles{.edges = std::move(edges), .count = count, .length = length};
 }
 
@@ -334,7 +365,7 @@ template <Edge::Direction kDirection>
 std::optional<double> transition_time(const MeasuredSignal& signal) {
   double total = 0.0;
   std::size_t count = 0;
-  for (const Edge& edge : find_edges(signal, kTransitionBand)) {
+  for (const Edge& edge : find_edges(signal, kRiseFallBand)) {
     if (edge.direction == kDirection) {
       total += edge.duration;
       ++count;
