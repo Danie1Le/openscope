@@ -720,6 +720,9 @@ void Instrument::process(const AcquiredBlock& block) {
   // RUN came after the block was acquired for a Single. The Single still ends at its capture, and
   // the trigger restarts there as after any Single, but the instrument runs on: the samples after
   // that capture are captured, not lost.
+  if (rest_runs) {
+    run_generation_ = block.generation;
+  }
   if (rest_runs && *pushed.end < block.samples.count) {
     const Pushed rest = captures_.push(samples_from(block.samples, *pushed.end), block.acquisition,
                                        block.channels, block.trigger);
@@ -773,8 +776,11 @@ Pushed Instrument::assemble(const AcquiredBlock& block) {
     }
   }
   assembled_generation_ = block.generation;
-  return captures_.push(block.samples, block.acquisition, block.channels, block.trigger,
-                        block.limit);
+  // Once RUN has ended this generation's Single, its other Armed-single blocks are captured as
+  // Running, as if they had been acquired after RUN.
+  const CaptureLimit limit =
+      block.generation == run_generation_ ? CaptureLimit::kEvery : block.limit;
+  return captures_.push(block.samples, block.acquisition, block.channels, block.trigger, limit);
 }
 
 bool Instrument::conclude(const AcquiredBlock& block, const Pushed& pushed) {

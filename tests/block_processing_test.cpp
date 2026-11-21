@@ -278,6 +278,32 @@ TEST(BlockProcessingTriggerTest, RestOfASinglesBlockStartsWithTheTriggerRestarte
   EXPECT_EQ(first_index(instrument), second_event);
 }
 
+// Every block acquired while the Single was armed, not only the one that ends it, is captured as
+// Running once RUN has ended the Single: a later block's captures are the ones it would give had it
+// been acquired after RUN. The 2.5 ms holdoff from the event at sample 2000 skips the one at 3000.
+TEST(BlockProcessingTriggerTest, LaterBlocksOfASingleEndedByRunAreCapturedAsRunning) {
+  const std::string setup = std::string(kNormalTenSamples) + ";:TRIG:HOLD 0.0025;:SINGle";
+  Instrument reference;
+  ScpiSession reference_session(reference);
+  reference_session.send(setup);
+  const AcquiredBlock reference_first = acquired(reference, 1500);
+  reference_session.send("RUN");
+  reference.process(reference_first);
+  reference.process(acquired(reference, 2000));
+  Instrument instrument;
+  ScpiSession session(instrument);
+  session.send(setup);
+  const AcquiredBlock first = acquired(instrument, 1500);
+  const AcquiredBlock second = acquired(instrument, 2000);
+  session.send("RUN");
+
+  instrument.process(first);
+  instrument.process(second);
+
+  EXPECT_EQ(first_index(reference), 2000U);
+  EXPECT_EQ(first_index(instrument), first_index(reference));
+}
+
 TEST_F(BlockProcessingTest, ResetDropsTheLatestCaptureAndTheBlocksAcquiredBeforeIt) {
   instrument.process(acquired(instrument, kResetRecordLength));
   const AcquiredBlock before = acquired(instrument, kResetRecordLength);
