@@ -48,7 +48,7 @@ TEST_F(TimingMeasurementTest, SquareWaveRepliesAreExact) {
   session.send("SOUR1:FUNC SQU;:CHAN2:DISP ON;:SOUR2:FUNC SQU;FREQ 2.5KHZ");
   instrument.advance(kResetRecordLength);
 
-  EXPECT_EQ(session.send("MEAS:FREQ? CHAN1;PER? CHAN1;DUTY? CHAN1"), "1000;0.001;50");
+  EXPECT_EQ(session.send(kTimingQueries), "1000;0.001;50");
   EXPECT_EQ(session.send("MEAS:FREQ? CHAN2;PER? CHAN2;DUTY? CHAN2"), "2500;4E-04;50");
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
@@ -295,8 +295,7 @@ TEST_F(TimingMeasurementTest, ClippedSignalReturnsTheValueWithAWarning) {
 TEST_F(TimingMeasurementTest, UnderOneWholeCycleIsTooFewCycles) {
   session.send("ACQ:POIN 1500");
   instrument.advance(1500);
-  EXPECT_EQ(session.send("MEAS:FREQ? CHAN1;PER? CHAN1;DUTY? CHAN1"),
-            std::format("{0};{0};{0}", scpi::kNotANumber));
+  EXPECT_EQ(session.send(kTimingQueries), std::format("{0};{0};{0}", scpi::kNotANumber));
   for (int entry = 0; entry < 3; ++entry) {
     EXPECT_EQ(session.next_error(), kTooFewCyclesReply) << entry;
   }
@@ -317,6 +316,21 @@ TEST_F(TimingMeasurementTest, FrequencyStepShowsInTheNextCapture) {
   session.send("SOUR1:FAUL FST,500,20000");
   instrument.advance(kResetRecordLength);
   EXPECT_THAT(number(session.send("MEAS:FREQ? CHAN1")), DoubleNear(1500.0, 1.5));
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+// A step injected part-way through a capture: that capture spans the step and reads between the
+// two frequencies, and the next one, wholly inside the step, reads the stepped frequency.
+TEST_F(TimingMeasurementTest, FrequencyStepPartWayThroughACaptureShowsInTheNextOne) {
+  instrument.advance(4321);
+  session.send("SOUR1:FAUL FST,777,30000");
+  instrument.advance(kResetRecordLength - 4321);
+  const double spanning = number(session.send("MEAS:FREQ? CHAN1"));
+  EXPECT_GT(spanning, 1000.0);
+  EXPECT_LT(spanning, 1777.0);
+
+  instrument.advance(kResetRecordLength);
+  EXPECT_THAT(number(session.send("MEAS:FREQ? CHAN1")), DoubleNear(1777.0, 1.777));
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 
@@ -376,6 +390,14 @@ TEST_P(DutyCycleTest, IsTheHighTimeOverThePeriod) {
 INSTANTIATE_TEST_SUITE_P(NarrowAndWidePulses, DutyCycleTest,
                          testing::Values(Pulses{25, 0}, Pulses{25, 60}, Pulses{75, 0},
                                          Pulses{75, 10}, Pulses{2, 0}, Pulses{98, 0}));
+
+// The shared helper: low then high each period; a delay up to the high samples starts on the high
+// level, a longer one on the low level.
+TEST(PulseTrainTest, DelayShiftsThePeriods) {
+  EXPECT_THAT(pulse_train(6, 4, 2), testing::ElementsAre(0.0F, 0.0F, 1.0F, 1.0F, 0.0F, 0.0F));
+  EXPECT_THAT(pulse_train(6, 4, 2, 1), testing::ElementsAre(1.0F, 0.0F, 0.0F, 1.0F, 1.0F, 0.0F));
+  EXPECT_THAT(pulse_train(6, 4, 2, 3), testing::ElementsAre(0.0F, 1.0F, 1.0F, 0.0F, 0.0F, 1.0F));
+}
 
 // One whole cycle runs from a 50% crossing to the next one in the same direction. A square wave
 // low for 50 samples, high for 50, low for 50: its crossings at 49.5 and 99.5 are less than one
