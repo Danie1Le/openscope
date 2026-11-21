@@ -267,6 +267,27 @@ TEST(GeneratorTest, PhaseStaysExactFarAlongTheSampleClock) {
   EXPECT_THAT(samples(generator, 8'000'000'000'000, 3), ElementsAre(-1.0F, -0.75F, -0.5F));
 }
 
+// Whole cycles per sample never change the phase, so a frequency above the sample rate samples
+// exactly like its alias below it, even far along the sample clock.
+TEST(GeneratorTest, FrequencyAboveTheSampleRateMatchesItsAliasFarAlongTheSampleClock) {
+  constexpr double kRate = 1e6;
+  const auto sine_at = [](double frequency) {
+    Generator generator{0, kRate};
+    generator.configure({.function = GeneratorFunction::kSine,
+                         .frequency = frequency,
+                         .amplitude = 2.0,
+                         .offset = 0.0,
+                         .noise = 0.0},
+                        kRate, 0);
+    return generator;
+  };
+
+  constexpr SampleIndex kFarAlong = 100'000'000'000;
+  EXPECT_EQ(samples(sine_at(100'000'037.0), kFarAlong, 16), samples(sine_at(37.0), kFarAlong, 16));
+  EXPECT_EQ(samples(sine_at(1'000'000'037.0), kFarAlong, 16),
+            samples(sine_at(37.0), kFarAlong, 16));
+}
+
 TEST(GeneratorTest, IndexesBeforeTheLastChangeFollowTheNewSettingsBackwards) {
   Generator generator{0, kSampleRate};
   generator.configure({.function = GeneratorFunction::kRamp,

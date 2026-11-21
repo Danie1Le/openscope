@@ -52,7 +52,7 @@ class Generator {
 
   std::uint64_t seed_;
   GeneratorSettings settings_;
-  /// Cycles advanced per sample: frequency / sample rate.
+  /// The fraction of a cycle advanced per sample: frequency / sample rate without its whole cycles.
   double cycles_per_sample_;
   /// The phase is `anchor_phase_` at `anchor_index_` and advances by cycles_per_sample_ from there.
   SampleIndex anchor_index_ = 0;
