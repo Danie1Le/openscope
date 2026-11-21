@@ -436,8 +436,9 @@ std::optional<std::string> Instrument::execute(SessionId session, std::string_vi
 void Instrument::advance(std::size_t samples) {
   while (samples > 0) {
     const std::size_t count = std::min(samples, kMaxBlockLength);
-    const SampleBlock block = sample_channels(generators_, channels_, clock_.take(count), count);
-    captures_.push(block, acquisition_, channels_);
+    const SampleBlock block =
+        sample_channels(generators_, channels_, trigger_.source, clock_.take(count), count);
+    captures_.push(block, acquisition_, channels_, trigger_);
     samples -= count;
   }
 }
