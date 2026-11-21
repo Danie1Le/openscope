@@ -1,6 +1,5 @@
 #include "engine/engine_options.hpp"
 
-#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <chrono>

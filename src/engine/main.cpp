@@ -3,7 +3,6 @@
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/signal_set.hpp>
-#include <boost/system/error_code.hpp>
 #include <csignal>
 #include <cstddef>
 #include <exception>
@@ -46,7 +45,7 @@ int run(std::span<char*> arguments, openscope::JsonLog& log) {
   const openscope::LivePipeline live(instrument);
   const openscope::ScpiServer server(io, instrument, options.server, log);
   boost::asio::signal_set signals(io, SIGINT, SIGTERM);
-  signals.async_wait([&](const boost::system::error_code& error, int signal) {
+  signals.async_wait([&](const auto& error, int signal) {
     if (!error) {
       log.write("stopping", {{"signal", signal}});
       io.stop();
