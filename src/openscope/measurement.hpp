@@ -43,14 +43,17 @@ struct SignalLevels {
   double minimum;
   /// The highest sample.
   double maximum;
-  /// The settled high level: the mode of the upper half of the histogram, or the maximum when
-  /// that half has no clear mode.
+  /// The settled high level: the mode of the upper half of the histogram, or the highest sample
+  /// that is not an outlier when that half has no settled level. A spike or short glitch is never
+  /// top.
   double top;
-  /// The settled low level: the mode of the lower half of the histogram, or the minimum.
+  /// The settled low level: the mode of the lower half of the histogram, or the lowest sample that
+  /// is not an outlier.
   double base;
 };
 
-/// The levels of `samples`, which hold at least one sample.
+/// The levels of `samples`, which hold at least one sample. Top and base come from a histogram,
+/// so samples that stray from the rest briefly (a spike, a short glitch) do not move them.
 SignalLevels find_levels(std::span<const float> samples);
 
 /// What a measurement reads: one channel's samples from a capture and their levels.

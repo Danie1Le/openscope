@@ -9,9 +9,12 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "instrument_fixture.hpp"
 #include "openscope/capture.hpp"
@@ -336,6 +339,94 @@ TEST_F(MeasurementTest, NoAmplitudeMeasurementNeedsASignal) {
   for (const Measurement& measurement : measurements()) {
     EXPECT_FALSE(measurement.needs_signal) << measurement.mnemonic;
   }
+}
+
+/// `length` samples of a square wave between 0 V and 1 V with a period of 100 samples: low for
+/// samples 0 to 49 of each period, high for 50 to 99.
+std::vector<float> square_wave(std::size_t length) {
+  std::vector<float> samples(length);
+  for (std::size_t index = 0; index < length; ++index) {
+    samples[index] = index % 100 < 50 ? 0.0F : 1.0F;
+  }
+  return samples;
+}
+
+/// The samples of 10000-sample captures that top and base are checked against.
+constexpr std::size_t kLength = 10'000;
+
+TEST(SignalLevelsTest, SquareWaveLevelsAreItsHighAndLow) {
+  const SignalLevels levels = find_levels(square_wave(kLength));
+
+  EXPECT_DOUBLE_EQ(levels.top, 1.0);
+  EXPECT_DOUBLE_EQ(levels.base, 0.0);
+}
+
+/// Samples of the square wave overwritten with one voltage: a spike or a short glitch.
+struct Disturbance {
+  std::size_t first;
+  std::size_t length;
+  float volts;
+};
+
+class DisturbedSquareWaveTest : public testing::TestWithParam<Disturbance> {};
+
+// Spec story 57: noise spikes do not distort top and base. Each disturbance is alone on its side
+// of the wave, so it alone sets the maximum or minimum.
+TEST_P(DisturbedSquareWaveTest, MovesNeitherTopNorBase) {
+  const Disturbance disturbance = GetParam();
+  std::vector<float> samples = square_wave(kLength);
+  std::fill_n(samples.begin() + static_cast<std::ptrdiff_t>(disturbance.first), disturbance.length,
+              disturbance.volts);
+
+  const SignalLevels levels = find_levels(samples);
+
+  EXPECT_DOUBLE_EQ(levels.top, 1.0);
+  EXPECT_DOUBLE_EQ(levels.base, 0.0);
+  EXPECT_DOUBLE_EQ(std::max(levels.maximum, -levels.minimum), std::abs(disturbance.volts));
+}
+
+INSTANTIATE_TEST_SUITE_P(SpikesAndShortGlitches, DisturbedSquareWaveTest,
+                         testing::Values(Disturbance{.first = 75, .length = 1, .volts = 5.0F},
+                                         Disturbance{.first = 25, .length = 1, .volts = -4.0F},
+                                         Disturbance{.first = 150, .length = 20, .volts = 3.0F},
+                                         Disturbance{.first = 210, .length = 20, .volts = -2.0F}));
+
+// A level counts once it holds 1/128 of the samples (78.125 of 10000): a pulse of 79 samples is
+// top, one of 78 is a glitch.
+TEST(SignalLevelsTest, LevelHoldingOneSampleIn128IsSettled) {
+  std::vector<float> samples = square_wave(kLength);
+  std::fill_n(samples.begin() + 150, 79, 3.0F);
+  EXPECT_DOUBLE_EQ(find_levels(samples).top, 3.0);
+
+  samples.at(150) = 1.0F;
+  EXPECT_DOUBLE_EQ(find_levels(samples).top, 1.0);
+}
+
+TEST(SignalLevelsTest, SpikeOnAFlatSignalIsNeitherTopNorBase) {
+  std::vector<float> samples(kLength, 0.5F);
+  samples.at(5000) = 2.5F;
+
+  const SignalLevels levels = find_levels(samples);
+
+  EXPECT_DOUBLE_EQ(levels.top, 0.5);
+  EXPECT_DOUBLE_EQ(levels.base, 0.5);
+}
+
+// A triangle spends equal time at every level, so its histogram has no mode to take: top and base
+// fall back to its extremes, and a spike past them is not one of them.
+TEST_F(MeasurementTest, SignalWithoutSettledLevelsFallsBackToItsExtremes) {
+  session.send("SOUR1:FUNC TRI");
+  instrument.advance(kResetRecordLength);
+  std::vector<float> samples = captured(instrument, 1).samples;
+  const auto [lowest, highest] = std::ranges::minmax(samples);
+  EXPECT_DOUBLE_EQ(find_levels(samples).top, highest);
+  EXPECT_DOUBLE_EQ(find_levels(samples).base, lowest);
+
+  samples.at(1234) = 3.0F;
+  samples.at(4321) = -3.0F;
+  const SignalLevels levels = find_levels(samples);
+  EXPECT_DOUBLE_EQ(levels.top, highest);
+  EXPECT_DOUBLE_EQ(levels.base, lowest);
 }
 
 }  // namespace

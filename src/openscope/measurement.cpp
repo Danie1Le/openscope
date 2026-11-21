@@ -4,8 +4,8 @@
 #include <array>
 #include <cstddef>
 #include <memory>
-#include <numeric>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <stdexcept>
 #include <vector>
@@ -15,23 +15,75 @@
 namespace openscope {
 namespace {
 
-/// Bins in the histogram that top and base come from, over the samples' minimum to maximum.
+/// Bins in each histogram that top and base come from.
 constexpr std::size_t kHistogramBins = 256;
 
-/// A half of the histogram has a settled level when its fullest bin holds at least this many times
-/// the average count of that half's bins. A level the signal dwells at (a square wave's high or
-/// low, a sine's peak) stands far above the average; a signal that sweeps evenly through its range
-/// (a triangle, a ramp) fills every bin about equally and has no such level.
+/// A level is settled when its histogram bin holds at least this many times the average bin's
+/// share of the capture: 1/128 of all the samples. A level the signal dwells at (a square wave's
+/// high or low, a sine's peak) stands far above the average; a signal that sweeps evenly through
+/// its range (a triangle, a ramp) fills every bin about equally and has no such level. Samples cut
+/// off from the rest that add up to less than a settled level are outliers: a spike or a short
+/// glitch.
 constexpr double kSettledLevelRatio = 2.0;
 
+/// The counts and sums of samples in kHistogramBins equal bins from `low` volts up.
+struct Histogram {
+  double low;
+  double bins_per_volt;
+  std::array<std::size_t, kHistogramBins> counts{};
+  std::array<double, kHistogramBins> sums{};
+};
+
+/// The bin of `histogram` that `sample`, which lies in the histogram's range, falls in. The top of
+/// the range lands one past the last bin, so it joins the last bin.
+std::size_t bin_of(const Histogram& histogram, float sample) {
+  return std::min(static_cast<std::size_t>((static_cast<double>(sample) - histogram.low) *
+                                           histogram.bins_per_volt),
+                  kHistogramBins - 1);
+}
+
+/// The histogram of the `samples` from `low` to `high` volts (`low` under `high`); samples outside
+/// that range are left out.
+Histogram make_histogram(std::span<const float> samples, float low, float high) {
+  Histogram histogram{
+      .low = low,
+      .bins_per_volt = static_cast<double>(kHistogramBins) / (static_cast<double>(high) - low)};
+  for (const float sample : samples) {
+    if (sample >= low && sample <= high) {
+      const std::size_t bin = bin_of(histogram, sample);
+      ++histogram.counts.at(bin);
+      histogram.sums.at(bin) += sample;
+    }
+  }
+  return histogram;
+}
+
+/// How many bins at the start of `counts` hold only outliers: every bin up to the last empty one
+/// before `settled` samples are reached, so what they hold is cut off from the rest and adds up to
+/// fewer than `settled` samples.
+std::size_t outlier_bins(const std::ranges::input_range auto& counts, double settled) {
+  std::size_t outliers = 0;
+  std::size_t bins = 0;
+  std::size_t samples = 0;
+  for (const std::size_t count : counts) {
+    samples += count;
+    if (static_cast<double>(samples) >= settled) {
+      break;
+    }
+    ++bins;
+    if (count == 0) {
+      outliers = bins;
+    }
+  }
+  return outliers;
+}
+
 /// The mean of the samples in the fullest of `counts`' bins, whose sample sums are `sums`, when it
-/// is a settled level; otherwise `fallback`. Ties go to the first bin.
+/// holds at least `settled` samples; otherwise `fallback`. Ties go to the first bin.
 double settled_level(std::span<const std::size_t> counts, std::span<const double> sums,
-                     double fallback) {
+                     double settled, double fallback) {
   const auto fullest = std::ranges::max_element(counts);
-  const std::size_t total = std::accumulate(counts.begin(), counts.end(), std::size_t{0});
-  if (static_cast<double>(*fullest) * static_cast<double>(counts.size()) <
-      kSettledLevelRatio * static_cast<double>(total)) {
+  if (static_cast<double>(*fullest) < settled) {
     return fallback;
   }
   return sums[static_cast<std::size_t>(fullest - counts.begin())] / static_cast<double>(*fullest);
@@ -45,23 +97,35 @@ SignalLevels find_levels(std::span<const float> samples) {
   if (lowest == highest) {
     return levels;  // A single level: top and base are both it.
   }
-  std::array<std::size_t, kHistogramBins> counts{};
-  std::array<double, kHistogramBins> sums{};
-  const double bins_per_volt =
-      static_cast<double>(kHistogramBins) / (static_cast<double>(highest) - lowest);
+  const double settled = kSettledLevelRatio * static_cast<double>(samples.size()) /
+                         static_cast<double>(kHistogramBins);
+  // Set the outliers at either end aside. Each end gives up fewer than `settled` samples, 1/128 of
+  // them, so most samples are kept.
+  const Histogram all = make_histogram(samples, lowest, highest);
+  const std::size_t first = outlier_bins(all.counts, settled);
+  const std::size_t last =
+      kHistogramBins - 1 - outlier_bins(std::views::reverse(all.counts), settled);
+  float low = highest;
+  float high = lowest;
   for (const float sample : samples) {
-    // The maximum lands one past the last bin, so it joins the last bin.
-    const std::size_t bin =
-        std::min(static_cast<std::size_t>((static_cast<double>(sample) - lowest) * bins_per_volt),
-                 kHistogramBins - 1);
-    ++counts.at(bin);
-    sums.at(bin) += sample;
+    const std::size_t bin = bin_of(all, sample);
+    if (bin >= first && bin <= last) {
+      low = std::min(low, sample);
+      high = std::max(high, sample);
+    }
   }
+  levels.base = low;
+  levels.top = high;
+  if (low == high) {
+    return levels;
+  }
+  // The kept samples get a histogram of their own, so a far outlier costs the levels no resolution.
+  const Histogram kept = make_histogram(samples, low, high);
   constexpr std::size_t kHalf = kHistogramBins / 2;
-  levels.base = settled_level(std::span(counts).first<kHalf>(), std::span(sums).first<kHalf>(),
-                              levels.minimum);
-  levels.top =
-      settled_level(std::span(counts).last<kHalf>(), std::span(sums).last<kHalf>(), levels.maximum);
+  levels.base = settled_level(std::span(kept.counts).first<kHalf>(),
+                              std::span(kept.sums).first<kHalf>(), settled, low);
+  levels.top = settled_level(std::span(kept.counts).last<kHalf>(),
+                             std::span(kept.sums).last<kHalf>(), settled, high);
   return levels;
 }
 
