@@ -99,20 +99,20 @@ class Instrument {
   /// fn)`, which applies `fn` to the settings the command names, and the query replies the field of
   /// `lookup(arguments)`.
   template <typename Settings, typename Change, typename Lookup>
-  void add_number_setting(std::string_view header, scpi::NumericParameter range,
+  void add_number_setting(std::string_view header, const scpi::NumericParameter& range,
                           double Settings::*field, Change change, Lookup lookup);
   /// add_setting for one numeric field of the Generator a `SOURce<n>` header names.
-  void add_generator_number(std::string_view header, scpi::NumericParameter range,
+  void add_generator_number(std::string_view header, const scpi::NumericParameter& range,
                             double GeneratorSettings::*field);
   /// add_setting for one numeric field of the channel a `CHANnel<n>` header names.
-  void add_channel_number(std::string_view header, scpi::NumericParameter range,
+  void add_channel_number(std::string_view header, const scpi::NumericParameter& range,
                           double ChannelSettings::*field);
   /// add_setting for a choice of channel, `CHANnel<1-4>`: `set` receives the channel number sent
   /// (1 when the suffix is left out), and the query replies `CHAN<n>` for the number `get` returns.
   void add_channel_choice(std::string_view header, std::function<void(Session&, std::size_t)> set,
                           std::function<std::size_t(Session&)> get);
   /// add_setting for one numeric field of the trigger settings.
-  void add_trigger_number(std::string_view header, scpi::NumericParameter range,
+  void add_trigger_number(std::string_view header, const scpi::NumericParameter& range,
                           double TriggerSettings::*field);
   /// add_keyword_setting for one enum field of the trigger settings, whose enumerators are in the
   /// order of `keywords`.
