@@ -5,7 +5,6 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <cstddef>
 #include <memory>
 #include <optional>
@@ -473,9 +472,7 @@ SteppedRun run_stepped(std::string_view line, std::size_t samples, std::size_t s
   ScpiSession session{instrument};
   session.send(kUntriggeredDc);
   const auto reply = session.start(line);
-  for (std::size_t done = 0; done < samples; done += step) {
-    instrument.advance(std::min(step, samples - done));
-  }
+  test::advance_in_steps(instrument, samples, step);
   ScpiSession reader{instrument};
   return {.reply = reply->ended ? reply->text.value_or("<no reply>") : "<held>",
           .latest_first_index = first_index(instrument),

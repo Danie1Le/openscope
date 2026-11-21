@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <memory>
 
@@ -51,6 +52,14 @@ inline CapturedChannel captured(const Instrument& instrument, std::size_t channe
 /// none).
 inline SampleIndex first_index(const Instrument& instrument) {
   return latest(instrument)->first_index;
+}
+
+/// Steps `instrument`'s sample clock `samples` sample indexes in `advance` calls of at most `step`,
+/// for tests that check a result does not depend on how the clock is stepped.
+inline void advance_in_steps(Instrument& instrument, std::size_t samples, std::size_t step) {
+  for (std::size_t done = 0; done < samples; done += step) {
+    instrument.advance(std::min(step, samples - done));
+  }
 }
 
 /// An Instrument at its `*RST` settings with one Session on it: the starting point of facade

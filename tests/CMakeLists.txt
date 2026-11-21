@@ -7,7 +7,7 @@ add_executable(openscope_tests acquisition_test.cpp ascii_test.cpp block_process
   fft_commands_test.cpp fft_test.cpp generator_test.cpp instrument_test.cpp
   live_pipeline_test.cpp measurement_test.cpp pacer_test.cpp phase_test.cpp response_test.cpp
   run_control_test.cpp session_test.cpp settings_test.cpp spsc_ring_buffer_test.cpp
-  trigger_test.cpp waveform_test.cpp)
+  timing_measurement_test.cpp trigger_test.cpp waveform_test.cpp)
 target_link_libraries(openscope_tests PRIVATE openscope openscope_warnings GTest::gmock_main
   Threads::Threads)
 gtest_discover_tests(openscope_tests)
