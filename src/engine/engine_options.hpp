@@ -4,7 +4,7 @@
 #include <span>
 #include <string_view>
 
-#include "openscope/server/scpi_server.hpp"
+#include "openscope/server/server_options.hpp"
 
 namespace openscope {
 
