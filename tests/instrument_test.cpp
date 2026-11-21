@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "instrument_fixture.hpp"
 #include "openscope/session.hpp"
 #include "scpi_session.hpp"
 
@@ -22,11 +23,7 @@ using testing::StartsWith;
 constexpr auto kNoErrorReply = R"(0,"No error")";
 constexpr auto kUndefinedHeaderReply = R"(-113,"Undefined header")";
 
-class InstrumentTest : public testing::Test {
- protected:
-  Instrument instrument;
-  ScpiSession session{instrument};
-};
+using InstrumentTest = test::InstrumentFixture;
 
 TEST_F(InstrumentTest, IdnReportsManufacturerModelSerialAndVersion) {
   EXPECT_THAT(session.send("*IDN?"),
