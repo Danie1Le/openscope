@@ -114,7 +114,7 @@ The queue holds 20 entries. When it is full, the newest entry is replaced by `-3
 | Command | Reply | Notes |
 |---|---|---|
 | `*IDN?` | `OpenScope,OS-4,<serial>,<version>` | |
-| `*RST` | none | Restores every instrument-wide setting to its `*RST` value below, restarts every Generator from phase zero at sample index 0 (see Generators), and drops the latest capture and the capture in progress; leaves the error queue alone |
+| `*RST` | none | Restores every instrument-wide setting to its `*RST` value below, restarts every Generator from phase zero at sample index 0 (see Generators), and drops the latest capture and the capture in progress; leaves the calling Session's error queue, `WAV` and `FFT` settings alone (ADR 0002) |
 | `*CLS` | none | Empties the calling Session's error queue |
 | `SYSTem:ERRor[:NEXT]?` | `<code>,"<message>"` | Removes and returns the oldest error |
 
