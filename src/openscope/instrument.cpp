@@ -18,6 +18,7 @@
 #include "openscope/capture.hpp"
 #include "openscope/channel.hpp"
 #include "openscope/fft.hpp"
+#include "openscope/fft_window.hpp"
 #include "openscope/generator.hpp"
 #include "openscope/sample_block.hpp"
 #include "openscope/scpi/command_tree.hpp"
