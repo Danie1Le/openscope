@@ -49,6 +49,11 @@ class MeasurementStatistics {
   /// True when no capture has been added since the last reset.
   [[nodiscard]] bool empty() const { return empty_; }
 
+  /// True when the captures added since the last reset hold channel `channel` (1 to 4).
+  [[nodiscard]] bool holds(std::size_t channel) const {
+    return channels_.at(channel - 1).has_value();
+  }
+
   /// The series of measurement `measurement` (a position in measurements()) of channel `channel`
   /// (1 to 4). Throws std::out_of_range when no capture added since the last reset holds the
   /// channel, or `measurement` is not in measurements().
