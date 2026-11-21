@@ -3,10 +3,13 @@
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/signal_set.hpp>
+#include <boost/system/system_error.hpp>
 #include <csignal>
 #include <cstddef>
 #include <exception>
+#include <format>
 #include <iostream>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string_view>
@@ -38,12 +41,20 @@ int run(std::span<char*> arguments, openscope::JsonLog& log) {
     return 0;
   }
 
-  // Destroyed in reverse: the server ends its Sessions before the pipeline's threads stop, and
-  // both go before the io_context their replies are posted to.
+  // Destroyed in reverse: the pipeline's threads stop first, so no reply is posted while the server
+  // ends its Sessions, and both go before the io_context replies are posted to.
   openscope::Instrument instrument(options.seed);
   boost::asio::io_context io;
+  std::optional<openscope::ScpiServer> server;
+  try {
+    server.emplace(io, instrument, options.server, log);
+  } catch (const boost::system::system_error& error) {
+    log.write("error", {{"error", std::format("cannot listen on {} port {}: {}",
+                                              options.server.address, options.server.port,
+                                              error.code().message())}});
+    return 1;
+  }
   const openscope::LivePipeline live(instrument);
-  const openscope::ScpiServer server(io, instrument, options.server, log);
   boost::asio::signal_set signals(io, SIGINT, SIGTERM);
   signals.async_wait([&](const auto& error, int signal) {
     if (!error) {
@@ -61,7 +72,7 @@ int main(int argc, char* argv[]) {
   openscope::JsonLog log(std::cerr);
   try {
     return run(std::span(argv, static_cast<std::size_t>(argc)).subspan(argc > 0 ? 1 : 0), log);
-  } catch (const std::exception& error) {  // Such as an address that cannot be bound.
+  } catch (const std::exception& error) {  // Anything else that stops the engine starting.
     log.write("error", {{"error", error.what()}});
     return 1;
   }
