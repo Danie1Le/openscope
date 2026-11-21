@@ -26,10 +26,9 @@ struct AcquisitionSettings {
 
 /// One enabled channel's part of a capture, with the vertical settings its samples were taken at.
 struct CapturedChannel {
-  /// Volts per vertical division.
-  double scale = 0.0;
-  /// The voltage at the centre of the input range.
-  double offset = 0.0;
+  /// The channel's settings when the capture started, so its input-range limits are the ones
+  /// that clipped the samples.
+  ChannelSettings settings;
   /// One sample per sample index of the capture, in volts, already clipped.
   std::vector<float> samples;
 };
@@ -60,8 +59,9 @@ class CaptureAssembler {
   /// Appends `block`, taken under `acquisition` and `channels`. A capture takes its settings from
   /// the block that starts it, so the caller discards the capture in progress whenever it changes
   /// a setting. Each capture that fills becomes the latest capture; a block may fill several.
-  /// Throws std::logic_error when `block` lacks samples for a channel of the capture in progress,
-  /// which means a channel was enabled or disabled without a discard.
+  /// Throws std::logic_error when `acquisition` has a record length of zero, or when `block` lacks
+  /// samples for a channel of the capture in progress, which means a channel was enabled or
+  /// disabled without a discard.
   void push(const SampleBlock& block, const AcquisitionSettings& acquisition,
             std::span<const ChannelSettings, kChannelCount> channels);
 

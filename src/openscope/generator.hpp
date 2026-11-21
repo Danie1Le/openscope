@@ -16,9 +16,9 @@ struct GeneratorSettings {
   GeneratorFunction function = GeneratorFunction::kSine;
   /// Cycles per second of the periodic functions.
   double frequency = 1e3;
-  /// Peak amplitude in volts: the signal swings from offset - amplitude to offset + amplitude.
-  /// DC ignores it.
-  double amplitude = 1.0;
+  /// Peak-to-peak amplitude in volts, the SCPI generator convention: the signal swings from
+  /// offset - amplitude / 2 to offset + amplitude / 2. DC ignores it.
+  double amplitude = 2.0;
   /// Volts added to the whole signal.
   double offset = 0.0;
   /// RMS volts of Gaussian noise added on top of the function.
@@ -52,7 +52,7 @@ class Generator {
 
   std::uint64_t seed_;
   GeneratorSettings settings_;
-  /// Cycles advanced per sample: frequency / sample rate.
+  /// The fraction of a cycle advanced per sample: frequency / sample rate without its whole cycles.
   double cycles_per_sample_;
   /// The phase is `anchor_phase_` at `anchor_index_` and advances by cycles_per_sample_ from there.
   SampleIndex anchor_index_ = 0;

@@ -171,7 +171,7 @@ TEST_F(WaveformTest, DisablingAChannelKeepsItInTheLatestCapture) {
 }
 
 TEST_F(WaveformTest, AsciiDataIsTheCapturedSamplesSeparatedByCommas) {
-  session.send("ACQ:POIN 4;:SOUR1:FUNC SQU;FREQ 250KHZ;AMPL 0.5;OFFS 0.25");
+  session.send("ACQ:POIN 4;:SOUR1:FUNC SQU;FREQ 250KHZ;AMPL 1;OFFS 0.25");
   instrument.advance(4);
 
   EXPECT_EQ(session.send("WAV:DATA?"), "0.75,0.75,-0.25,-0.25");

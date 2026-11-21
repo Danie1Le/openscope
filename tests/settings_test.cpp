@@ -15,9 +15,14 @@
 namespace openscope {
 namespace {
 
+using test::kDataTypeErrorReply;
+using test::kIllegalParameterValueReply;
+using test::kMissingParameterReply;
+using test::kNoErrorReply;
+using test::kParameterNotAllowedReply;
+using test::kUndefinedHeaderReply;
 using test::ScpiSession;
 
-constexpr auto kNoErrorReply = R"(0,"No error")";
 constexpr auto kOutOfRangeReply = R"(-222,"Data out of range")";
 
 /// One numeric setting: its header, its *RST reply, and values just inside and just outside its
@@ -76,10 +81,10 @@ TEST_P(NumericSettingTest, RejectsAKeywordAMissingValueAndASecondValue) {
   session.send(set(std::string(GetParam().min) + "," + std::string(GetParam().min)));
   session.send(query() + " " + std::string(GetParam().min));
 
-  EXPECT_EQ(session.next_error(), R"(-104,"Data type error")");
-  EXPECT_EQ(session.next_error(), R"(-109,"Missing parameter")");
-  EXPECT_EQ(session.next_error(), R"(-108,"Parameter not allowed")");
-  EXPECT_EQ(session.next_error(), R"(-108,"Parameter not allowed")");
+  EXPECT_EQ(session.next_error(), kDataTypeErrorReply);
+  EXPECT_EQ(session.next_error(), kMissingParameterReply);
+  EXPECT_EQ(session.next_error(), kParameterNotAllowedReply);
+  EXPECT_EQ(session.next_error(), kParameterNotAllowedReply);
   EXPECT_EQ(session.send(query()), GetParam().reset_reply);
 }
 
@@ -88,7 +93,7 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Values(
         NumericSetting{"SOUR1:FREQ", "1000", "0.001", "0.001", "1E9", "1E+09", "0.00099",
                        "1.001E9"},
-        NumericSetting{"SOUR1:AMPL", "1", "0", "0", "50", "50", "-0.001", "50.001"},
+        NumericSetting{"SOUR1:AMPL", "2", "0", "0", "100", "100", "-0.001", "100.001"},
         NumericSetting{"SOUR1:OFFS", "0", "-50", "-50", "50", "50", "-50.001", "50.001"},
         NumericSetting{"SOUR1:NOIS", "0", "0", "0", "50", "50", "-0.001", "50.001"},
         NumericSetting{"CHAN1:SCAL", "1", "0.001", "0.001", "10", "10", "0.00099", "10.001"},
@@ -109,12 +114,12 @@ INSTANTIATE_TEST_SUITE_P(
 using SettingsTest = test::InstrumentFixture;
 
 TEST_F(SettingsTest, LongFormsAreAccepted) {
-  session.send("SOURce2:FREQuency 50;AMPLitude 2;OFFSet -1;NOISe 0.5;FUNCtion SQUare");
+  session.send("SOURce2:FREQuency 50;AMPLitude 3;OFFSet -1;NOISe 0.5;FUNCtion SQUare");
   session.send(":CHANnel3:SCALe 2;OFFSet 0.5;DISPlay ON");
   session.send(":ACQuire:SRATe 2E6;POINts 500");
   session.send(":TIMebase:SCALe 0.5");
 
-  EXPECT_EQ(session.send("SOUR2:FREQ?;AMPL?;OFFS?;NOIS?;FUNC?"), "50;2;-1;0.5;SQU");
+  EXPECT_EQ(session.send("SOUR2:FREQ?;AMPL?;OFFS?;NOIS?;FUNC?"), "50;3;-1;0.5;SQU");
   EXPECT_EQ(session.send("CHAN3:SCAL?;OFFS?;DISP?"), "2;0.5;1");
   EXPECT_EQ(session.send("ACQ:SRAT?;POIN?"), "2E+06;500");
   EXPECT_EQ(session.send("TIM:SCAL?"), "0.5");
@@ -155,11 +160,20 @@ TEST_F(SettingsTest, RecordLengthRoundsToTheNearestWholeSample) {
   EXPECT_EQ(session.send("ACQ:POIN?"), "1048576");
 }
 
+TEST_F(SettingsTest, RecordLengthRangeAppliesToTheValueAsSentBeforeRounding) {
+  session.send("ACQ:POIN 0.6");
+  session.send("ACQ:POIN 1048576.4");
+
+  EXPECT_EQ(session.next_error(), kOutOfRangeReply);
+  EXPECT_EQ(session.next_error(), kOutOfRangeReply);
+  EXPECT_EQ(session.send("ACQ:POIN?"), "10000");
+}
+
 TEST_F(SettingsTest, EachGeneratorAndChannelHasItsOwnSettings) {
-  session.send("SOUR3:AMPL 2;FUNC RAMP");
+  session.send("SOUR3:AMPL 3;FUNC RAMP");
   session.send(":CHAN2:SCAL 0.5;DISP ON");
 
-  EXPECT_EQ(session.send("SOUR1:AMPL?;:SOUR2:AMPL?;:SOUR3:AMPL?;:SOUR4:AMPL?"), "1;1;2;1");
+  EXPECT_EQ(session.send("SOUR1:AMPL?;:SOUR2:AMPL?;:SOUR3:AMPL?;:SOUR4:AMPL?"), "2;2;3;2");
   EXPECT_EQ(session.send("SOUR1:FUNC?;:SOUR3:FUNC?;:SOUR4:FUNC?"), "SIN;RAMP;SIN");
   EXPECT_EQ(session.send("CHAN1:SCAL?;:CHAN2:SCAL?;:CHAN3:SCAL?;:CHAN4:SCAL?"), "1;0.5;1;1");
   EXPECT_EQ(session.send("CHAN1:DISP?;:CHAN2:DISP?;:CHAN3:DISP?;:CHAN4:DISP?"), "1;1;0;0");
@@ -178,15 +192,15 @@ TEST_F(SettingsTest, SuffixOutOfRangeIsReportedAndChangesNothing) {
     EXPECT_EQ(session.send(line), std::nullopt) << line;
     EXPECT_EQ(session.next_error(), R"(-114,"Header suffix out of range")") << line;
   }
-  EXPECT_EQ(session.send("SOUR4:FREQ?;AMPL?;:CHAN4:DISP?;SCAL?"), "1000;1;0;1");
+  EXPECT_EQ(session.send("SOUR4:FREQ?;AMPL?;:CHAN4:DISP?;SCAL?"), "1000;2;0;1");
 }
 
 TEST_F(SettingsTest, NodesWithoutASuffixRejectOne) {
   session.send("ACQ2:SRAT 5");
   session.send("TIM2:SCAL?");
 
-  EXPECT_EQ(session.next_error(), R"(-113,"Undefined header")");
-  EXPECT_EQ(session.next_error(), R"(-113,"Undefined header")");
+  EXPECT_EQ(session.next_error(), kUndefinedHeaderReply);
+  EXPECT_EQ(session.next_error(), kUndefinedHeaderReply);
 }
 
 TEST_F(SettingsTest, FunctionAcceptsEachShortAndLongFormAndRepliesTheShortForm) {
@@ -216,9 +230,9 @@ TEST_F(SettingsTest, FunctionRejectsOtherKeywordsAndNumbers) {
   session.send("SOUR1:FUNC SINU");
   session.send("SOUR1:FUNC 1");
 
-  EXPECT_EQ(session.next_error(), R"(-224,"Illegal parameter value")");
-  EXPECT_EQ(session.next_error(), R"(-224,"Illegal parameter value")");
-  EXPECT_EQ(session.next_error(), R"(-104,"Data type error")");
+  EXPECT_EQ(session.next_error(), kIllegalParameterValueReply);
+  EXPECT_EQ(session.next_error(), kIllegalParameterValueReply);
+  EXPECT_EQ(session.next_error(), kDataTypeErrorReply);
   EXPECT_EQ(session.send("SOUR1:FUNC?"), "SQU");
 }
 
@@ -233,7 +247,7 @@ TEST_F(SettingsTest, DisplayIsABoolean) {
   EXPECT_EQ(session.send("CHAN2:DISP?"), "0");
 
   session.send("CHAN2:DISP MAYBE");
-  EXPECT_EQ(session.next_error(), R"(-224,"Illegal parameter value")");
+  EXPECT_EQ(session.next_error(), kIllegalParameterValueReply);
   EXPECT_EQ(session.send("CHAN2:DISP?"), "0");
 }
 
@@ -252,7 +266,7 @@ TEST_F(SettingsTest, RstRestoresEveryInstrumentWideSetting) {
 
   session.send("*RST");
 
-  EXPECT_EQ(session.send("SOUR4:FUNC?;FREQ?;AMPL?;OFFS?;NOIS?"), "SIN;1000;1;0;0");
+  EXPECT_EQ(session.send("SOUR4:FUNC?;FREQ?;AMPL?;OFFS?;NOIS?"), "SIN;1000;2;0;0");
   EXPECT_EQ(session.send("CHAN1:DISP?;:CHAN4:DISP?;SCAL?;OFFS?"), "1;0;1;0");
   EXPECT_EQ(session.send("ACQ:SRAT?;POIN?;:TIM:SCAL?"), "1E+06;10000;0.001");
   EXPECT_EQ(session.next_error(), kNoErrorReply);

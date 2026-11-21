@@ -5,12 +5,14 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <vector>
 
 #include "instrument_fixture.hpp"
 #include "openscope/capture.hpp"
+#include "openscope/channel.hpp"
 #include "openscope/instrument.hpp"
 #include "scpi_session.hpp"
 
@@ -23,7 +25,6 @@ using test::ScpiSession;
 using testing::Each;
 using testing::ElementsAre;
 using testing::Eq;
-using testing::FloatNear;
 
 class AcquisitionTest : public test::InstrumentFixture {
  protected:
@@ -48,8 +49,8 @@ TEST_F(AcquisitionTest, ChannelNIsFedByGeneratorN) {
 }
 
 TEST_F(AcquisitionTest, FunctionFrequencyAmplitudeAndOffsetShapeTheCapturedSignal) {
-  // 250 kHz at 1 MSa/s is four samples per cycle.
-  session.send("SOUR1:FUNC SQU;FREQ 250KHZ;AMPL 2;OFFS 1");
+  // 250 kHz at 1 MSa/s is four samples per cycle. AMPL is peak to peak: 4 V around 1 V.
+  session.send("SOUR1:FUNC SQU;FREQ 250KHZ;AMPL 4;OFFS 1");
   session.send(":ACQ:POIN 8");
 
   instrument.advance(8);
@@ -184,7 +185,7 @@ TEST_F(AcquisitionTest, RecordLengthSetsTheSpanOfACapture) {
   EXPECT_EQ(captured(instrument, 1).samples.size(), 100U);
 }
 
-TEST_F(AcquisitionTest, OnePointCapturesCompleteOnEverySample) {
+TEST_F(AcquisitionTest, RecordLengthOfOneCompletesACaptureOnEverySample) {
   session.send("ACQ:POIN 1");
 
   instrument.advance(3);
@@ -199,8 +200,8 @@ TEST_F(AcquisitionTest, ACaptureKeepsTheVerticalSettingsItWasTakenWith) {
 
   session.send("CHAN1:SCAL 3;OFFS 1");
 
-  EXPECT_EQ(captured(instrument, 1).scale, 2.0);
-  EXPECT_EQ(captured(instrument, 1).offset, 0.5);
+  EXPECT_EQ(captured(instrument, 1).settings.scale, 2.0);
+  EXPECT_EQ(captured(instrument, 1).settings.offset, 0.5);
 }
 
 // A capture takes its settings from its first sample, so a change part-way through one would mix
@@ -281,17 +282,32 @@ TEST_F(AcquisitionTest, RstDropsTheLatestCaptureAndTheCaptureInProgress) {
   EXPECT_EQ(latest_first_index(), 150);
 }
 
-TEST_F(AcquisitionTest, RstRestoresTheDefaultSignalWithoutAPhaseJump) {
-  session.send("ACQ:SRAT 4000;:SOUR1:FUNC SQU;AMPL 3;:CHAN2:DISP ON");
-  instrument.advance(252);  // 63 whole cycles of 1 kHz at 4 kSa/s: the phase is back at 0.
+// Spec story 4: *RST is a known state. Frequency and sample-rate history would otherwise leave
+// every Generator at a phase that depends on the commands sent before *RST.
+TEST_F(AcquisitionTest, RstGivesTheSameNextCaptureAsAFreshInstrument) {
+  session.send("SOUR1:FUNC SQU;FREQ 1234;:SOUR2:FUNC RAMP;FREQ 777;:SOUR3:FREQ 3.3KHZ");
+  session.send(":SOUR4:NOIS 0.5;:CHAN2:DISP ON;:ACQ:SRAT 3E6;POIN 333");
+  instrument.advance(12'345);
+  session.send("SOUR1:FREQ 4321;:ACQ:SRAT 2E5");
+  instrument.advance((2 * kResetRecordLength) - 12'345);
 
   session.send("*RST");
+  session.send("CHAN2:DISP ON;:CHAN3:DISP ON;:CHAN4:DISP ON");
   instrument.advance(kResetRecordLength);
 
-  const std::vector<float> samples = captured(instrument, 1).samples;
-  EXPECT_THAT(samples[0], FloatNear(0.0F, 1e-6F));
-  EXPECT_EQ(samples[250], 1.0F);
-  EXPECT_FALSE(instrument.latest_capture()->channels[1].has_value());
+  Instrument fresh;
+  ScpiSession client{fresh};
+  fresh.advance(2 * kResetRecordLength);
+  client.send("CHAN2:DISP ON;:CHAN3:DISP ON;:CHAN4:DISP ON");
+  fresh.advance(kResetRecordLength);
+
+  ASSERT_NE(instrument.latest_capture(), nullptr);
+  EXPECT_EQ(instrument.latest_capture()->first_index, 2 * kResetRecordLength);
+  EXPECT_EQ(fresh.latest_capture()->first_index, 2 * kResetRecordLength);
+  for (std::size_t channel = 1; channel <= kChannelCount; ++channel) {
+    EXPECT_EQ(captured(instrument, channel).samples, captured(fresh, channel).samples)
+        << "CH" << channel;
+  }
 }
 
 }  // namespace

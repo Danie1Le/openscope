@@ -61,16 +61,23 @@ double shape(GeneratorFunction function, double phase) {
   return 0.0;
 }
 
+/// The fraction of a cycle the phase advances per sample, in [0, 1). Whole cycles never change the
+/// phase, and dropping them with the exact fmod keeps them from eating the precision of the
+/// phase far along the sample clock when the frequency is above the sample rate.
+double cycles_per_sample(double frequency, double sample_rate) {
+  return std::fmod(frequency, sample_rate) / sample_rate;
+}
+
 }  // namespace
 
 Generator::Generator(std::uint64_t seed, double sample_rate)
-    : seed_(seed), cycles_per_sample_(settings_.frequency / sample_rate) {}
+    : seed_(seed), cycles_per_sample_(cycles_per_sample(settings_.frequency, sample_rate)) {}
 
 void Generator::configure(const GeneratorSettings& settings, double sample_rate, SampleIndex at) {
   anchor_phase_ = phase_at(at);
   anchor_index_ = at;
   settings_ = settings;
-  cycles_per_sample_ = settings.frequency / sample_rate;
+  cycles_per_sample_ = cycles_per_sample(settings.frequency, sample_rate);
 }
 
 double Generator::phase_at(SampleIndex index) const {
@@ -82,13 +89,14 @@ double Generator::phase_at(SampleIndex index) const {
 }
 
 void Generator::generate(SampleIndex first, std::span<float> samples) const {
+  const double peak = settings_.amplitude / 2.0;
   for (std::size_t i = 0; i < samples.size(); ++i) {
     const SampleIndex index = first + i;
     double volts = settings_.offset;
     if (settings_.function == GeneratorFunction::kNoise) {
-      volts += settings_.amplitude * ((2.0 * uniform(seed_, Stream::kNoiseFunction, index)) - 1.0);
+      volts += peak * ((2.0 * uniform(seed_, Stream::kNoiseFunction, index)) - 1.0);
     } else {
-      volts += settings_.amplitude * shape(settings_.function, phase_at(index));
+      volts += peak * shape(settings_.function, phase_at(index));
     }
     if (settings_.noise > 0.0) {
       volts += settings_.noise * gaussian(seed_, index);

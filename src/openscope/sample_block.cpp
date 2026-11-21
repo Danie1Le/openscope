@@ -13,7 +13,7 @@ namespace openscope {
 SampleBlock sample_channels(std::span<const Generator, kChannelCount> generators,
                             std::span<const ChannelSettings, kChannelCount> channels,
                             SampleIndex first, std::size_t count) {
-  SampleBlock block{.first = first, .count = count, .channels = {}};
+  SampleBlock block{.first_index = first, .count = count, .channels = {}};
   for (std::size_t n = 0; n < kChannelCount; ++n) {
     if (!channels[n].enabled) {
       continue;

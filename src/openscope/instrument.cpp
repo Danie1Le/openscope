@@ -79,7 +79,8 @@ Value value_of(const Arguments& arguments) {
 }  // namespace
 
 Instrument::Instrument(std::uint64_t seed)
-    : channels_(default_channels()),
+    : seed_(seed),
+      channels_(default_channels()),
       generators_(make_generators(seed, acquisition_.sample_rate,
                                   std::make_index_sequence<kChannelCount>{})) {
   commands_.add({.header = "*IDN?",
@@ -126,7 +127,7 @@ void Instrument::add_generator_commands() {
       });
   add_generator_number("SOURce<1-4>:FREQuency", {.min = 1e-3, .max = 1e9, .unit = "HZ"},
                        &GeneratorSettings::frequency);
-  add_generator_number("SOURce<1-4>:AMPLitude", {.min = 0.0, .max = 50.0, .unit = "V"},
+  add_generator_number("SOURce<1-4>:AMPLitude", {.min = 0.0, .max = 100.0, .unit = "V"},
                        &GeneratorSettings::amplitude);
   add_generator_number("SOURce<1-4>:OFFSet", {.min = -50.0, .max = 50.0, .unit = "V"},
                        &GeneratorSettings::offset);
@@ -138,7 +139,9 @@ void Instrument::add_channel_commands() {
   add_setting(
       "CHANnel<1-4>:DISPlay", scpi::BooleanParameter{},
       [this](Session&, const Arguments& arguments) {
-        channel_to_change(arguments).enabled = value_of<bool>(arguments);
+        change_channel(arguments, [&](ChannelSettings& settings) {
+          settings.enabled = value_of<bool>(arguments);
+        });
       },
       [this](Session&, const Arguments& arguments) {
         return std::string(channels_.at(channel_of(arguments)).enabled ? "1" : "0");
@@ -153,9 +156,9 @@ void Instrument::add_acquisition_commands() {
   add_setting(
       "ACQuire:SRATe", NumericParameter{.min = 1.0, .max = 1e9, .unit = ""},
       [this](Session&, const Arguments& arguments) {
-        AcquisitionSettings settings = acquisition_;
-        settings.sample_rate = value_of<double>(arguments);
-        set_acquisition(settings);
+        change_acquisition([&](AcquisitionSettings& settings) {
+          settings.sample_rate = value_of<double>(arguments);
+        });
       },
       [this](Session&, const Arguments&) { return scpi::format_real(acquisition_.sample_rate); });
   add_setting(
@@ -164,11 +167,11 @@ void Instrument::add_acquisition_commands() {
                        .max = static_cast<double>(AcquisitionSettings::kMaxRecordLength),
                        .unit = ""},
       [this](Session&, const Arguments& arguments) {
-        AcquisitionSettings settings = acquisition_;
-        // A count of samples: a fraction rounds to the nearest whole number, half away from zero.
-        settings.record_length =
-            static_cast<std::size_t>(std::llround(value_of<double>(arguments)));
-        set_acquisition(settings);
+        change_acquisition([&](AcquisitionSettings& settings) {
+          // A count of samples: a fraction rounds to the nearest whole number, half away from zero.
+          settings.record_length =
+              static_cast<std::size_t>(std::llround(value_of<double>(arguments)));
+        });
       },
       [this](Session&, const Arguments&) { return std::to_string(acquisition_.record_length); });
 }
@@ -214,13 +217,14 @@ void Instrument::add_waveform_commands() {
   commands_.add({.header = "WAVeform:PREamble?",
                  .parameters = {},
                  .handler = [this](Session& caller, const Arguments&) {
-                   return reply_with_source(caller, [](const Capture& capture,
-                                                       const CapturedChannel& channel) {
-                     return std::format("{},{},{},{},{},{}", scpi::format_real(capture.sample_rate),
-                                        capture.record_length, scpi::format_real(channel.scale),
-                                        scpi::format_real(channel.offset), capture.trigger_position,
-                                        capture.untriggered ? 1 : 0);
-                   });
+                   return reply_with_source(
+                       caller, [](const Capture& capture, const CapturedChannel& channel) {
+                         return std::format(
+                             "{},{},{},{},{},{}", scpi::format_real(capture.sample_rate),
+                             capture.record_length, scpi::format_real(channel.settings.scale),
+                             scpi::format_real(channel.settings.offset), capture.trigger_position,
+                             capture.untriggered ? 1 : 0);
+                       });
                  }});
 }
 
@@ -290,7 +294,9 @@ void Instrument::add_channel_number(std::string_view header, NumericParameter ra
   add_setting(
       header, std::move(range),
       [this, field](Session&, const Arguments& arguments) {
-        channel_to_change(arguments).*field = value_of<double>(arguments);
+        change_channel(arguments, [&](ChannelSettings& settings) {
+          settings.*field = value_of<double>(arguments);
+        });
       },
       [this, field](Session&, const Arguments& arguments) {
         return scpi::format_real(channels_.at(channel_of(arguments)).*field);
@@ -305,15 +311,16 @@ void Instrument::change_generator(const Arguments& arguments,
   generator.configure(settings, acquisition_.sample_rate, clock_.now());
 }
 
-ChannelSettings& Instrument::channel_to_change(const Arguments& arguments) {
+void Instrument::change_channel(const Arguments& arguments,
+                                const std::function<void(ChannelSettings&)>& change) {
+  change(channels_.at(channel_of(arguments)));
   captures_.discard();
-  return channels_.at(channel_of(arguments));
 }
 
-void Instrument::set_acquisition(const AcquisitionSettings& settings) {
-  acquisition_ = settings;
+void Instrument::change_acquisition(const std::function<void(AcquisitionSettings&)>& change) {
+  change(acquisition_);
   for (Generator& generator : generators_) {
-    generator.configure(generator.settings(), settings.sample_rate, clock_.now());
+    generator.configure(generator.settings(), acquisition_.sample_rate, clock_.now());
   }
   captures_.discard();
 }
@@ -322,9 +329,10 @@ void Instrument::reset() {
   acquisition_ = {};
   channels_ = default_channels();
   timebase_scale_ = kDefaultTimebaseScale;
-  for (Generator& generator : generators_) {
-    generator.configure({}, acquisition_.sample_rate, clock_.now());
-  }
+  // Fresh Generators rather than reconfigured ones: phase continuity would carry the phase built
+  // up by earlier settings past *RST, so the output would depend on the commands sent before it.
+  generators_ =
+      make_generators(seed_, acquisition_.sample_rate, std::make_index_sequence<kChannelCount>{});
   captures_ = {};
 }
 

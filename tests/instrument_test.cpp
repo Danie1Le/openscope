@@ -15,13 +15,13 @@
 namespace openscope {
 namespace {
 
+using test::kNoErrorReply;
+using test::kParameterNotAllowedReply;
+using test::kUndefinedHeaderReply;
 using test::ScpiSession;
 using testing::MatchesRegex;
 using testing::Optional;
 using testing::StartsWith;
-
-constexpr auto kNoErrorReply = R"(0,"No error")";
-constexpr auto kUndefinedHeaderReply = R"(-113,"Undefined header")";
 
 using InstrumentTest = test::InstrumentFixture;
 
@@ -155,8 +155,8 @@ TEST_F(InstrumentTest, ParameterOnACommandThatTakesNoneQueuesParameterNotAllowed
 
   // *CLS did not run: the first error is still queued.
   EXPECT_EQ(session.next_error(), kUndefinedHeaderReply);
-  EXPECT_EQ(session.next_error(), R"(-108,"Parameter not allowed")");
-  EXPECT_EQ(session.next_error(), R"(-108,"Parameter not allowed")");
+  EXPECT_EQ(session.next_error(), kParameterNotAllowedReply);
+  EXPECT_EQ(session.next_error(), kParameterNotAllowedReply);
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 
@@ -198,7 +198,7 @@ TEST_F(InstrumentTest, FullErrorQueueKeepsTheOldestErrorsAndEndsWithQueueOverflo
     session.send("BOGUS");
   }
 
-  EXPECT_EQ(session.next_error(), R"(-108,"Parameter not allowed")");
+  EXPECT_EQ(session.next_error(), kParameterNotAllowedReply);
   for (std::size_t i = 2; i < Session::kErrorQueueCapacity; ++i) {
     EXPECT_EQ(session.next_error(), kUndefinedHeaderReply) << "entry " << i;
   }
@@ -229,7 +229,7 @@ TEST_F(InstrumentTest, ErrorsAfterAnOverflowQueueBehindIt) {
     session.next_error();
   }
   EXPECT_EQ(session.next_error(), R"(-350,"Queue overflow")");
-  EXPECT_EQ(session.next_error(), R"(-108,"Parameter not allowed")");
+  EXPECT_EQ(session.next_error(), kParameterNotAllowedReply);
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 
