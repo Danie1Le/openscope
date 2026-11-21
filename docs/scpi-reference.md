@@ -117,9 +117,38 @@ The queue holds 20 entries. When it is full, the newest entry is replaced by `-3
 | Command | Reply | Notes |
 |---|---|---|
 | `*IDN?` | `OpenScope,OS-4,<serial>,<version>` | |
-| `*RST` | none | Restores every instrument-wide setting to its `*RST` value below, restarts every Generator from phase zero at sample index 0 with no faults (see Generators), and drops the latest capture and the capture in progress; leaves the calling Session's error queue, `WAV` and `FFT` settings alone (ADR 0002) |
+| `*RST` | none | Restores every instrument-wide setting to its `*RST` value below and the Running run state, restarts every Generator from phase zero at sample index 0 with no faults (see Generators), and drops the latest capture and the capture in progress; leaves the calling Session's error queue, `WAV` and `FFT` settings alone (ADR 0002) |
 | `*CLS` | none | Empties the calling Session's error queue |
+| `*OPC?` | `1` | Replies once no operation is pending (see [Run control](#run-control)) |
+| `*WAI` | none | Holds the rest of the Session's commands until no operation is pending |
 | `SYSTem:ERRor[:NEXT]?` | `<code>,"<message>"` | Removes and returns the oldest error |
+| `RUN` | none | Enters the Running run state |
+| `STOP` | none | Enters the Stopped run state |
+| `SINGle` | none | Arms one capture (the Armed-single run state), then stops |
+
+### Run control
+
+The run state says what the instrument does with captures. It is separate from the trigger mode, which only decides what happens when no trigger event arrives.
+
+| Run state | Entered by | Captures |
+|---|---|---|
+| Running | `RUN`, `*RST` | Taken continuously; each completed capture becomes the latest capture |
+| Stopped | `STOP`, or the capture of a `SINGle` | None; the latest capture stays as it is, so repeated queries read the same data |
+| Armed-single | `SINGle` | Exactly one, then the instrument is Stopped |
+
+`STOP` and `SINGle` drop the capture in progress, so the capture a `SINGle` takes starts at the next sample index after it; sending `SINGle` while armed starts over. `RUN` keeps a capture already in progress (from Armed-single) and otherwise starts a new one at the next sample index. None of them changes the latest capture: until the Single's capture completes, queries read the capture from before. Run control is instrument-wide, like the settings.
+
+An armed Single is the pending operation that `*OPC?` and `*WAI` wait for. Nothing else is ever pending, so in the Running and Stopped run states `*OPC?` replies `1` and `*WAI` does nothing at once.
+
+- `SINGle;*OPC?` replies `1` only once the Single's capture is complete. The wait also ends when the instrument leaves Armed-single any other way: `STOP`, `RUN` or `*RST`, from any Session. Every Session waiting then carries on, in the order they started waiting, even when the first to carry on sends `SINGle` again: the others waited for the Single that ended, not for the new one.
+- There is no timeout on the instrument: in `NORMal` trigger mode with no trigger event, `*OPC?` waits as long as it takes. The client's own timeout is the guard. Disconnecting ends the wait, with no reply.
+- `*WAI` holds the rest of the line, and the Session's later lines, until the operation ends; `SINGle;*WAI;WAV:DATA?` reads the Single's capture. `*OPC?` holds them the same way, so commands after it on the line also run once the operation has ended: `SINGle;*OPC?;WAV:PRE?` replies `1;` and the preamble of the Single's capture.
+- A Session's commands run in order: while one of its lines is held, its next line waits until the reply has been sent. So the `STOP` that ends a wait comes from another Session (another connection or the display), or the client disconnects.
+- A Session waiting on `*OPC?` or `*WAI` is not idle, whatever the transport's idle timeout.
+
+### Consistency model
+
+Every query reads the latest capture at the moment it runs. In the Running run state, two queries, even on one line, may read two different captures. To query one capture several times, take it with `SINGle;*OPC?` and then send the queries: the instrument is Stopped, so the latest capture no longer changes until the next `RUN` or `SINGle` (or `*RST`, which drops it).
 
 ### Settings
 
@@ -186,7 +215,7 @@ A fault is placed by the sample index, so with the same seed and the same comman
 
 A channel's input range is its offset plus or minus four vertical divisions (four times its scale). A sample outside it is clipped: held at the nearer limit. The sample rate and record length alone define a capture: one record length of sample indexes, positioned by the trigger (below). Only the latest capture is kept.
 
-A capture takes its settings from its first sample, so changing a channel setting (`CHAN<n>:DISP`, `SCAL`, `OFFS`), an acquisition setting (`ACQ:SRAT`, `POIN`) or a trigger setting (`TRIG:...`) drops the capture in progress and restarts the trigger, and the next capture starts collecting samples at the next sample index. Any such change does this, even one that sets the value already in place. The latest capture already completed stays as it was. Generator and timebase changes do not drop the capture in progress.
+A capture takes its settings from its first sample and holds one signal, so changing a Generator setting (`SOUR<n>:FUNC`, `FREQ`, `AMPL`, `OFFS`, `NOIS`), a channel setting (`CHAN<n>:DISP`, `SCAL`, `OFFS`), an acquisition setting (`ACQ:SRAT`, `POIN`) or a trigger setting (`TRIG:...`) drops the capture in progress and restarts the trigger, and the next capture starts collecting samples at the next sample index. Any such change does this, from any Session and even one that sets the value already in place; an armed Single stays armed and takes its capture from the next sample index. The latest capture already completed stays as it was and stays readable. Timebase changes do not drop the capture in progress (the timebase is a display viewport, ADR 0004), nor do a Session's own `WAV:...` and `FFT:...` settings or a fault (`SOUR<n>:FAUL`), which is meant to be captured.
 
 ### Trigger
 

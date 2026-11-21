@@ -79,6 +79,10 @@ _Avoid_: Acquisition mode
 A run-control action that arms the instrument for exactly one capture, then puts it in the Stopped run state.
 _Avoid_: Single trigger mode
 
+**Pending operation**:
+An armed Single, until its capture completes or the instrument leaves the Armed-single run state. `*OPC?` and `*WAI` hold a Session's commands while one is pending.
+_Avoid_: Busy, operation in progress
+
 ## Trigger
 
 **Trigger mode**:

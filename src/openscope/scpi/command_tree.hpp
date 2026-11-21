@@ -8,6 +8,7 @@
 #include <variant>
 #include <vector>
 
+#include "openscope/scpi/parser.hpp"
 #include "openscope/scpi_error.hpp"
 #include "openscope/session.hpp"
 
@@ -55,11 +56,19 @@ struct Arguments {
   std::vector<Argument> values;
 };
 
-/// What a handler returns: its reply (nullopt for a command without one), or the execution error
-/// (such as -221) that stopped it. The tree queues the error and discards the rest of the line. A
-/// handler that replies but must also report something, as a measurement reports its status, puts
-/// that entry on the Session's queue itself, so the line carries on.
-using HandlerResult = std::variant<std::optional<std::string>, ScpiError>;
+/// What a handler returns to hold its line, as `*WAI` and `*OPC?` do while an operation is
+/// pending: the line stops after this command. When `CommandTree::resume` carries it on, `reply`
+/// becomes the command's reply and the rest of the line runs. The handler is not run again, so
+/// whatever it waited for is over even if it has begun again since.
+struct Hold {
+  std::optional<std::string> reply;
+};
+
+/// What a handler returns: its reply (nullopt for a command without one), the execution error
+/// (such as -221) that stopped it, which the tree queues before discarding the rest of the line,
+/// or Hold. A handler that replies but must also report something, as a measurement reports its
+/// status, puts that entry on the Session's queue itself, so the line carries on.
+using HandlerResult = std::variant<std::optional<std::string>, ScpiError, Hold>;
 
 /// Runs a matched command for the calling Session.
 using Handler = std::function<HandlerResult(Session&, const Arguments&)>;
@@ -114,6 +123,41 @@ using ParameterRule = std::variant<NumericParameter, BooleanParameter, KeywordRu
 
 }  // namespace detail
 
+/// One line run by a CommandTree: the replies of its queries so far and, when a handler held it,
+/// where it stopped, so `CommandTree::resume` can carry it on.
+class Execution {
+ public:
+  /// Move-only: a copy of a held line could be resumed twice and run its rest twice.
+  Execution() = default;
+  Execution(const Execution&) = delete;
+  Execution& operator=(const Execution&) = delete;
+  Execution(Execution&&) = default;
+  Execution& operator=(Execution&&) = default;
+  ~Execution() = default;
+
+  /// True while a handler holds the line (it returned Hold); false once the line has ended.
+  [[nodiscard]] bool held() const { return hold_.has_value(); }
+
+  /// The replies of the queries that have run, joined with `;`, or nullopt when none replied.
+  [[nodiscard]] const std::optional<std::string>& reply() const { return reply_; }
+
+  /// Moves the reply out, for a line that has ended, so a large one (`WAV:DATA?`) is not copied.
+  [[nodiscard]] std::optional<std::string> take_reply() { return std::move(reply_); }
+
+ private:
+  friend class CommandTree;
+
+  /// The line's commands; those before `next_` have run, and `next_` is the one that holds the
+  /// line while it is held.
+  std::vector<ParsedCommand> commands_;
+  std::size_t next_ = 0;
+  /// The path the next relative header continues from (SCPI-99 compound headers).
+  std::vector<Mnemonic> path_;
+  std::optional<std::string> reply_;
+  /// What the holding command returned, while the line is held.
+  std::optional<Hold> hold_;
+};
+
 /// The SCPI command tree: matches each command of a line against the registered headers (short
 /// or long form, any case, numeric suffixes, optional nodes, SCPI-99 compound-header paths),
 /// checks its parameters, and runs its handler. A command with an error never reaches its
@@ -128,11 +172,15 @@ class CommandTree {
   /// client first sends the command.
   void add(Command command);
 
-  /// Executes one line for `session` and returns the replies of its queries, joined with `;`, or
-  /// nullopt when no query replied. A syntax error anywhere runs nothing. Any other error,
-  /// including an execution error a handler returns, runs the commands before it and discards
-  /// the rest of the line. Errors go to `session`'s queue.
-  std::optional<std::string> execute(Session& session, std::string_view line) const;
+  /// Executes one line for `session` until it ends or a handler holds it, and returns how far it
+  /// got. A syntax error anywhere runs nothing. Any other error, including an execution error a
+  /// handler returns, runs the commands before it and discards the rest of the line. Errors go to
+  /// `session`'s queue.
+  [[nodiscard]] Execution execute(Session& session, std::string_view line) const;
+
+  /// Carries on the held `execution` for `session`: the holding command's Hold reply joins the
+  /// replies, then the rest of the line runs until it ends or a handler holds it again.
+  void resume(Session& session, Execution& execution) const;
 
  private:
   /// A registered command with its header and keyword patterns parsed.
