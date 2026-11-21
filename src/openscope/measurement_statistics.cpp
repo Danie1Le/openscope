@@ -17,11 +17,13 @@ CaptureResults measure_all(const Capture& capture) {
   CaptureResults results;
   for (std::size_t n = 0; n < kChannelCount; ++n) {
     if (const std::optional<CapturedChannel>& channel = capture.channels.at(n)) {
-      const SignalLevels levels = find_levels(channel->samples);
+      const MeasuredSignal signal{.samples = channel->samples,
+                                  .levels = find_levels(channel->samples),
+                                  .sample_rate = capture.sample_rate};
       std::vector<MeasurementResult>& channel_results = results.at(n).emplace();
       channel_results.reserve(all.size());
       for (const Measurement& measurement : all) {
-        channel_results.push_back(evaluate(measurement, *channel, levels));
+        channel_results.push_back(evaluate(measurement, channel->settings, signal));
       }
     }
   }

@@ -32,6 +32,7 @@ using test::kDataTypeErrorReply;
 using test::kIllegalParameterValueReply;
 using test::kMissingParameterReply;
 using test::kNoErrorReply;
+using test::kNoSignalReply;
 using test::kParameterNotAllowedReply;
 using test::kSettingsConflictReply;
 using test::kUndefinedHeaderReply;
@@ -364,6 +365,34 @@ TEST_F(StatisticsTest, EarlierClippedValueWarnsAfterTheSignalRecovers) {
   EXPECT_EQ(session.next_error(), kNoErrorReply);
   EXPECT_EQ(session.send("MEAS:VMAX? CHAN1"), "0.5");
   EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+// A flat signal has no frequency: the No signal result is current and reported as MEAS:FREQ?
+// reports it, but has no value, so nothing is counted.
+TEST_F(StatisticsTest, NoSignalIsReportedAndLeftOutOfTheCount) {
+  session.send("SOUR1:FUNC DC;OFFS 0.5");
+  capture(2);
+
+  EXPECT_EQ(session.send("MEAS:STAT? FREQ,CHAN1"), "9.91E37,9.91E37,9.91E37,9.91E37,9.91E37,0");
+  EXPECT_EQ(session.next_error(), kNoSignalReply);
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+// A clipped 10 kHz sine gives a Clipped frequency, then a dropout flattens the next capture: the
+// current result is No signal, and the Clipped value counted before still warns.
+TEST_F(StatisticsTest, EarlierClippedValueWarnsBesideACurrentNoSignal) {
+  session.send("SOUR1:FREQ 10000;:CHAN1:SCAL 0.2");  // The 1 V peaks are clipped at 0.8 V.
+  capture(1);
+  session.send("SOUR1:FAUL DROP,0,1000");
+  capture(1);
+
+  const Statistics statistics = statistics_of(session.send("MEAS:STAT? FREQ,CHAN1"));
+  EXPECT_EQ(session.next_error(), kNoSignalReply);
+  EXPECT_EQ(session.next_error(), kClippedReply);
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+  EXPECT_EQ(statistics.current, 9.91e37);
+  EXPECT_THAT(statistics.mean, DoubleNear(10000.0, 1.0));
+  EXPECT_EQ(statistics.count, 1.0);
 }
 
 TEST_F(StatisticsTest, StatusEntriesLetTheRestOfTheLineRun) {
