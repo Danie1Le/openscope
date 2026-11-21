@@ -269,8 +269,7 @@ TEST_F(SettingsTest, TriggerStartsOnChannelOneRisingThroughZeroVoltsInAuto) {
 TEST_F(SettingsTest, TriggerSourceIsAnyChannelEnabledOrNot) {
   for (const std::string_view channel : {"CHAN2", "CHANNEL3", "chan4", "Channel1"}) {
     session.send("TRIG:SOUR " + std::string(channel));
-    EXPECT_EQ(session.send("TRIG:SOUR?"),
-              "CHAN" + std::string(channel.substr(channel.size() - 1)))
+    EXPECT_EQ(session.send("TRIG:SOUR?"), "CHAN" + std::string(channel.substr(channel.size() - 1)))
         << channel;
   }
   session.send("TRIG:SOUR CHAN3");
@@ -283,7 +282,8 @@ TEST_F(SettingsTest, TriggerSourceIsAnyChannelEnabledOrNot) {
 TEST_F(SettingsTest, TriggerSourceRejectsAnythingButAChannel) {
   session.send("TRIG:SOUR CHAN2");
 
-  for (const char* line : {"TRIG:SOUR CHAN5", "TRIG:SOUR CHAN0", "TRIG:SOUR SOUR1", "TRIG:SOUR EXT"}) {
+  for (const char* line :
+       {"TRIG:SOUR CHAN5", "TRIG:SOUR CHAN0", "TRIG:SOUR SOUR1", "TRIG:SOUR EXT"}) {
     session.send(line);
     EXPECT_EQ(session.next_error(), kIllegalParameterValueReply) << line;
   }
