@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -234,7 +235,24 @@ TEST_F(InstrumentTest, ErrorsAfterAnOverflowQueueBehindIt) {
 }
 
 TEST_F(InstrumentTest, ExecuteRejectsASessionItDidNotOpen) {
-  EXPECT_THROW(instrument.execute(SessionId{42}, "*IDN?"), std::out_of_range);
+  EXPECT_THROW(instrument.execute(SessionId{42}, "*IDN?", [](const auto&) {}), std::out_of_range);
+}
+
+TEST_F(InstrumentTest, ClosedSessionCanNoLongerExecute) {
+  ScpiSession closed{instrument};
+
+  closed.close();
+
+  EXPECT_THROW(closed.start("*IDN?"), std::out_of_range);
+  EXPECT_THROW(closed.close(), std::out_of_range);
+  EXPECT_EQ(session.next_error(), kNoErrorReply);  // Other Sessions carry on.
+}
+
+// A closed Session's id never comes round again: 2^32 connect/disconnect cycles must not wrap.
+static_assert(sizeof(SessionId) == sizeof(std::uint64_t));
+
+TEST_F(InstrumentTest, CloseRejectsASessionItDidNotOpen) {
+  EXPECT_THROW(instrument.close_session(SessionId{42}), std::out_of_range);
 }
 
 }  // namespace

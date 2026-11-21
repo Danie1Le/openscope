@@ -400,20 +400,41 @@ void CommandTree::add(Command command) {
   entries_.push_back(std::move(entry));
 }
 
-std::optional<std::string> CommandTree::execute(Session& session, std::string_view line) const {
+Execution CommandTree::execute(Session& session, std::string_view line) const {
+  Execution execution;
   std::optional<std::vector<ParsedCommand>> commands = parse_line(line);
   if (!commands) {
     session.push_error(kSyntaxError);
-    return std::nullopt;
+    return execution;
   }
+  execution.commands_ = std::move(*commands);
+  resume(session, execution);
+  return execution;
+}
 
-  std::optional<std::string> reply;
-  // SCPI-99 compound headers: a header without a leading ':' continues from the path of the
-  // previous command (all but its last node). Common commands leave the path alone.
-  std::vector<Mnemonic> current_path;
-  for (ParsedCommand& command : *commands) {
+void CommandTree::resume(Session& session, Execution& execution) const {
+  const auto add_reply = [&execution](std::optional<std::string> answer) {
+    if (!answer) {
+      return;
+    }
+    if (execution.reply_) {
+      execution.reply_->append(1, ';').append(*answer);
+    } else {
+      execution.reply_ = std::move(answer);
+    }
+  };
+  if (execution.hold_) {
+    add_reply(std::move(execution.hold_->reply));
+    execution.hold_.reset();
+    ++execution.next_;
+  }
+  std::vector<ParsedCommand>& commands = execution.commands_;
+  for (; execution.next_ < commands.size(); ++execution.next_) {
+    ParsedCommand& command = commands[execution.next_];
+    // SCPI-99 compound headers: a header without a leading ':' continues from the path of the
+    // previous command (all but its last node). Common commands leave the path alone.
     if (!command.common && !command.absolute) {
-      command.path.insert(command.path.begin(), current_path.begin(), current_path.end());
+      command.path.insert(command.path.begin(), execution.path_.begin(), execution.path_.end());
     }
     Arguments arguments;
     const auto entry = std::ranges::find_if(entries_, [&](const Entry& candidate) {
@@ -426,7 +447,7 @@ std::optional<std::string> CommandTree::execute(Session& session, std::string_vi
       break;
     }
     if (!command.common) {
-      current_path.assign(command.path.begin(), command.path.end() - 1);
+      execution.path_.assign(command.path.begin(), command.path.end() - 1);
     }
     if (std::optional<ScpiError> error = convert_all(entry->parameters, entry->required_parameters,
                                                      command.parameters, arguments.values)) {
@@ -434,19 +455,18 @@ std::optional<std::string> CommandTree::execute(Session& session, std::string_vi
       break;
     }
     HandlerResult result = entry->handler(session, arguments);
+    if (auto* hold = std::get_if<Hold>(&result)) {
+      execution.hold_ = std::move(*hold);
+      return;
+    }
     if (auto* error = std::get_if<ScpiError>(&result)) {
       session.push_error(std::move(*error));
       break;
     }
-    if (auto& answer = std::get<std::optional<std::string>>(result)) {
-      if (reply) {
-        reply->append(1, ';').append(*answer);
-      } else {
-        reply = std::move(answer);
-      }
-    }
+    add_reply(std::move(std::get<std::optional<std::string>>(result)));
   }
-  return reply;
+  // The line has ended; after an error this discards the rest of it.
+  execution.next_ = commands.size();
 }
 
 }  // namespace openscope::scpi

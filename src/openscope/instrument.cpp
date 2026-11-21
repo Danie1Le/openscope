@@ -14,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "openscope/capture.hpp"
 #include "openscope/channel.hpp"
@@ -23,6 +24,7 @@
 #include "openscope/generator.hpp"
 #include "openscope/measurement.hpp"
 #include "openscope/sample_block.hpp"
+#include "openscope/sample_clock.hpp"
 #include "openscope/scpi/command_tree.hpp"
 #include "openscope/scpi/response.hpp"
 #include "openscope/scpi_error.hpp"
@@ -103,6 +105,11 @@ std::array<Generator, kChannelCount> make_generators(std::uint64_t seed, double 
 /// from 0.
 std::size_t channel_of(const Arguments& arguments) { return arguments.suffixes.at(0) - 1; }
 
+/// Matches the held lines of `session`.
+auto of_session(SessionId session) {
+  return [session](const auto& held) { return held.session == session; };
+}
+
 /// The value of a command's parameter at `index`, the only one by default.
 template <typename Value>
 Value value_of(const Arguments& arguments, std::size_t index = 0) {
@@ -161,6 +168,7 @@ Instrument::Instrument(std::uint64_t seed)
                    const ScpiError error = caller.pop_error();
                    return std::format(R"({},"{}")", error.code, error.message);
                  }});
+  add_run_control_commands();
   add_generator_commands();
   add_channel_commands();
   add_acquisition_commands();
@@ -169,6 +177,29 @@ Instrument::Instrument(std::uint64_t seed)
   add_waveform_commands();
   add_fft_commands();
   add_measurement_commands();
+}
+
+void Instrument::add_run_control_commands() {
+  const auto enters = [this](RunState state) {
+    return [this, state](Session&, const Arguments&) -> scpi::HandlerResult {
+      enter(state);
+      return std::nullopt;
+    };
+  };
+  commands_.add({.header = "RUN", .parameters = {}, .handler = enters(RunState::kRunning)});
+  commands_.add({.header = "STOP", .parameters = {}, .handler = enters(RunState::kStopped)});
+  commands_.add({.header = "SINGle", .parameters = {}, .handler = enters(RunState::kArmedSingle)});
+  // While a Single is armed, the command holds its line and replies once resume_held resumes it.
+  const auto waits = [this](std::optional<std::string> reply) {
+    return [this, reply = std::move(reply)](Session&, const Arguments&) -> scpi::HandlerResult {
+      if (pending()) {
+        return scpi::Hold{.reply = reply};
+      }
+      return reply;
+    };
+  };
+  commands_.add({.header = "*OPC?", .parameters = {}, .handler = waits("1")});
+  commands_.add({.header = "*WAI", .parameters = {}, .handler = waits(std::nullopt)});
 }
 
 void Instrument::add_generator_commands() {
@@ -523,6 +554,7 @@ void Instrument::change_generator(const Arguments& arguments,
   GeneratorSettings settings = generator.settings();
   change(settings);
   generator.configure(settings, acquisition_.sample_rate, clock_.now());
+  captures_.discard();
 }
 
 void Instrument::change_channel(const Arguments& arguments,
@@ -553,6 +585,30 @@ void Instrument::reset() {
   // up by earlier settings past *RST, so the output would depend on the commands sent before it.
   generators_ = make_generators(seed_, acquisition_.sample_rate);
   captures_ = {};
+  run_state_ = RunState::kRunning;
+}
+
+void Instrument::enter(RunState state) {
+  run_state_ = state;
+  if (state != RunState::kRunning) {
+    captures_.discard();
+  }
+}
+
+void Instrument::resume_held() {
+  // Every line held when the operation ended carries on, even after an earlier one arms another
+  // Single: what each waited for is over. A line that waits again joins the next round, which
+  // runs at once if a resumed line has already ended that Single too (STOP).
+  while (!held_.empty() && !pending()) {
+    for (HeldLine& line : std::exchange(held_, {})) {
+      commands_.resume(sessions_.at(line.session), line.execution);
+      if (line.execution.held()) {
+        held_.push_back(std::move(line));
+      } else {
+        line.on_reply(line.execution.take_reply());
+      }
+    }
+  }
 }
 
 SessionId Instrument::open_session() {
@@ -561,22 +617,57 @@ SessionId Instrument::open_session() {
   return id;
 }
 
-std::optional<std::string> Instrument::execute(SessionId session, std::string_view line) {
+void Instrument::close_session(SessionId session) {
+  if (sessions_.erase(session) == 0) {
+    throw std::out_of_range("unknown Session");
+  }
+  std::erase_if(held_, of_session(session));
+}
+
+void Instrument::execute(SessionId session, std::string_view line, ReplyHandler on_reply) {
   Session& caller = sessions_.at(session);
+  if (std::ranges::any_of(held_, of_session(session))) {
+    throw std::logic_error("Session sent a line while its previous line is held");
+  }
   if (line.size() > kMaxLineLength) {
     caller.push_error(kInputBufferOverrun);
-    return std::nullopt;
+    on_reply(std::nullopt);
+    return;
   }
-  return commands_.execute(caller, line);
+  scpi::Execution execution = commands_.execute(caller, line);
+  if (execution.held()) {
+    held_.push_back(
+        {.session = session, .execution = std::move(execution), .on_reply = std::move(on_reply)});
+  } else {
+    on_reply(execution.take_reply());
+  }
+  resume_held();  // This line may have ended the operation (STOP, RUN, *RST).
 }
 
 void Instrument::advance(std::size_t samples) {
   while (samples > 0) {
-    const std::size_t count = std::min(samples, kMaxBlockLength);
-    const SampleBlock block =
-        sample_channels(generators_, channels_, trigger_.source, clock_.take(count), count);
-    captures_.push(block, acquisition_, channels_, trigger_);
+    std::size_t count = std::min(samples, kMaxBlockLength);
+    std::optional<std::size_t> single_end;
+    // Stopped samples nothing: Generators are pure functions of the sample index (ADR 0003), and
+    // the capture in progress was dropped when the instrument stopped.
+    if (run_state_ != RunState::kStopped) {
+      const SampleBlock block =
+          sample_channels(generators_, channels_, trigger_.source, clock_.now(), count);
+      single_end = captures_.push(block, acquisition_, channels_, trigger_,
+                                  pending() ? CaptureLimit::kFirst : CaptureLimit::kEvery);
+      // The Single's capture ends the operation at its last sample: the lines it resumes run with
+      // the clock there, and the next block starts there under whatever they changed, so how
+      // `advance` is chunked never changes a capture or a reply (ADR 0003).
+      if (single_end) {
+        count = *single_end;
+      }
+    }
+    clock_.take(count);
     samples -= count;
+    if (single_end) {
+      enter(RunState::kStopped);
+      resume_held();
+    }
   }
 }
 
