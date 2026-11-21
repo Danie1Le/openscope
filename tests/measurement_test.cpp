@@ -317,7 +317,8 @@ TEST_F(MeasurementTest, TwoSampleCaptureHasBothLevels) {
   session.send("ACQ:POIN 2;:SOUR1:FUNC SQU;FREQ 500KHZ");
   instrument.advance(2);
 
-  EXPECT_EQ(session.send("MEAS:VPP? CHAN1;VAV? CHAN1;VRMS? CHAN1"), "2;0;1");
+  EXPECT_EQ(session.send("MEAS:VPP? CHAN1;VMAX? CHAN1;VMIN? CHAN1;VAV? CHAN1;VRMS? CHAN1"),
+            "2;1;-1;0;1");
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 
