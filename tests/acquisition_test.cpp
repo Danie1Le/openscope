@@ -1,5 +1,5 @@
-// What the generator, channel, acquisition and timebase settings do to captures, driven through
-// SCPI with the sample clock stepped by hand.
+// What the generator, channel, acquisition, timebase and trigger settings do to captures, driven
+// through SCPI with the sample clock stepped by hand.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -209,9 +209,10 @@ TEST_F(AcquisitionTest, ACaptureKeepsTheVerticalSettingsItWasTakenWith) {
 
 // A capture takes its settings from its first sample, so a change part-way through one would mix
 // old and new settings: the capture in progress is dropped and the next starts at the change.
-TEST_F(AcquisitionTest, ChannelAndAcquisitionChangesRestartTheCaptureInProgress) {
+TEST_F(AcquisitionTest, ChannelAcquisitionAndTriggerChangesRestartTheCaptureInProgress) {
   for (const char* change : {"CHAN2:DISP ON", "CHAN1:DISP ON", "CHAN1:SCAL 2", "CHAN3:OFFS 1",
-                             "ACQ:SRAT 2E6", "ACQ:POIN 10000"}) {
+                             "ACQ:SRAT 2E6", "ACQ:POIN 10000", "TRIG:SOUR CHAN2", "TRIG:LEV 0",
+                             "TRIG:SLOP NEG", "TRIG:MODE AUTO", "TRIG:HOLD 1E-3", "TRIG:POS 50"}) {
     Instrument fresh;
     ScpiSession client{fresh};
     fresh.advance(5000);
