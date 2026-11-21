@@ -95,14 +95,17 @@ class Instrument {
   /// Applies new acquisition settings: Generators keep their phase across a sample-rate change and
   /// the capture in progress is discarded.
   void set_acquisition(const AcquisitionSettings& settings);
-  /// `*RST`: restores every instrument-wide setting and drops the latest capture. The sample clock
-  /// keeps counting and Sessions keep their own state (ADR 0002).
+  /// `*RST`: restores every instrument-wide setting, restarts every Generator as if it had run at
+  /// its defaults since sample index 0, and drops the latest capture. The sample clock keeps
+  /// counting and Sessions keep their own state (ADR 0002).
   void reset();
 
   scpi::CommandTree commands_;
   std::unordered_map<SessionId, Session> sessions_;
   std::uint32_t next_session_id_ = 0;
 
+  /// The seed every Generator's seed derives from, kept for `*RST`.
+  std::uint64_t seed_;
   SampleClock clock_;
   AcquisitionSettings acquisition_;
   std::array<ChannelSettings, kChannelCount> channels_;

@@ -60,7 +60,8 @@ Value value_of(const Arguments& arguments) {
 }  // namespace
 
 Instrument::Instrument(std::uint64_t seed)
-    : channels_(default_channels()),
+    : seed_(seed),
+      channels_(default_channels()),
       generators_(make_generators(seed, acquisition_.sample_rate,
                                   std::make_index_sequence<kChannelCount>{})) {
   commands_.add({.header = "*IDN?",
@@ -237,9 +238,10 @@ void Instrument::reset() {
   acquisition_ = {};
   channels_ = default_channels();
   timebase_scale_ = kDefaultTimebaseScale;
-  for (Generator& generator : generators_) {
-    generator.configure({}, acquisition_.sample_rate, clock_.now());
-  }
+  // Fresh Generators rather than reconfigured ones: phase continuity would carry the phase built
+  // up by earlier settings past *RST, so the output would depend on the commands sent before it.
+  generators_ = make_generators(seed_, acquisition_.sample_rate,
+                                std::make_index_sequence<kChannelCount>{});
   captures_ = {};
 }
 

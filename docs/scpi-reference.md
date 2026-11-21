@@ -112,7 +112,7 @@ The queue holds 20 entries. When it is full, the newest entry is replaced by `-3
 | Command | Reply | Notes |
 |---|---|---|
 | `*IDN?` | `OpenScope,OS-4,<serial>,<version>` | |
-| `*RST` | none | Restores every instrument-wide setting to its `*RST` value below and drops the latest capture and the capture in progress; leaves the error queue alone |
+| `*RST` | none | Restores every instrument-wide setting to its `*RST` value below, restarts every Generator from phase zero at sample index 0 (see Generators), and drops the latest capture and the capture in progress; leaves the error queue alone |
 | `*CLS` | none | Empties the calling Session's error queue |
 | `SYSTem:ERRor[:NEXT]?` | `<code>,"<message>"` | Removes and returns the oldest error |
 
@@ -140,9 +140,11 @@ Query replies write numbers in the shortest form that reads back as the same val
 
 ### Generators
 
-Generator n always feeds Channel n. Its output depends only on the instrument's seed, its settings and the sample index; time is the sample index divided by the sample rate (ADR 0003). The same seed and the same commands at the same sample indexes give bit-identical samples on every run.
+Generator n always feeds Channel n. Time is the sample index divided by the sample rate (ADR 0003). The same seed and the same commands at the same sample indexes give bit-identical samples on every run.
 
-A setting change takes effect at the next sample index. Frequency and sample-rate changes keep the phase continuous: the waveform carries on from where it was at the new rate, with no jump. Over one cycle, with A half the peak-to-peak amplitude and the offset added on top:
+A setting change takes effect at the next sample index. Frequency and sample-rate changes keep the phase continuous: the waveform carries on from where it was at the new rate, with no jump. So a Generator's output depends on the instrument's seed, the sample index and the settings sent since the last `*RST`, including the sample indexes they were sent at. `*RST` restarts every Generator as if it had run at its defaults since sample index 0, so the samples after `*RST` are the ones a freshly started instrument with the same seed produces at the same sample indexes.
+
+Over one cycle, with A half the peak-to-peak amplitude and the offset added on top:
 
 - `SINusoid`: A sin(2π phase), starting at zero and rising.
 - `SQUare`: +A for the first half of the cycle, -A for the second.
