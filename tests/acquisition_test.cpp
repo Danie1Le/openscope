@@ -184,7 +184,7 @@ TEST_F(AcquisitionTest, RecordLengthSetsTheSpanOfACapture) {
   EXPECT_EQ(captured(instrument, 1).samples.size(), 100U);
 }
 
-TEST_F(AcquisitionTest, OnePointCapturesCompleteOnEverySample) {
+TEST_F(AcquisitionTest, RecordLengthOfOneCompletesACaptureOnEverySample) {
   session.send("ACQ:POIN 1");
 
   instrument.advance(3);
