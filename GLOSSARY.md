@@ -56,6 +56,18 @@ _Avoid_: Chunk, packet, buffer
 A sample block lost because processing fell behind. Any capture that would span it is discarded, never published with a gap.
 _Avoid_: Lost samples, overrun (alone)
 
+**Live mode**:
+The instrument running in real time: an acquisition thread takes sample blocks as the pacer releases them and a processing thread assembles them into captures. In test mode, by contrast, a test steps the sample clock by hand.
+_Avoid_: Real-time mode, free-run
+
+**Pacer**:
+What releases sample indexes at wall-clock speed in live mode. It decides only when samples are taken; time on the instrument stays the sample index.
+_Avoid_: Timer, scheduler
+
+**Skipped samples**:
+Samples the pacer released that live mode never acquired, because acquisition fell more than one round behind the wall clock. No capture has a gap: the sample clock just runs behind the wall clock. Counted apart from dropped blocks.
+_Avoid_: Lost samples, dropped samples
+
 **Sample rate**:
 Samples per second on the sample clock, shared by all channels.
 
