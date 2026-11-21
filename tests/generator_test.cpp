@@ -497,7 +497,8 @@ TEST(GeneratorFaultTest, FinishedFaultsAreForgottenWithTheirPhaseKept) {
   ASSERT_TRUE(forgotten.inject(fault(FaultKind::kFrequencyStep, 250.0, 2, 4)));
   ASSERT_TRUE(kept.inject(fault(FaultKind::kFrequencyStep, 250.0, 2, 4)));
 
-  // Index 100 is long after both faults, so injecting there forgets them.
+  // Index 100 is long after the step ended, so injecting there forgets it and folds its phase
+  // into the anchor.
   ASSERT_TRUE(forgotten.inject(fault(FaultKind::kGlitch, 0.0, 1, 100)));
 
   EXPECT_EQ(samples(forgotten, 100, 12), samples(kept, 100, 12));
