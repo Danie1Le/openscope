@@ -1,5 +1,6 @@
 #include "openscope/scpi/command_tree.hpp"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -18,6 +19,8 @@
 
 namespace openscope::scpi {
 namespace {
+
+using testing::ElementsAre;
 
 /// One handler call the tree made.
 struct Call {
@@ -51,19 +54,21 @@ class CommandTreeTest : public testing::Test {
            std::nullopt, 2);
   }
 
+  /// Adds `header`, whose handler records its call and returns `result`.
   void record(std::string_view header, std::vector<ParameterSpec> parameters,
-              const std::optional<std::string>& reply = std::nullopt,
-              std::size_t optional_parameters = 0) {
+              const HandlerResult& result = std::nullopt, std::size_t optional_parameters = 0) {
     tree.add({.header = header,
               .parameters = std::move(parameters),
               .optional_parameters = optional_parameters,
-              .handler = [this, header, reply](Session&, const Arguments& arguments) {
+              .handler = [this, header, result](Session&, const Arguments& arguments) {
                 calls.push_back({.header = std::string(header), .arguments = arguments});
-                return reply;
+                return result;
               }});
   }
 
-  std::optional<std::string> send(std::string_view line) { return tree.execute(session, line); }
+  std::optional<std::string> send(std::string_view line) {
+    return tree.execute(session, line).reply();
+  }
 
   int next_error_code() { return session.pop_error().code; }
 
@@ -502,6 +507,81 @@ TEST_F(CommandTreeTest, EmptyOrBlankLineDoesNothing) {
     EXPECT_TRUE(calls.empty());
     EXPECT_EQ(next_error_code(), 0);
   }
+}
+
+/// A tree with `*HOLD?` and `TRIGger:HOLD`, which hold their line the way `*OPC?` and `*WAI` do
+/// while an operation is pending. `*HOLD?` replies `done` once its line is resumed.
+class HeldLineTest : public CommandTreeTest {
+ protected:
+  HeldLineTest() {
+    record("*HOLD?", {}, Hold{.reply = "done"});
+    record("TRIGger:HOLD", {}, Hold{});
+  }
+
+  /// The headers of the handler calls so far.
+  [[nodiscard]] std::vector<std::string> headers() const {
+    std::vector<std::string> called;
+    called.reserve(calls.size());
+    for (const Call& call : calls) {
+      called.push_back(call.header);
+    }
+    return called;
+  }
+};
+
+TEST_F(HeldLineTest, HoldStopsTheLineAfterTheCommandThatHeldIt) {
+  const Execution execution = tree.execute(session, "*TST?;*HOLD?;*TST?;:TRIG:MODE AUTO");
+
+  EXPECT_TRUE(execution.held());
+  EXPECT_EQ(execution.reply(), "0");
+  EXPECT_THAT(headers(), ElementsAre("*TST?", "*HOLD?"));
+  EXPECT_EQ(next_error_code(), 0);
+}
+
+// The holding command is not run again: what it waited for is over, even if it has begun again.
+TEST_F(HeldLineTest, ResumeAddsTheHoldReplyThenRunsTheRestOfTheLine) {
+  Execution execution = tree.execute(session, "*TST?;*HOLD?;*TST?;:TRIG:MODE AUTO");
+
+  tree.resume(session, execution);
+
+  EXPECT_FALSE(execution.held());
+  EXPECT_EQ(execution.reply(), "0;done;0");
+  EXPECT_THAT(headers(), ElementsAre("*TST?", "*HOLD?", "*TST?", "TRIGger:MODE"));
+  EXPECT_EQ(next_error_code(), 0);
+}
+
+TEST_F(HeldLineTest, LineMayHoldAgainWhenResumed) {
+  Execution execution = tree.execute(session, "*HOLD?;*HOLD?;*TST?");
+
+  tree.resume(session, execution);
+  EXPECT_TRUE(execution.held());
+  EXPECT_EQ(execution.reply(), "done");
+
+  tree.resume(session, execution);
+  EXPECT_FALSE(execution.held());
+  EXPECT_EQ(execution.reply(), "done;done;0");
+  EXPECT_THAT(headers(), ElementsAre("*HOLD?", "*HOLD?", "*TST?"));
+}
+
+TEST_F(HeldLineTest, ResumedLineKeepsItsPath) {
+  Execution execution = tree.execute(session, "TRIG:MODE AUTO;HOLD;SOUR CHAN2");
+
+  tree.resume(session, execution);
+
+  EXPECT_THAT(headers(), ElementsAre("TRIGger:MODE", "TRIGger:HOLD", "TRIGger:SOURce"));
+  EXPECT_EQ(execution.reply(), std::nullopt);
+  EXPECT_EQ(next_error_code(), 0);
+}
+
+TEST_F(HeldLineTest, ErrorAfterTheResumeDiscardsTheRestOfTheLine) {
+  Execution execution = tree.execute(session, "*TST?;*HOLD?;BOGUS;*TST?");
+
+  tree.resume(session, execution);
+
+  EXPECT_FALSE(execution.held());
+  EXPECT_EQ(execution.reply(), "0;done");
+  EXPECT_EQ(next_error_code(), kUndefinedHeader.code);
+  EXPECT_EQ(next_error_code(), 0);
 }
 
 std::optional<std::string> no_reply(Session& /*session*/, const Arguments& /*arguments*/) {
