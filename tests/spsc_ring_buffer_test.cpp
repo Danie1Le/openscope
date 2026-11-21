@@ -58,6 +58,38 @@ std::vector<std::uint64_t> consume(SpscRingBuffer<Stamped>& ring, const std::ato
   }
 }
 
+/// What a producer does with an item the full queue refuses.
+enum class Refused : std::uint8_t { kTryAgain, kGiveUp };
+
+/// What arrived at the consumer, and how many pushes the queue refused.
+struct Delivery {
+  std::vector<std::uint64_t> sequences;
+  std::uint64_t refused = 0;
+};
+
+/// Sends items 0 to kItems - 1 through `ring` from a producer thread while this thread consumes
+/// them, both at full speed.
+Delivery deliver(SpscRingBuffer<Stamped>& ring, Refused refused_item) {
+  std::atomic<bool> done = false;
+  std::uint64_t refused = 0;
+  std::thread producer([&] {
+    for (std::uint64_t sequence = 0; sequence < kItems; ++sequence) {
+      while (!ring.try_push(stamped(sequence))) {
+        ++refused;
+        if (refused_item == Refused::kGiveUp) {
+          break;
+        }
+        std::this_thread::yield();
+      }
+    }
+    done.store(true, std::memory_order_release);
+  });
+  Delivery delivery{.sequences = consume(ring, done), .refused = 0};
+  producer.join();
+  delivery.refused = refused;
+  return delivery;
+}
+
 TEST(SpscRingBufferTest, CapacityOfZeroIsRejected) {
   EXPECT_THROW(SpscRingBuffer<int>(0), std::invalid_argument);
 }
@@ -145,57 +177,34 @@ TEST(SpscRingBufferTest, KeepsOrderAcrossManyWrapsRound) {
 // order, and each refusal it saw is counted once.
 TEST(SpscRingBufferThreadsTest, EveryItemArrivesInOrderWhenTheProducerRetries) {
   SpscRingBuffer<Stamped> ring(8);
-  std::atomic<bool> done = false;
-  std::uint64_t refused = 0;
-  std::thread producer([&] {
-    for (std::uint64_t sequence = 0; sequence < kItems; ++sequence) {
-      while (!ring.try_push(stamped(sequence))) {
-        ++refused;
-        std::this_thread::yield();
-      }
-    }
-    done.store(true, std::memory_order_release);
-  });
 
-  const std::vector<std::uint64_t> sequences = consume(ring, done);
-  producer.join();
+  const Delivery delivery = deliver(ring, Refused::kTryAgain);
 
-  ASSERT_EQ(sequences.size(), kItems);
+  ASSERT_EQ(delivery.sequences.size(), kItems);
   for (std::uint64_t n = 0; n < kItems; ++n) {
-    ASSERT_EQ(sequences[n], n);
+    ASSERT_EQ(delivery.sequences[n], n);
   }
-  EXPECT_EQ(ring.dropped(), refused);
+  EXPECT_EQ(ring.dropped(), delivery.refused);
 }
 
 // A producer that never waits loses the items it finds no room for. The items that arrive keep
 // their order, and the gaps between them add up to exactly the drop count.
 TEST(SpscRingBufferThreadsTest, GapsInWhatArrivesAddUpToTheDropCount) {
   SpscRingBuffer<Stamped> ring(4);
-  std::atomic<bool> done = false;
-  std::uint64_t refused = 0;
-  std::thread producer([&] {
-    for (std::uint64_t sequence = 0; sequence < kItems; ++sequence) {
-      if (!ring.try_push(stamped(sequence))) {
-        ++refused;
-      }
-    }
-    done.store(true, std::memory_order_release);
-  });
 
-  const std::vector<std::uint64_t> sequences = consume(ring, done);
-  producer.join();
+  const Delivery delivery = deliver(ring, Refused::kGiveUp);
 
   std::uint64_t gaps = 0;
   std::uint64_t expected = 0;
-  for (const std::uint64_t sequence : sequences) {
+  for (const std::uint64_t sequence : delivery.sequences) {
     ASSERT_GE(sequence, expected) << "out of order";
     gaps += sequence - expected;
     expected = sequence + 1;
   }
   gaps += kItems - expected;  // Items dropped after the last one that arrived.
-  EXPECT_EQ(ring.dropped(), refused);
-  EXPECT_EQ(gaps, refused);
-  EXPECT_EQ(sequences.size() + refused, kItems);
+  EXPECT_EQ(ring.dropped(), delivery.refused);
+  EXPECT_EQ(gaps, delivery.refused);
+  EXPECT_EQ(delivery.sequences.size() + delivery.refused, kItems);
 }
 
 }  // namespace
