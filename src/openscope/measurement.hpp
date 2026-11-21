@@ -62,6 +62,8 @@ struct MeasuredSignal {
   std::span<const float> samples;
   /// The levels of those samples.
   SignalLevels levels;
+  /// Samples per second the capture was taken at, which turns sample counts into seconds.
+  double sample_rate;
 };
 
 /// One automatic measurement: the SCPI mnemonic it is queried by and how it is computed. The
@@ -85,10 +87,10 @@ std::span<const Measurement> measurements();
 /// Top minus base under this many vertical divisions is No signal.
 inline constexpr double kNoSignalDivisions = 0.2;
 
-/// `measurement` of `channel`, whose levels are `levels`, with its status: No signal first (for a
-/// measurement that needs a signal), then Too few cycles, then Clipped.
-MeasurementResult evaluate(const Measurement& measurement, const CapturedChannel& channel,
-                           const SignalLevels& levels);
+/// `measurement` of `signal`, taken by a channel with `settings`, with its status: No signal first
+/// (for a measurement that needs a signal), then Too few cycles, then Clipped.
+MeasurementResult evaluate(const Measurement& measurement, const ChannelSettings& settings,
+                           const MeasuredSignal& signal);
 
 /// The measurement engine: measures channels of a capture on demand and caches each result for as
 /// long as that capture is the one asked about, so repeated queries of the latest capture cost

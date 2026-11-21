@@ -4,12 +4,14 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <numeric>
 #include <optional>
 #include <ranges>
 #include <span>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 #include "openscope/capture.hpp"
@@ -179,6 +181,145 @@ double root_mean_square(std::span<const float> samples) {
   return std::sqrt(sum_of_squares / static_cast<double>(samples.size()));
 }
 
+/// The 10%, 50% and 90% points between base and top (GLOSSARY: Reference levels).
+struct ReferenceLevels {
+  double low;
+  double middle;
+  double high;
+};
+
+ReferenceLevels reference_levels(const SignalLevels& levels) {
+  const double span = levels.top - levels.base;
+  return {.low = levels.base + (0.1 * span),
+          .middle = levels.base + (0.5 * span),
+          .high = levels.base + (0.9 * span)};
+}
+
+/// One move of the signal from beyond one outer reference level (10% or 90%) to beyond the other.
+/// Its times are in sample periods.
+struct Edge {
+  enum class Direction : std::uint8_t { kRising, kFalling };
+  Direction direction;
+  /// When the edge last crossed the 50% level, from the first sample.
+  double middle;
+  /// How long the edge took from last leaving the outer level it started from (10% rising, 90%
+  /// falling) to reaching the other one.
+  double duration;
+};
+
+/// When `samples` last reached `level` going up (`sign` 1) or down (-1) at or before sample
+/// `reached`, which is past `level`, in sample periods from the first sample: linear interpolation
+/// between the last sample short of `level` and the next one. A sample short of `level` must come
+/// before `reached`.
+double crossing_before(std::span<const float> samples, std::size_t reached, double level,
+                       double sign) {
+  std::size_t before = reached;
+  while (sign * samples[before] >= sign * level) {
+    --before;
+  }
+  const double from = samples[before];
+  const double to = samples[before + 1];
+  return static_cast<double>(before) + ((level - from) / (to - from));
+}
+
+/// The edges of `signal`, in order, so rising and falling alternate. The 10% and 90% reference
+/// levels are a hysteresis band (#10): a rising edge is the signal going from under 10% to over
+/// 90%, a falling one the reverse, so noise or a glitch that crosses 50% without reaching the far
+/// level is no edge. Until the signal is first beyond either outer level, which side it came from
+/// is unknown, so the first move across the band is no edge.
+std::vector<Edge> find_edges(const MeasuredSignal& signal) {
+  const ReferenceLevels levels = reference_levels(signal.levels);
+  enum class Side : std::uint8_t { kUnknown, kLow, kHigh };
+  Side side = Side::kUnknown;
+  std::vector<Edge> edges;
+  for (std::size_t index = 0; index < signal.samples.size(); ++index) {
+    const double sample = signal.samples[index];
+    const Side now = sample < levels.low    ? Side::kLow
+                     : sample > levels.high ? Side::kHigh
+                                            : side;
+    if (now != side && side != Side::kUnknown) {
+      const bool rising = now == Side::kHigh;
+      const auto crossing = [&](double level) {
+        return crossing_before(signal.samples, index, level, rising ? 1.0 : -1.0);
+      };
+      edges.push_back(
+          {.direction = rising ? Edge::Direction::kRising : Edge::Direction::kFalling,
+           .middle = crossing(levels.middle),
+           .duration = crossing(rising ? levels.high : levels.low) -
+                       crossing(rising ? levels.low : levels.high)});
+    }
+    side = now;
+  }
+  return edges;
+}
+
+/// The whole cycles of a signal, each from one edge's 50% crossing to the next crossing in the same
+/// direction.
+struct WholeCycles {
+  /// The edges from the first one to the last that ends a whole cycle.
+  std::vector<Edge> edges;
+  /// How many whole cycles they bound.
+  double count;
+  /// Sample periods from the first edge's 50% crossing to the last one's.
+  double length;
+};
+
+/// The whole cycles in `signal`, or nullopt when there is not one.
+std::optional<WholeCycles> whole_cycles(const MeasuredSignal& signal) {
+  std::vector<Edge> edges = find_edges(signal);
+  if (edges.size() < 3) {
+    return std::nullopt;
+  }
+  edges.resize(edges.size() - ((edges.size() - 1) % 2));
+  const double length = edges.back().middle - edges.front().middle;
+  const auto count = static_cast<double>(edges.size() / 2);
+  return WholeCycles{.edges = std::move(edges), .count = count, .length = length};
+}
+
+/// The mean period of the whole cycles in `signal`, in seconds, or nullopt under one whole cycle.
+std::optional<double> period(const MeasuredSignal& signal) {
+  const std::optional<WholeCycles> cycles = whole_cycles(signal);
+  if (!cycles) {
+    return std::nullopt;
+  }
+  return cycles->length / cycles->count / signal.sample_rate;
+}
+
+/// The percentage of the whole cycles in `signal` spent above the 50% level, or nullopt under one
+/// whole cycle.
+std::optional<double> positive_duty_cycle(const MeasuredSignal& signal) {
+  const std::optional<WholeCycles> cycles = whole_cycles(signal);
+  if (!cycles) {
+    return std::nullopt;
+  }
+  const std::vector<Edge>& edges = cycles->edges;
+  double high = 0.0;
+  for (std::size_t edge = 0; edge + 1 < edges.size(); ++edge) {
+    if (edges[edge].direction == Edge::Direction::kRising) {
+      high += edges[edge + 1].middle - edges[edge].middle;
+    }
+  }
+  return 100.0 * high / cycles->length;
+}
+
+/// The mean time the edges in `kDirection` in `signal` take from one outer reference level to the
+/// other, in seconds, or nullopt when there is no such edge.
+template <Edge::Direction kDirection>
+std::optional<double> transition_time(const MeasuredSignal& signal) {
+  double total = 0.0;
+  std::size_t count = 0;
+  for (const Edge& edge : find_edges(signal)) {
+    if (edge.direction == kDirection) {
+      total += edge.duration;
+      ++count;
+    }
+  }
+  if (count == 0) {
+    return std::nullopt;
+  }
+  return total / static_cast<double>(count) / signal.sample_rate;
+}
+
 constexpr std::array kMeasurements{
     Measurement{.mnemonic = "VPP",
                 .measure = [](const MeasuredSignal& signal) -> std::optional<double> {
@@ -200,26 +341,39 @@ constexpr std::array kMeasurements{
                 .measure = [](const MeasuredSignal& signal) -> std::optional<double> {
                   return root_mean_square(signal.samples);
                 }},
+    Measurement{.mnemonic = "FREQuency",
+                .measure = [](const MeasuredSignal& signal) -> std::optional<double> {
+                  const std::optional<double> seconds = period(signal);
+                  return seconds ? std::optional(1.0 / *seconds) : std::nullopt;
+                },
+                .needs_signal = true},
+    Measurement{.mnemonic = "PERiod", .measure = period, .needs_signal = true},
+    Measurement{.mnemonic = "DUTYcycle", .measure = positive_duty_cycle, .needs_signal = true},
+    Measurement{.mnemonic = "RISetime",
+                .measure = transition_time<Edge::Direction::kRising>,
+                .needs_signal = true},
+    Measurement{.mnemonic = "FALLtime",
+                .measure = transition_time<Edge::Direction::kFalling>,
+                .needs_signal = true},
 };
 
 }  // namespace
 
 // No signal comes first, since a flat signal has no edges or cycles even when it is clipped flat
 // at a limit; Clipped only marks a value that exists.
-MeasurementResult evaluate(const Measurement& measurement, const CapturedChannel& channel,
-                           const SignalLevels& levels) {
-  if (measurement.needs_signal &&
-      levels.top - levels.base < kNoSignalDivisions * channel.settings.scale) {
+MeasurementResult evaluate(const Measurement& measurement, const ChannelSettings& settings,
+                           const MeasuredSignal& signal) {
+  const SignalLevels& levels = signal.levels;
+  if (measurement.needs_signal && levels.top - levels.base < kNoSignalDivisions * settings.scale) {
     return {.status = MeasurementStatus::kNoSignal, .value = std::nullopt};
   }
-  const std::optional<double> value =
-      measurement.measure({.samples = channel.samples, .levels = levels});
+  const std::optional<double> value = measurement.measure(signal);
   if (!value) {
     return {.status = MeasurementStatus::kTooFewCycles, .value = std::nullopt};
   }
   // Clipped samples are held at the limit, so a sample at the limit is one that hit it.
-  const bool clipped = levels.minimum <= channel.settings.lower_limit() ||
-                       levels.maximum >= channel.settings.upper_limit();
+  const bool clipped =
+      levels.minimum <= settings.lower_limit() || levels.maximum >= settings.upper_limit();
   return {.status = clipped ? MeasurementStatus::kClipped : MeasurementStatus::kOk, .value = value};
 }
 
@@ -246,7 +400,10 @@ MeasurementResult MeasurementEngine::measure(const std::shared_ptr<const Capture
   }
   std::optional<MeasurementResult>& result = cached->results.at(measurement);
   if (!result) {
-    result = evaluate(kMeasurements.at(measurement), *captured, cached->levels);
+    result = evaluate(kMeasurements.at(measurement), captured->settings,
+                      {.samples = captured->samples,
+                       .levels = cached->levels,
+                       .sample_rate = capture->sample_rate});
   }
   return *result;
 }
