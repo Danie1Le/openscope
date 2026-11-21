@@ -123,11 +123,18 @@ The two settled voltage levels of a signal, taken as the most common high and lo
 _Avoid_: High/low, max/min (they are not the same thing)
 
 **Reference levels**:
-The 10%, 50% and 90% points between base and top. Rise and fall times run from 10% to 90%; frequency and duty cycle use 50% crossings.
+The 10%, 50% and 90% points between base and top. Rise and fall times run from 10% to 90%; frequency and duty cycle use 50% crossings, of edges counted across 30% and 70%.
 _Avoid_: Thresholds
 
+**Edge**:
+A move of the signal from beyond one level of a hysteresis band to beyond the other: across the 10% and 90% reference levels for rise and fall time, across 30% and 70% for counting whole cycles. A move that crosses 50% and turns back before the far level is no edge. An edge is complete once it reaches the far level.
+_Avoid_: Transition, crossing (a crossing is one level, an edge is the whole move)
+
+**Doubtful cycle**:
+A move between two edges across 30% and 70% that crosses 40% and 60% and turns back, lasting at least an eighth of a cycle: it may be a cycle whose peak the samples missed, so frequency, period and duty cycle report Too few cycles.
+
 **Measurement status**:
-The verdict that travels with every measured value: OK, No signal, Clipped or Too few cycles. A value is never reported without one.
+The verdict that travels with every measured value: OK, No signal, Clipped or Too few cycles. A value is never reported without one. Too few cycles covers under one whole cycle, no complete edge, and whole cycles whose number is not known.
 _Avoid_: Error code, quality
 
 **Measurement statistics**:

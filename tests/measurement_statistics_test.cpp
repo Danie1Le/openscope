@@ -13,6 +13,7 @@
 #include <string_view>
 #include <vector>
 
+#include "measurement_fixture.hpp"
 #include "openscope/capture.hpp"
 #include "openscope/measurement.hpp"
 
@@ -83,6 +84,19 @@ TEST(MeasureAllTest, ResultsCarryTheirStatus) {
 
   EXPECT_EQ(result_of(results, 1, "VPP").status, MeasurementStatus::kClipped);
   EXPECT_EQ(result_of(results, 1, "VPP").value, 5.0);
+}
+
+// Timing measurements turn sample counts into seconds with the capture's sample rate.
+TEST(MeasureAllTest, TimingMeasurementsUseTheCapturesSampleRate) {
+  Capture capture;
+  capture.sample_rate = 1000.0;
+  capture.channels.at(0).emplace(CapturedChannel{.settings = {.enabled = true},
+                                                 .samples = test::pulse_train(100, 10, 5)});
+
+  const CaptureResults results = measure_all(capture);
+
+  EXPECT_EQ(result_of(results, 1, "FREQuency").status, MeasurementStatus::kOk);
+  EXPECT_DOUBLE_EQ(result_of(results, 1, "FREQuency").value.value_or(0.0), 100.0);
 }
 
 TEST(MeasurementStatisticsTest, StartsEmpty) {
