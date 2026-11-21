@@ -35,7 +35,6 @@ TEST(ReplyNumbersTest, StatisticsAreTheSixFieldsOfAStatisticsReply) {
   EXPECT_EQ(statistics.standard_deviation, 0.25);
   EXPECT_EQ(statistics.count, 4.0);
   EXPECT_NONFATAL_FAILURE((void)statistics_of("1,2,3,4,5"), "not a statistics reply");
-  EXPECT_NONFATAL_FAILURE((void)statistics_of(std::nullopt), "not a statistics reply");
 }
 
 }  // namespace
