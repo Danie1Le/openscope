@@ -247,6 +247,17 @@ TEST_F(StatisticsTest, NoCaptureYetIsStaleData) {
   EXPECT_EQ(session.next_error(), kDataStaleReply);
 }
 
+// MEAS:STAT:RES changes no setting, so the capture in progress is kept and counted.
+TEST_F(StatisticsTest, ResetKeepsTheCaptureInProgress) {
+  capture(1);
+  instrument.advance(kRecord / 2);
+
+  session.send("MEAS:STAT:RES");
+  instrument.advance(kRecord / 2);
+
+  EXPECT_EQ(count_of(session.send("MEAS:STAT? VPP,CHAN1")), 1.0);
+}
+
 TEST_F(StatisticsTest, ResetWithNothingCountedIsHarmless) {
   session.send("MEAS:STAT:RES;:MEASure:STATistics:RESet");
   capture(1);
