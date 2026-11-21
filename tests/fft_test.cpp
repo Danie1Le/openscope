@@ -132,9 +132,11 @@ struct ToneBin {
   std::size_t bin;
 };
 
+using ToneCase = std::tuple<MainLobe, ToneBin>;
+
 /// A 1 V peak sine centred on a bin of a spectrum under each window, at a small size and at the
 /// largest one (Capture::kMaxRecordLength, 2^20 points).
-class BinCentredToneTest : public testing::TestWithParam<std::tuple<MainLobe, ToneBin>> {
+class BinCentredToneTest : public testing::TestWithParam<ToneCase> {
  protected:
   MainLobe lobe = std::get<0>(GetParam());
   ToneBin tone = std::get<1>(GetParam());
@@ -171,7 +173,7 @@ INSTANTIATE_TEST_SUITE_P(
                                                              0.01168 / (2 * 0.35875)}}),
                      testing::Values(ToneBin{.length = 1024, .bin = 100},
                                      ToneBin{.length = std::size_t{1} << 20U, .bin = 100'000})),
-    [](const testing::TestParamInfo<std::tuple<MainLobe, ToneBin>>& info) {
+    [](const testing::TestParamInfo<ToneCase>& info) {
       constexpr std::array<std::string_view, 3> kWindowNames{"Rectangular", "Hann",
                                                              "BlackmanHarris"};
       const auto& [lobe, tone] = info.param;
