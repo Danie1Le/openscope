@@ -15,9 +15,14 @@
 namespace openscope {
 namespace {
 
+using test::kDataTypeErrorReply;
+using test::kIllegalParameterValueReply;
+using test::kMissingParameterReply;
+using test::kNoErrorReply;
+using test::kParameterNotAllowedReply;
+using test::kUndefinedHeaderReply;
 using test::ScpiSession;
 
-constexpr auto kNoErrorReply = R"(0,"No error")";
 constexpr auto kOutOfRangeReply = R"(-222,"Data out of range")";
 
 /// One numeric setting: its header, its *RST reply, and values just inside and just outside its
@@ -76,10 +81,10 @@ TEST_P(NumericSettingTest, RejectsAKeywordAMissingValueAndASecondValue) {
   session.send(set(std::string(GetParam().min) + "," + std::string(GetParam().min)));
   session.send(query() + " " + std::string(GetParam().min));
 
-  EXPECT_EQ(session.next_error(), R"(-104,"Data type error")");
-  EXPECT_EQ(session.next_error(), R"(-109,"Missing parameter")");
-  EXPECT_EQ(session.next_error(), R"(-108,"Parameter not allowed")");
-  EXPECT_EQ(session.next_error(), R"(-108,"Parameter not allowed")");
+  EXPECT_EQ(session.next_error(), kDataTypeErrorReply);
+  EXPECT_EQ(session.next_error(), kMissingParameterReply);
+  EXPECT_EQ(session.next_error(), kParameterNotAllowedReply);
+  EXPECT_EQ(session.next_error(), kParameterNotAllowedReply);
   EXPECT_EQ(session.send(query()), GetParam().reset_reply);
 }
 
@@ -185,8 +190,8 @@ TEST_F(SettingsTest, NodesWithoutASuffixRejectOne) {
   session.send("ACQ2:SRAT 5");
   session.send("TIM2:SCAL?");
 
-  EXPECT_EQ(session.next_error(), R"(-113,"Undefined header")");
-  EXPECT_EQ(session.next_error(), R"(-113,"Undefined header")");
+  EXPECT_EQ(session.next_error(), kUndefinedHeaderReply);
+  EXPECT_EQ(session.next_error(), kUndefinedHeaderReply);
 }
 
 TEST_F(SettingsTest, FunctionAcceptsEachShortAndLongFormAndRepliesTheShortForm) {
@@ -216,9 +221,9 @@ TEST_F(SettingsTest, FunctionRejectsOtherKeywordsAndNumbers) {
   session.send("SOUR1:FUNC SINU");
   session.send("SOUR1:FUNC 1");
 
-  EXPECT_EQ(session.next_error(), R"(-224,"Illegal parameter value")");
-  EXPECT_EQ(session.next_error(), R"(-224,"Illegal parameter value")");
-  EXPECT_EQ(session.next_error(), R"(-104,"Data type error")");
+  EXPECT_EQ(session.next_error(), kIllegalParameterValueReply);
+  EXPECT_EQ(session.next_error(), kIllegalParameterValueReply);
+  EXPECT_EQ(session.next_error(), kDataTypeErrorReply);
   EXPECT_EQ(session.send("SOUR1:FUNC?"), "SQU");
 }
 
@@ -233,7 +238,7 @@ TEST_F(SettingsTest, DisplayIsABoolean) {
   EXPECT_EQ(session.send("CHAN2:DISP?"), "0");
 
   session.send("CHAN2:DISP MAYBE");
-  EXPECT_EQ(session.next_error(), R"(-224,"Illegal parameter value")");
+  EXPECT_EQ(session.next_error(), kIllegalParameterValueReply);
   EXPECT_EQ(session.send("CHAN2:DISP?"), "0");
 }
 
