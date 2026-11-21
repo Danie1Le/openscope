@@ -1,6 +1,7 @@
 #include "openscope/live_pipeline.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
