@@ -23,7 +23,9 @@ struct AcquisitionSettings {
 
 /// One enabled channel's part of a capture, with the vertical settings its samples were taken at.
 struct CapturedChannel {
+  /// Volts per vertical division.
   double scale = 0.0;
+  /// The voltage at the centre of the input range.
   double offset = 0.0;
   /// One sample per sample index of the capture, in volts, already clipped.
   std::vector<float> samples;
@@ -33,7 +35,9 @@ struct CapturedChannel {
 struct Capture {
   /// The sample index of the first sample.
   SampleIndex first_index = 0;
+  /// Samples per second the capture was taken at.
   double sample_rate = 0.0;
+  /// Sample indexes in the capture: the length of every channel's samples.
   std::size_t record_length = 0;
   /// The sample of the capture where time zero sits: the trigger event, or for an untriggered
   /// capture the pre-trigger position. Until the trigger and its pre-trigger setting exist (#6)

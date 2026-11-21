@@ -28,8 +28,8 @@ std::array<ChannelSettings, kChannelCount> default_channels() {
   return channels;
 }
 
-/// One Generator per channel, each with its own seed derived from the instrument's, so no two
-/// channels (and no two instrument seeds) share noise.
+/// One Generator per channel, each with its own seed derived from the instrument's, so the four
+/// channels never share noise.
 template <std::size_t... N>
 std::array<Generator, kChannelCount> make_generators(std::uint64_t seed, double sample_rate,
                                                      std::index_sequence<N...> /*channels*/) {

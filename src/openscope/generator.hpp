@@ -12,6 +12,7 @@ enum class GeneratorFunction : std::uint8_t { kSine, kSquare, kTriangle, kRamp, 
 
 /// What a Generator is set to produce. The defaults are the `*RST` values.
 struct GeneratorSettings {
+  /// The shape of each cycle.
   GeneratorFunction function = GeneratorFunction::kSine;
   /// Cycles per second of the periodic functions.
   double frequency = 1e3;
@@ -34,6 +35,7 @@ class Generator {
   /// different seeds produce independent noise.
   Generator(std::uint64_t seed, double sample_rate);
 
+  /// What the Generator produces from the last configure call on.
   [[nodiscard]] const GeneratorSettings& settings() const { return settings_; }
 
   /// Applies `settings` at `sample_rate` from sample index `at` on. The phase at `at` stays what it
