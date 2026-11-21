@@ -16,6 +16,7 @@
 #include "binary_block.hpp"
 #include "decibels.hpp"
 #include "instrument_fixture.hpp"
+#include "openscope/capture.hpp"
 #include "openscope/fft.hpp"
 #include "scpi_session.hpp"
 
@@ -160,10 +161,11 @@ TEST_F(FftCommandsTest, ARecordLengthOfOneGivesOneDcBin) {
 }
 
 TEST_F(FftCommandsTest, TheLongestRecordLengthGivesHalfAMillionBins) {
-  session.send("ACQ:POIN 1048576;:TRIG:LEV 2;POS 0");
-  instrument.advance(1'048'576);
+  session.send(std::format("ACQ:POIN {};:TRIG:LEV 2;POS 0", Capture::kMaxRecordLength));
+  instrument.advance(Capture::kMaxRecordLength);
 
-  EXPECT_EQ(decode_float32_block(session.send("FFT:DATA?").value_or("")).size(), 524'289);
+  EXPECT_EQ(decode_float32_block(session.send("FFT:DATA?").value_or("")).size(),
+            (Capture::kMaxRecordLength / 2) + 1);
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 
