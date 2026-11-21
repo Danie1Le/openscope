@@ -541,12 +541,12 @@ INSTANTIATE_TEST_SUITE_P(EverySetting, SettingChangeTest,
                                          "TRIG:SOUR CHAN1", "TRIG:LEV 0", "TRIG:SLOP POS",
                                          "TRIG:MODE AUTO", "TRIG:HOLD 0", "TRIG:POS 0"));
 
-// ADR 0004: the timebase only zooms the display, and WAV settings belong to one Session. A Fault
-// is an event in the signal, which the capture is there to show.
+// ADR 0004: the timebase only zooms the display, and WAV and FFT settings belong to one Session.
+// A Fault is an event in the signal, which the capture is there to show.
 TEST_F(RunControlTest, DisplayAndSessionSettingsAndFaultsKeepTheCaptureInProgress) {
   instrument.advance(6000);
 
-  session.send("TIM:SCAL 1;:WAV:SOUR CHAN1;FORM REAL;:SOUR1:FAUL GLIT");
+  session.send("TIM:SCAL 1;:WAV:SOUR CHAN1;FORM REAL;:FFT:SOUR CHAN1;WIND RECT;:SOUR1:FAUL GLIT");
   instrument.advance(4000);
 
   EXPECT_EQ(session.next_error(), kNoErrorReply);
