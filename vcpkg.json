@@ -4,5 +4,14 @@
   "builtin-baseline": "9eec002df1cd109f8f104cd966a763daf9751489",
   "dependencies": [
     "gtest"
-  ]
+  ],
+  "features": {
+    "benchmarks": {
+      "description": "Google Benchmark, and KissFFT as the reference the FFT is measured against",
+      "dependencies": [
+        "benchmark",
+        "kissfft"
+      ]
+    }
+  }
 }

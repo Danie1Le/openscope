@@ -41,3 +41,12 @@ build/fuzz/fuzz/execute_line_fuzzer -max_total_time=600 -max_len=8192 -dict=fuzz
 ```
 
 New inputs go to `fuzz-corpus`, the first directory; `fuzz/corpus` holds the committed seeds. A crash leaves the input in a `crash-*` file; pass that file to the fuzzer to replay it.
+
+## Benchmarks
+
+The `benchmark` preset (Release) installs the vcpkg `benchmarks` feature (Google Benchmark, and KissFFT as a reference only) and builds `fft_benchmark`, which times our FFT against KissFFT from 4K to 1M points. CI runs it on every pull request and reports the numbers without gating on them. `docs/benchmarks.md` records measured results.
+
+```sh
+cmake --preset benchmark && cmake --build --preset benchmark
+build/benchmark/bench/fft_benchmark
+```
