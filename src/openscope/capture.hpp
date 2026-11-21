@@ -15,6 +15,9 @@ namespace openscope {
 
 /// The settings that alone define a capture (ADR 0004). The defaults are the `*RST` values.
 struct AcquisitionSettings {
+  /// The longest record length `ACQuire:POINts` accepts (2^20 samples).
+  static constexpr std::size_t kMaxRecordLength = std::size_t{1} << 20U;
+
   /// Samples per second on the sample clock (`ACQuire:SRATe`).
   double sample_rate = 1e6;
   /// Sample indexes per capture (`ACQuire:POINts`).
