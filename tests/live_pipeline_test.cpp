@@ -7,7 +7,6 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
-#include <functional>
 #include <future>
 #include <memory>
 #include <optional>
@@ -15,6 +14,7 @@
 #include <thread>
 #include <utility>
 
+#include "eventually.hpp"
 #include "instrument_fixture.hpp"
 #include "openscope/capture.hpp"
 #include "openscope/instrument.hpp"
@@ -25,25 +25,11 @@ namespace openscope {
 namespace {
 
 using std::chrono::steady_clock;
+using test::eventually;
+using test::kPatience;
 using test::kResetRecordLength;
 using testing::Each;
 using testing::Eq;
-
-/// How long a test waits for the live instrument before it fails: far longer than a capture
-/// takes, even under TSan on a loaded machine.
-constexpr std::chrono::seconds kPatience{20};
-
-/// Polls `done` until it holds; false if it still does not after kPatience.
-bool eventually(const std::function<bool()>& done) {
-  const steady_clock::time_point deadline = steady_clock::now() + kPatience;
-  while (!done()) {
-    if (steady_clock::now() > deadline) {
-      return false;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
-  return true;
-}
 
 /// Waits for a latest capture other than `seen` and returns it, or null after kPatience.
 std::shared_ptr<const Capture> next_capture(const Instrument& instrument,

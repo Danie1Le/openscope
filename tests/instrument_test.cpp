@@ -174,20 +174,14 @@ TEST_F(InstrumentTest, SyntaxErrorAnywhereOnALineRunsNothingOnIt) {
 
 TEST_F(InstrumentTest, LineOfExactlyTheMaximumLengthRuns) {
   session.send("BOGUS");
-  std::string line = "*CLS";
-  line.resize(Instrument::kMaxLineLength, ' ');
-
-  EXPECT_EQ(session.send(line), std::nullopt);
+  EXPECT_EQ(session.send(test::padded("*CLS", Instrument::kMaxLineLength)), std::nullopt);
 
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 
 TEST_F(InstrumentTest, LineOverTheMaximumLengthQueuesInputBufferOverrunAndRunsNothing) {
   session.send("BOGUS");
-  std::string line = "*CLS;*IDN?";
-  line.resize(Instrument::kMaxLineLength + 1, ' ');
-
-  EXPECT_EQ(session.send(line), std::nullopt);
+  EXPECT_EQ(session.send(test::padded("*CLS;*IDN?", Instrument::kMaxLineLength + 1)), std::nullopt);
 
   EXPECT_EQ(session.next_error(), kUndefinedHeaderReply);
   EXPECT_EQ(session.next_error(), kInputBufferOverrunReply);

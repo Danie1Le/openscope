@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <string>
@@ -28,6 +29,14 @@ inline constexpr auto kClippedReply = R"(-231,"Data questionable;Clipped")";
 inline constexpr auto kNoSignalReply = R"(-200,"Execution error;No signal")";
 inline constexpr auto kTooFewCyclesReply = R"(-200,"Execution error;Too few cycles")";
 inline constexpr auto kInputBufferOverrunReply = R"(-363,"Input buffer overrun")";
+
+/// `command` padded with trailing spaces to `length` bytes (white space before the terminator is
+/// allowed), so the line runs `command` if it is accepted: lines at and over the line limit.
+inline std::string padded(std::string_view command, std::size_t length) {
+  std::string line(command);
+  line.resize(length, ' ');
+  return line;
+}
 
 /// The reply to one line, as the Instrument delivers it.
 struct LineReply {

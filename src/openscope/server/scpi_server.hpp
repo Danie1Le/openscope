@@ -2,29 +2,18 @@
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/steady_timer.hpp>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <string>
 #include <vector>
 
 #include "openscope/instrument.hpp"
 #include "openscope/server/json_log.hpp"
+#include "openscope/server/server_options.hpp"
 
 namespace openscope {
-
-/// Where a ScpiServer listens and when it gives up on a silent client. The defaults are the
-/// engine's.
-struct ServerOptions {
-  /// The local address to listen on. Loopback by default, so the instrument is not reachable from
-  /// the network unless asked for (spec #1, story 81).
-  std::string address = "127.0.0.1";
-  /// The TCP port; 0 picks a free one (ScpiServer::port says which).
-  std::uint16_t port = 5025;
-  /// How long a Session may go without a command or a reply before its connection is closed.
-  std::chrono::milliseconds idle_timeout = std::chrono::minutes(5);
-};
 
 /// Serves SCPI over TCP, the way scripts (a raw socket, PyVISA) drive a bench instrument (#13).
 /// Each connection is one Session (ADR 0002). A line ends at `\n`, and an optional `\r` before it
@@ -34,8 +23,9 @@ struct ServerOptions {
 ///
 /// Limits keep one client from starving the rest: at most kMaxClients connections, a further
 /// one is closed as soon as it is accepted; a connection that goes ServerOptions::idle_timeout
-/// without a command or a reply is closed, except while it waits for a reply (a line held by
-/// `*OPC?` waits for as long as the Single takes). A client that disconnects ends its Session at
+/// without a command or a reply is closed, also when it never reads the reply being written, but
+/// not while the Instrument has not replied yet (a line held by `*OPC?` waits for as long as the
+/// Single takes). A client that disconnects ends its Session at
 /// once, dropping any line it has waiting. Connects, refusals, disconnects and errors go to the
 /// JsonLog.
 ///
@@ -68,6 +58,10 @@ class ScpiServer {
  private:
   class Connection;
 
+  /// How long accepting pauses after it fails.
+  static constexpr std::chrono::milliseconds kAcceptRetryDelay{100};
+
+  /// Accepts the next connection; after a failure, tries again after kAcceptRetryDelay.
   void accept();
   /// Serves `socket`, or closes it when kMaxClients connections are open already.
   void admit(boost::asio::ip::tcp::socket socket);
@@ -76,6 +70,7 @@ class ScpiServer {
   JsonLog* log_;
   std::chrono::milliseconds idle_timeout_;
   boost::asio::ip::tcp::acceptor acceptor_;
+  boost::asio::steady_timer accept_retry_;
   std::uint16_t port_;
   /// The connections accepted; closed ones are pruned when the next one arrives.
   std::vector<std::weak_ptr<Connection>> connections_;

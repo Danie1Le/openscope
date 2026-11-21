@@ -38,6 +38,9 @@ namespace {
 /// line is, so the Instrument rejects every line that is too long, and nothing more is needed.
 constexpr std::size_t kKeptLineLength = Instrument::kMaxLineLength + 2;
 
+/// What ends every reply.
+constexpr std::string_view kNewline = "\n";
+
 /// `host:port` of `endpoint`, as logs name a client.
 std::string describe(const tcp::endpoint& endpoint) {
   return std::format("{}:{}", endpoint.address().to_string(), endpoint.port());
@@ -45,7 +48,8 @@ std::string describe(const tcp::endpoint& endpoint) {
 
 }  // namespace
 
-/// One client: its socket, its Session and its idle timer. Lines run one at a time: the next is
+/// The transport of one client: its socket, the Session it owns and its idle timer (the Session
+/// is the state; this is only how it is reached). Lines run one at a time: the next is
 /// taken from the received bytes only once the one before has replied and the reply is written,
 /// so a client that sends faster than it reads is slowed by TCP instead of filling memory.
 class ScpiServer::Connection : public std::enable_shared_from_this<Connection> {
@@ -86,8 +90,22 @@ class ScpiServer::Connection : public std::enable_shared_from_this<Connection> {
   [[nodiscard]] bool closed() const { return closed_; }
 
  private:
+  /// Where the connection is with its current line.
+  enum class Stage : std::uint8_t {
+    /// Assembling the next line from the bytes received.
+    kAssembling,
+    /// The line is in the Instrument and has not replied: the idle timer is off.
+    kExecuting,
+    /// The reply is being written; the next line waits for it, but the idle timer runs.
+    kWriting,
+  };
+
   /// Reads more bytes unless a chunk's worth is already waiting. It keeps reading while a line
-  /// waits for its reply, so a disconnect is seen at once and ends the wait.
+  /// waits for its reply, so a disconnect ends the wait at once.
+  ///
+  /// shortcut: a client that sends a chunk's worth behind a held line and then disconnects is
+  /// seen only when the line ends (the Single completes, or `STOP`, `RUN` or `*RST` from any
+  /// client); peeking for the close without reading would need a platform-specific poll.
   void read() {
     if (reading_ || closed_ || received_.size() >= chunk_.size()) {
       return;
@@ -109,30 +127,35 @@ class ScpiServer::Connection : public std::enable_shared_from_this<Connection> {
   /// Unless a line is running, moves received bytes into the line being assembled and runs it
   /// once its `\n` has arrived. Then reads more.
   void run_next_line() {
-    if (!running_ && !closed_) {
-      const std::size_t newline = received_.find('\n');
-      const std::size_t taken = std::min(newline, received_.size());
-      line_.append(received_, 0, std::min(taken, kKeptLineLength - line_.size()));
-      received_.erase(0, newline == std::string::npos ? taken : taken + 1);
-      if (newline != std::string::npos) {
-        run(std::exchange(line_, {}));
-      }
+    if (stage_ != Stage::kAssembling || closed_) {
+      read();
+      return;
+    }
+    const std::size_t newline = received_.find('\n');
+    const std::size_t taken = std::min(newline, received_.size());
+    line_.append(received_, 0, std::min(taken, kKeptLineLength - line_.size()));
+    received_.erase(0, newline == std::string::npos ? taken : taken + 1);
+    if (newline != std::string::npos) {
+      run_line();
     }
     read();
   }
 
-  /// Executes `line` on the Session. Its reply may come later, from another thread (a line held
-  /// by `*OPC?`), so it is posted to this connection's executor and never waited for here.
-  void run(std::string line) {
+  /// Executes the assembled line on the Session. Its reply may come later, from another thread (a
+  /// line held by `*OPC?`), so it is posted to this connection's executor and never waited for.
+  void run_line() {
+    std::string_view line = line_;
     if (line.ends_with('\r')) {
-      line.pop_back();
+      line.remove_suffix(1);
     }
     if (line.size() > Instrument::kMaxLineLength) {
       log("error",
           {{"error", std::format("line longer than {} bytes", Instrument::kMaxLineLength)}});
     }
-    running_ = true;
-    idle_timer_.cancel();  // A Session waiting for a reply is not idle, however long it waits.
+    stage_ = Stage::kExecuting;
+    // A Session waiting for a reply is not idle, however long it waits. Moving the expiry out of
+    // reach also tells a wait that already finished that it is stale.
+    idle_timer_.expires_at(std::chrono::steady_clock::time_point::max());
     // The handler keeps the connection alive while the line runs, even with no I/O pending (a
     // full input buffer). A held line's handler is dropped when `close` ends the Session.
     server_->instrument_->execute(
@@ -142,6 +165,7 @@ class ScpiServer::Connection : public std::enable_shared_from_this<Connection> {
           asio::post(executor,
                      [self, reply = std::move(reply)]() mutable { self->reply(std::move(reply)); });
         });
+    line_.clear();
   }
 
   /// Writes the reply to the line that ran, if it has one, then runs the next line.
@@ -151,19 +175,20 @@ class ScpiServer::Connection : public std::enable_shared_from_this<Connection> {
     }
     arm_idle_timer();  // Idle from the reply on, which also bounds a write the client never reads.
     if (!text) {
-      running_ = false;
+      stage_ = Stage::kAssembling;
       run_next_line();
       return;
     }
     output_ = std::move(*text);
-    output_ += '\n';
-    asio::async_write(socket_, asio::buffer(output_),
+    stage_ = Stage::kWriting;
+    const std::array<asio::const_buffer, 2> buffers{asio::buffer(output_), asio::buffer(kNewline)};
+    asio::async_write(socket_, buffers,
                       [self = shared_from_this()](const error_code& error, std::size_t /*count*/) {
                         if (error) {
                           self->close(error.message());
                           return;
                         }
-                        self->running_ = false;
+                        self->stage_ = Stage::kAssembling;
                         self->run_next_line();
                       });
   }
@@ -172,10 +197,8 @@ class ScpiServer::Connection : public std::enable_shared_from_this<Connection> {
   void arm_idle_timer() {
     idle_timer_.expires_after(server_->idle_timeout_);
     idle_timer_.async_wait([self = shared_from_this()](const error_code& error) {
-      // A wait that had already finished when the timer was re-armed or cancelled still arrives
-      // without an error; the expiry and the running flag tell it is stale.
-      if (error || self->running_ ||
-          self->idle_timer_.expiry() > std::chrono::steady_clock::now()) {
+      // A wait that had already finished when the expiry moved still arrives without an error.
+      if (error || self->idle_timer_.expiry() > std::chrono::steady_clock::now()) {
         return;
       }
       self->close("idle timeout");
@@ -202,11 +225,10 @@ class ScpiServer::Connection : public std::enable_shared_from_this<Connection> {
   std::string received_;
   /// The line being assembled, cut at kKeptLineLength bytes.
   std::string line_;
-  /// The reply being written.
+  /// The reply being written, without its `\n`.
   std::string output_;
+  Stage stage_ = Stage::kAssembling;
   bool reading_ = false;
-  /// A line is executing or its reply is being written.
-  bool running_ = false;
   bool closed_ = false;
 };
 
@@ -216,6 +238,7 @@ ScpiServer::ScpiServer(asio::io_context& io, Instrument& instrument, const Serve
       log_(&log),
       idle_timeout_(options.idle_timeout),
       acceptor_(io, tcp::endpoint(asio::ip::make_address(options.address), options.port)),
+      accept_retry_(io),
       port_(acceptor_.local_endpoint().port()) {
   log_->write("listening", {{"address", options.address}, {"port", port_}});
   accept();
@@ -234,12 +257,19 @@ void ScpiServer::accept() {
     if (error == asio::error::operation_aborted) {
       return;
     }
-    if (error) {
-      log_->write("error", {{"error", error.message()}});
-    } else {
+    if (!error) {
       admit(std::move(socket));
+      accept();
+      return;
     }
-    accept();
+    // Such as running out of file descriptors: retrying at once would spin and flood the log.
+    log_->write("error", {{"error", error.message()}});
+    accept_retry_.expires_after(kAcceptRetryDelay);
+    accept_retry_.async_wait([this](const error_code& wait_error) {
+      if (!wait_error) {
+        accept();
+      }
+    });
   });
 }
 
@@ -249,16 +279,17 @@ void ScpiServer::admit(tcp::socket socket) {
     return open == nullptr || open->closed();
   });
   error_code error;
-  const tcp::endpoint peer = socket.remote_endpoint(error);
+  const tcp::endpoint endpoint = socket.remote_endpoint(error);
   if (error) {  // Gone before it was accepted.
     return;
   }
+  std::string peer = describe(endpoint);
   if (connections_.size() >= kMaxClients) {
-    log_->write("refuse", {{"peer", describe(peer)}, {"reason", "too many clients"}});
+    log_->write("refuse", {{"peer", peer}, {"reason", "too many clients"}});
     socket.close(error);
     return;
   }
-  auto connection = std::make_shared<Connection>(*this, std::move(socket), describe(peer));
+  auto connection = std::make_shared<Connection>(*this, std::move(socket), std::move(peer));
   connections_.push_back(connection);
   connection->start();
 }
