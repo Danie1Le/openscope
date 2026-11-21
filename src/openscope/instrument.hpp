@@ -85,8 +85,10 @@ class Instrument {
   void add_channel_number(std::string_view header, scpi::NumericParameter range,
                           double ChannelSettings::*field);
 
-  /// Gives Generator `index` (from 0) `settings` from the next sample index on.
-  void configure_generator(std::size_t index, const GeneratorSettings& settings);
+  /// Applies `change` to the settings of the Generator a `SOURce<n>` command names, from the next
+  /// sample index on.
+  void change_generator(const scpi::Arguments& arguments,
+                        const std::function<void(GeneratorSettings&)>& change);
   /// The channel a `CHANnel<n>` command names, for changing. The capture in progress is
   /// discarded, since a capture keeps the channel settings of the block that started it.
   ChannelSettings& channel_to_change(const scpi::Arguments& arguments);

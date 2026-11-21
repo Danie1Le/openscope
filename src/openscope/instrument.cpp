@@ -98,9 +98,10 @@ void Instrument::add_generator_commands() {
       "SOURce<1-4>:FUNCtion",
       scpi::KeywordParameter{.choices = {kFunctionKeywords.begin(), kFunctionKeywords.end()}},
       [this](Session&, const Arguments& arguments) {
-        GeneratorSettings settings = generators_.at(channel_of(arguments)).settings();
-        settings.function = static_cast<GeneratorFunction>(value_of<scpi::Choice>(arguments).index);
-        configure_generator(channel_of(arguments), settings);
+        change_generator(arguments, [&](GeneratorSettings& settings) {
+          settings.function =
+              static_cast<GeneratorFunction>(value_of<scpi::Choice>(arguments).index);
+        });
       },
       [this](Session&, const Arguments& arguments) {
         const GeneratorFunction function =
@@ -190,9 +191,9 @@ void Instrument::add_generator_number(std::string_view header, NumericParameter 
   add_setting(
       header, std::move(range),
       [this, field](Session&, const Arguments& arguments) {
-        GeneratorSettings settings = generators_.at(channel_of(arguments)).settings();
-        settings.*field = value_of<double>(arguments);
-        configure_generator(channel_of(arguments), settings);
+        change_generator(arguments, [&](GeneratorSettings& settings) {
+          settings.*field = value_of<double>(arguments);
+        });
       },
       [this, field](Session&, const Arguments& arguments) {
         return scpi::format_real(generators_.at(channel_of(arguments)).settings().*field);
@@ -211,8 +212,12 @@ void Instrument::add_channel_number(std::string_view header, NumericParameter ra
       });
 }
 
-void Instrument::configure_generator(std::size_t index, const GeneratorSettings& settings) {
-  generators_.at(index).configure(settings, acquisition_.sample_rate, clock_.now());
+void Instrument::change_generator(const Arguments& arguments,
+                                  const std::function<void(GeneratorSettings&)>& change) {
+  Generator& generator = generators_.at(channel_of(arguments));
+  GeneratorSettings settings = generator.settings();
+  change(settings);
+  generator.configure(settings, acquisition_.sample_rate, clock_.now());
 }
 
 ChannelSettings& Instrument::channel_to_change(const Arguments& arguments) {
@@ -229,12 +234,12 @@ void Instrument::set_acquisition(const AcquisitionSettings& settings) {
 }
 
 void Instrument::reset() {
-  set_acquisition({});
-  for (std::size_t index = 0; index < kChannelCount; ++index) {
-    configure_generator(index, {});
-  }
+  acquisition_ = {};
   channels_ = default_channels();
   timebase_scale_ = kDefaultTimebaseScale;
+  for (Generator& generator : generators_) {
+    generator.configure({}, acquisition_.sample_rate, clock_.now());
+  }
   captures_ = {};
 }
 

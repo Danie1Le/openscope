@@ -5,7 +5,6 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
-#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -19,13 +18,12 @@ namespace openscope {
 namespace {
 
 using test::captured;
+using test::kResetRecordLength;
 using test::ScpiSession;
 using testing::Each;
 using testing::ElementsAre;
 using testing::Eq;
 using testing::FloatNear;
-
-constexpr std::size_t kRecordLength = 10'000;  // *RST
 
 class AcquisitionTest : public test::InstrumentFixture {
  protected:
@@ -41,7 +39,7 @@ TEST_F(AcquisitionTest, ChannelNIsFedByGeneratorN) {
   session.send("SOUR1:FUNC DC;OFFS 0.5;:SOUR2:FUNC DC;OFFS 1;:SOUR3:FUNC DC;OFFS 1.5");
   session.send("SOUR4:FUNC DC;OFFS 2");
 
-  instrument.advance(kRecordLength);
+  instrument.advance(kResetRecordLength);
 
   EXPECT_THAT(captured(instrument, 1).samples, Each(Eq(0.5F)));
   EXPECT_THAT(captured(instrument, 2).samples, Each(Eq(1.0F)));
@@ -113,7 +111,7 @@ TEST_F(AcquisitionTest, SamplesOutsideTheInputRangeAreClippedToItsLimits) {
   // 0.25 V/div around 0.5 V: the input range is -0.5 V to 1.5 V, and the 1 V sine dips below it.
   session.send("CHAN1:SCAL 0.25;OFFS 0.5");
 
-  instrument.advance(kRecordLength);
+  instrument.advance(kResetRecordLength);
 
   const std::vector<float> samples = captured(instrument, 1).samples;
   const auto [low, high] = std::ranges::minmax(samples);
@@ -125,7 +123,7 @@ TEST_F(AcquisitionTest, SamplesOutsideTheInputRangeAreClippedToItsLimits) {
 TEST_F(AcquisitionTest, SamplesAboveTheInputRangeAreClippedToItsUpperLimit) {
   session.send("CHAN1:SCAL 0.25;OFFS -0.5");  // -1.5 V to 0.5 V.
 
-  instrument.advance(kRecordLength);
+  instrument.advance(kResetRecordLength);
 
   const auto [low, high] = std::ranges::minmax(captured(instrument, 1).samples);
   EXPECT_EQ(low, -1.0F);
@@ -135,7 +133,7 @@ TEST_F(AcquisitionTest, SamplesAboveTheInputRangeAreClippedToItsUpperLimit) {
 TEST_F(AcquisitionTest, SampleExactlyAtTheLimitIsKeptAndOneBeyondIsHeldThere) {
   session.send("SOUR1:FUNC DC;OFFS 4;:SOUR2:FUNC DC;OFFS -4.5;:CHAN2:DISP ON");
 
-  instrument.advance(kRecordLength);
+  instrument.advance(kResetRecordLength);
 
   EXPECT_THAT(captured(instrument, 1).samples, Each(Eq(4.0F)));
   EXPECT_THAT(captured(instrument, 2).samples, Each(Eq(-4.0F)));
@@ -144,7 +142,7 @@ TEST_F(AcquisitionTest, SampleExactlyAtTheLimitIsKeptAndOneBeyondIsHeldThere) {
 TEST_F(AcquisitionTest, NoiseIsClippedLikeTheSignal) {
   session.send("SOUR1:FUNC DC;NOIS 1;:CHAN1:SCAL 0.1");
 
-  instrument.advance(kRecordLength);
+  instrument.advance(kResetRecordLength);
 
   const auto [low, high] = std::ranges::minmax(captured(instrument, 1).samples);
   EXPECT_EQ(low, -0.4F);
@@ -154,20 +152,20 @@ TEST_F(AcquisitionTest, NoiseIsClippedLikeTheSignal) {
 TEST_F(AcquisitionTest, OnlyEnabledChannelsAreKeptInACapture) {
   session.send("CHAN1:DISP OFF;:CHAN3:DISP ON");
 
-  instrument.advance(kRecordLength);
+  instrument.advance(kResetRecordLength);
 
   const std::shared_ptr<const Capture> capture = instrument.latest_capture();
   ASSERT_NE(capture, nullptr);
   EXPECT_FALSE(capture->channels[0].has_value());
   EXPECT_FALSE(capture->channels[1].has_value());
-  EXPECT_EQ(captured(instrument, 3).samples.size(), kRecordLength);
+  EXPECT_EQ(captured(instrument, 3).samples.size(), kResetRecordLength);
   EXPECT_FALSE(capture->channels[3].has_value());
 }
 
 TEST_F(AcquisitionTest, WithNoChannelEnabledCapturesStillCompleteButHoldNoSamples) {
   session.send("CHAN1:DISP OFF");
 
-  instrument.advance(kRecordLength);
+  instrument.advance(kResetRecordLength);
 
   const std::shared_ptr<const Capture> capture = instrument.latest_capture();
   ASSERT_NE(capture, nullptr);
@@ -197,7 +195,7 @@ TEST_F(AcquisitionTest, OnePointCapturesCompleteOnEverySample) {
 
 TEST_F(AcquisitionTest, ACaptureKeepsTheVerticalSettingsItWasTakenWith) {
   session.send("CHAN1:SCAL 2;OFFS 0.5");
-  instrument.advance(kRecordLength);
+  instrument.advance(kResetRecordLength);
 
   session.send("CHAN1:SCAL 3;OFFS 1");
 
@@ -215,7 +213,7 @@ TEST_F(AcquisitionTest, ChannelAndAcquisitionChangesRestartTheCaptureInProgress)
     fresh.advance(5000);
 
     client.send(change);
-    fresh.advance(kRecordLength - 1);
+    fresh.advance(kResetRecordLength - 1);
     EXPECT_EQ(fresh.latest_capture(), nullptr) << change;
 
     fresh.advance(1);
@@ -228,10 +226,10 @@ TEST_F(AcquisitionTest, EnablingAChannelMidCaptureAddsItToTheNextCapture) {
   instrument.advance(5000);
 
   session.send("CHAN2:DISP ON");
-  instrument.advance(kRecordLength);
+  instrument.advance(kResetRecordLength);
 
-  EXPECT_EQ(captured(instrument, 1).samples.size(), kRecordLength);
-  EXPECT_EQ(captured(instrument, 2).samples.size(), kRecordLength);
+  EXPECT_EQ(captured(instrument, 1).samples.size(), kResetRecordLength);
+  EXPECT_EQ(captured(instrument, 2).samples.size(), kResetRecordLength);
 }
 
 TEST_F(AcquisitionTest, GeneratorAndTimebaseChangesKeepTheCaptureInProgress) {
@@ -257,15 +255,15 @@ TEST_F(AcquisitionTest, RejectedChangesKeepTheCaptureInProgress) {
 // ADR 0004: the timebase is a display viewport.
 TEST_F(AcquisitionTest, TimebaseNeverChangesWhatIsCaptured) {
   session.send("TIM:SCAL 1E-9");
-  instrument.advance(kRecordLength);
+  instrument.advance(kResetRecordLength);
   const std::vector<float> fine = captured(instrument, 1).samples;
 
   Instrument other;
   ScpiSession client{other};
   client.send("TIM:SCAL 100");
-  other.advance(kRecordLength);
+  other.advance(kResetRecordLength);
 
-  EXPECT_EQ(other.latest_capture()->record_length, kRecordLength);
+  EXPECT_EQ(other.latest_capture()->record_length, kResetRecordLength);
   EXPECT_EQ(other.latest_capture()->sample_rate, 1e6);
   EXPECT_EQ(captured(other, 1).samples, fine);
 }
@@ -277,7 +275,7 @@ TEST_F(AcquisitionTest, RstDropsTheLatestCaptureAndTheCaptureInProgress) {
   session.send("*RST");
 
   EXPECT_EQ(instrument.latest_capture(), nullptr);
-  instrument.advance(kRecordLength - 1);
+  instrument.advance(kResetRecordLength - 1);
   EXPECT_EQ(instrument.latest_capture(), nullptr);
   instrument.advance(1);
   EXPECT_EQ(latest_first_index(), 150);
@@ -288,7 +286,7 @@ TEST_F(AcquisitionTest, RstRestoresTheDefaultSignalWithoutAPhaseJump) {
   instrument.advance(252);  // 63 whole cycles of 1 kHz at 4 kSa/s: the phase is back at 0.
 
   session.send("*RST");
-  instrument.advance(kRecordLength);
+  instrument.advance(kResetRecordLength);
 
   const std::vector<float> samples = captured(instrument, 1).samples;
   EXPECT_THAT(samples[0], FloatNear(0.0F, 1e-6F));
