@@ -7,6 +7,7 @@ Measured numbers for the performance claims in the spec. CI runs the same benchm
 ```sh
 CC=gcc-14 CXX=g++-14 cmake --preset benchmark && cmake --build --preset benchmark
 build/benchmark/bench/fft_benchmark --benchmark_repetitions=10 --benchmark_enable_random_interleaving=true --benchmark_report_aggregates_only=true
+build/benchmark/bench/ring_buffer_benchmark --benchmark_repetitions=10 --benchmark_enable_random_interleaving=true --benchmark_report_aggregates_only=true
 ```
 
 The `benchmark` preset is a Release build with the vcpkg `benchmarks` feature, which adds Google Benchmark. KissFFT is a reference for comparison only; OpenScope never links it outside `bench/`.
@@ -58,3 +59,19 @@ Not measured, so only hypotheses: that KissFFT's radix-4 butterflies need fewer 
 ### Against NFR-4
 
 The whole `FFT:DATA?` spectrum on a 1M-sample capture took 126 ms (median of 10 repetitions; no p95 was measured), well above the 20 ms p95 target NFR-4 sets for measurement queries. KissFFT's transform alone took 98 ms at that size, so swapping the transform would not reach the target. What would bring it closer has not been measured: ideas are a real-input FFT (half the work), twiddles and window cached per record length, and less memory traffic. Nobody has tried them yet.
+
+## SPSC ring buffer throughput
+
+`bench/ring_buffer_benchmark.cpp` passes `std::uint64_t` items from a producer thread to a consumer thread through the ring buffer the live pipeline uses (`openscope::SpscRingBuffer`), with queues of 16, 256 and 4096 slots. The producer tries again whenever it finds the queue full, so the rate is the sustained hand-over rate between two cores; `full_per_item` is how many of those retries there were per item.
+
+Measured 2026-11-21 on the machine above (Intel Core i7-9700F, `openscope-dev:24.04` on Docker Desktop, g++-14 `-O3 -DNDEBUG`), shared with other builds and tests. Median of 10 repetitions with random interleaving, wall time per item:
+
+| Queue slots | Time per item | Items per second | `full_per_item` | CV of the rate |
+|---|---|---|---|---|
+| 16 | 34 ns | 29 M/s | 0.52 | 9 % |
+| 256 | 28 ns | 36 M/s | 0.28 | 9 % |
+| 4096 | 21 ns | 48 M/s | 0.12 | 5 % |
+
+What the table shows: a hand-over took 21 to 34 ns, and fewer pushes found the queue full as it grew. The live pipeline is meant to hand over one sample block per millisecond at 1 MS/s, about 1000 blocks per second, so the queue is tens of thousands of times faster than it needs to be: the cost of a block is generating and assembling its samples, not passing it on.
+
+Not measured, so only a hypothesis: that most of each hand-over is the two cores passing the indexes' and the slot's cache lines back and forth.
