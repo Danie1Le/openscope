@@ -740,7 +740,7 @@ void Instrument::advance(std::size_t samples) {
     }
     clock_.take(count);
     samples -= count;
-    if (single_end) {
+    if (block && single_end) {
       conclude(*block);
     }
   }
