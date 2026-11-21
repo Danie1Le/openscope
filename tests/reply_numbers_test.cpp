@@ -25,5 +25,18 @@ TEST(ReplyNumbersTest, AnythingButNumbersFailsTheTest) {
   EXPECT_NONFATAL_FAILURE(EXPECT_TRUE(std::isnan(number("1,2"))), "not one number");
 }
 
+TEST(ReplyNumbersTest, StatisticsAreTheSixFieldsOfAStatisticsReply) {
+  const Statistics statistics = statistics_of("1,2,0.5,3,0.25,4");
+
+  EXPECT_EQ(statistics.current, 1.0);
+  EXPECT_EQ(statistics.mean, 2.0);
+  EXPECT_EQ(statistics.minimum, 0.5);
+  EXPECT_EQ(statistics.maximum, 3.0);
+  EXPECT_EQ(statistics.standard_deviation, 0.25);
+  EXPECT_EQ(statistics.count, 4.0);
+  EXPECT_NONFATAL_FAILURE((void)statistics_of("1,2,3,4,5"), "not a statistics reply");
+  EXPECT_NONFATAL_FAILURE((void)statistics_of(std::nullopt), "not a statistics reply");
+}
+
 }  // namespace
 }  // namespace openscope::test

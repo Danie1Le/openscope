@@ -461,26 +461,26 @@ void Instrument::add_statistics_commands() {
          }
          const std::size_t measurement = value_of<scpi::Choice>(arguments, 0).index;
          const std::size_t channel = value_of<scpi::Choice>(arguments, 1).suffix;
-         // The statistics, not the latest capture: in live mode a capture is counted before it is
-         // published. A channel change resets them, so every capture they hold has its channels.
-         if (!statistics_.holds(channel)) {
-           return kSettingsConflict;
-         }
-         const MeasurementSeries& series = statistics_.at(channel, measurement);
-         report_status(caller, series.current.status);
-         // A Clipped value counted earlier makes the statistics questionable too.
-         if (series.clipped && series.current.status != MeasurementStatus::kClipped) {
-           caller.push_error(kClipped);
-         }
-         const RunningStatistics& values = series.values;
-         // With nothing counted, the statistics have no value.
-         const auto statistic = [counted = values.count() > 0](double value) {
-           return value_reply(counted ? std::optional(value) : std::nullopt);
-         };
-         return std::format("{},{},{},{},{},{}", value_reply(series.current.value),
-                            statistic(values.mean()), statistic(values.minimum()),
-                            statistic(values.maximum()), statistic(values.standard_deviation()),
-                            values.count());
+         // Every capture is counted as it is published, under this handler's mutex, so the latest
+         // capture is the most recent one they hold and has the channels of every capture they
+         // hold (a channel change resets them).
+         return reply_with_source(channel, [&](const Capture&, const CapturedChannel&) {
+           const MeasurementSeries& series = statistics_.at(channel, measurement);
+           report_status(caller, series.current.status);
+           // A Clipped value counted earlier makes the statistics questionable too.
+           if (series.clipped && series.current.status != MeasurementStatus::kClipped) {
+             caller.push_error(kClipped);
+           }
+           const RunningStatistics& values = series.values;
+           // With nothing counted, the statistics have no value.
+           const auto statistic = [counted = values.count() > 0](double value) {
+             return value_reply(counted ? std::optional(value) : std::nullopt);
+           };
+           return std::format("{},{},{},{},{},{}", value_reply(series.current.value),
+                              statistic(values.mean()), statistic(values.minimum()),
+                              statistic(values.maximum()), statistic(values.standard_deviation()),
+                              values.count());
+         });
        }});
   commands_.add({.header = "MEASure:STATistics:RESet",
                  .parameters = {},
@@ -731,8 +731,9 @@ void Instrument::advance(std::size_t samples) {
     if (block) {
       // Every capture counts, not only the last of the block, so the statistics do not depend on
       // how `advance` is chunked; and before held lines resume, so they see the Single's capture.
-      pushed = assemble(*block,
-                        [this](const Capture& capture) { statistics_.add(measure_all(capture)); });
+      pushed = assemble(*block, [this](const std::shared_ptr<const Capture>& capture) {
+        statistics_.add(measure_all(*capture));
+      });
       // The Single's capture ends the operation at its last sample: the lines it resumes run with
       // the clock there, and the next block starts there under whatever they changed, so how
       // `advance` is chunked never changes a capture or a reply (ADR 0003).
@@ -768,14 +769,16 @@ std::optional<AcquiredBlock> Instrument::acquire(std::size_t count) {
 }
 
 void Instrument::process(const AcquiredBlock& block) {
-  // Each capture is measured as it completes, without the mutex, and counted only while no command
-  // has discarded its generation, the rule conclude publishes by: the statistics never hold a
-  // capture of settings older than a command that has returned.
-  const CaptureSink count = [this, &block](const Capture& capture) {
-    const CaptureResults results = measure_all(capture);
+  // Each capture is measured as it completes, without the mutex, then counted and published under
+  // one hold of it, only while no command has discarded its generation (the rule conclude
+  // publishes by): the statistics never hold a capture of settings older than a command that has
+  // returned, and their current result is always the latest capture's.
+  const CaptureSink count = [this, &block](const std::shared_ptr<const Capture>& capture) {
+    const CaptureResults results = measure_all(*capture);
     const std::scoped_lock lock(mutex_);
     if (block.generation == generation_) {
       statistics_.add(results);
+      latest_.store(capture);
     }
   };
   const Pushed pushed = assemble(block, count);
