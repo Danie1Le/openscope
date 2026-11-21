@@ -51,8 +51,9 @@ class FftCommandsTest : public test::InstrumentFixture {
   /// returns the spectrum of the `FFT:SOUR` channel that `FFT:DATA?` replies under `window`. The
   /// trigger level is out of the sine's reach, so Auto completes the capture one record length in.
   std::vector<float> spectrum_of_sine(std::string_view frequency, std::string_view window) {
-    session.send(std::format("ACQ:SRAT 1.024E6;POIN {};:TRIG:LEV 2;POS 0;:SOUR1:FREQ {};:FFT:WIND {}",
-                             kRecordLength, frequency, window));
+    session.send(
+        std::format("ACQ:SRAT 1.024E6;POIN {};:TRIG:LEV 2;POS 0;:SOUR1:FREQ {};:FFT:WIND {}",
+                    kRecordLength, frequency, window));
     instrument.advance(kRecordLength);
     return decode_float32_block(session.send("FFT:DATA?").value_or(""));
   }
