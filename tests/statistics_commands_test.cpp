@@ -36,9 +36,9 @@ using test::kParameterNotAllowedReply;
 using test::kSettingsConflictReply;
 using test::kUndefinedHeaderReply;
 using test::kUntriggeredCaptures;
+using test::ScpiSession;
 using test::Statistics;
 using test::statistics_of;
-using test::ScpiSession;
 using testing::DoubleNear;
 
 /// The record length these tests capture at: short, so many captures are quick.

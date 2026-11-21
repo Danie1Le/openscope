@@ -769,7 +769,8 @@ std::optional<AcquiredBlock> Instrument::acquire(std::size_t count) {
 
 void Instrument::process(const AcquiredBlock& block) {
   // Each capture is measured as it completes, without the mutex, and published under it.
-  const CaptureSink publish_measured = [this, &block](const std::shared_ptr<const Capture>& capture) {
+  const CaptureSink publish_measured = [this,
+                                        &block](const std::shared_ptr<const Capture>& capture) {
     const CaptureResults results = measure_all(*capture);
     const std::scoped_lock lock(mutex_);
     publish(block, capture, results);
