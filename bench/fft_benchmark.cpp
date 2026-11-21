@@ -1,4 +1,4 @@
-// Our radix-2 FFT against KissFFT, the reference, from 4K to 1M points; and the whole FFT:DATA?
+// Our radix-2 FFT against KissFFT, the reference, from 4K to 1M samples; and the whole FFT:DATA?
 // spectrum on top of it. Both FFTs are built by this project with the same compiler and flags
 // (bench/CMakeLists.txt). Results are recorded in docs/benchmarks.md.
 
@@ -106,17 +106,17 @@ void BM_MagnitudeSpectrum(benchmark::State& state) {
 
 // NOLINTEND(clang-analyzer-deadcode.DeadStores)
 
-/// Every benchmark runs at 4K, 16K, 64K, 256K and 1M points, reported in microseconds.
-void four_k_to_one_m_points(benchmark::Benchmark* family) {
+/// Every benchmark runs at 4K, 16K, 64K, 256K and 1M samples, reported in microseconds.
+void four_k_to_one_m_samples(benchmark::Benchmark* family) {
   family->RangeMultiplier(4)
       ->Range(std::int64_t{1} << 12U, std::int64_t{1} << 20U)
       ->Unit(benchmark::kMicrosecond);
 }
 
-BENCHMARK(BM_OpenScopeFft)->Apply(four_k_to_one_m_points);
-BENCHMARK(BM_InputCopy)->Apply(four_k_to_one_m_points);
-BENCHMARK(BM_KissFft)->Apply(four_k_to_one_m_points);
-BENCHMARK(BM_MagnitudeSpectrum)->Apply(four_k_to_one_m_points);
+BENCHMARK(BM_OpenScopeFft)->Apply(four_k_to_one_m_samples);
+BENCHMARK(BM_InputCopy)->Apply(four_k_to_one_m_samples);
+BENCHMARK(BM_KissFft)->Apply(four_k_to_one_m_samples);
+BENCHMARK(BM_MagnitudeSpectrum)->Apply(four_k_to_one_m_samples);
 
 }  // namespace
 }  // namespace openscope
