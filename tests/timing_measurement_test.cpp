@@ -31,6 +31,7 @@ namespace {
 
 using test::kClippedReply;
 using test::kNoErrorReply;
+using test::kNoSignalReply;
 using test::kResetRecordLength;
 using test::kTooFewCyclesReply;
 using test::kUntriggeredCaptures;
@@ -167,6 +168,16 @@ std::pair<double, std::string> measure_noisy(std::uint64_t seed, const NoisySign
   return {value, session.next_error()};
 }
 
+/// A `shape` at `samples_per_cycle` (at kResetSampleRate) with `noise` volts RMS, in a record of
+/// `cycles` cycles plus a sample.
+NoisySignal cycles_of(std::string_view shape, double samples_per_cycle, double cycles,
+                      double noise) {
+  return {.function = shape,
+          .frequency = kResetSampleRate / samples_per_cycle,
+          .record_length = static_cast<std::size_t>(std::ceil(cycles * samples_per_cycle)) + 1,
+          .noise = noise};
+}
+
 /// The seeds that the noisy signals are checked over.
 constexpr std::uint64_t kNoiseSeeds = 5;
 
@@ -253,11 +264,7 @@ TEST_P(FrequencySweepTest, IsRightOrTooFewCycles) {
   for (const std::string_view shape : {"SIN", "SQU", "TRI", "RAMP"}) {
     for (const double samples_per_cycle : {10.0, 10.37, 11.1, 12.3, 13.7, 15.0}) {
       for (const double cycles : {10.0, 1000.0}) {
-        const NoisySignal signal{
-            .function = shape,
-            .frequency = kResetSampleRate / samples_per_cycle,
-            .record_length = static_cast<std::size_t>(std::ceil(cycles * samples_per_cycle)) + 1,
-            .noise = sweep.noise};
+        const NoisySignal signal = cycles_of(shape, samples_per_cycle, cycles, sweep.noise);
         for (std::uint64_t seed = 1; seed <= kNoiseSeeds; ++seed) {
           EXPECT_TRUE(is_right_or_flagged(seed, signal, sweep));
         }
@@ -266,11 +273,52 @@ TEST_P(FrequencySweepTest, IsRightOrTooFewCycles) {
   }
 }
 
+/// The sweep at noise of 1% of the amplitude (NFR-6): always right, within 0.5%.
+constexpr FrequencySweep kOnePercentNoise{
+    .noise = 0.02, .tolerance = 5e-3, .may_be_too_few_cycles = false};
+
 INSTANTIATE_TEST_SUITE_P(
     OneAndFivePercentNoise, FrequencySweepTest,
-    testing::Values(
-        FrequencySweep{.noise = 0.02, .tolerance = 5e-3, .may_be_too_few_cycles = false},
-        FrequencySweep{.noise = 0.1, .tolerance = 1e-2, .may_be_too_few_cycles = true}));
+    testing::Values(kOnePercentNoise,
+                    FrequencySweep{.noise = 0.1, .tolerance = 1e-2, .may_be_too_few_cycles = true}));
+
+// #52: a signal sampled at only a few phases of its cycle puts its samples in a few narrow clusters
+// with nothing between them. They are no level it settles at, so top and base are its extremes,
+// never one cluster in the middle for both (which read No signal).
+TEST(FewSamplingPhasesTest, ClustersAreNoLevels) {
+  EXPECT_TRUE(is_right_or_flagged(1, cycles_of("TRI", 30.0, 30.0, 0.0), kOnePercentNoise));
+  EXPECT_TRUE(is_right_or_flagged(14, cycles_of("SIN", 10.0, 100.0, 0.02), kOnePercentNoise));
+  EXPECT_TRUE(is_right_or_flagged(7, cycles_of("SIN", 11.0, 1000.0, 0.02), kOnePercentNoise));
+  EXPECT_TRUE(is_right_or_flagged(9, cycles_of("RAMP", 10.0, 100.0, 0.02), kOnePercentNoise));
+  EXPECT_TRUE(is_right_or_flagged(11, cycles_of("TRI", 10.0, 1000.0, 0.02), kOnePercentNoise));
+}
+
+class NoSignalSweepTest : public testing::TestWithParam<double> {};
+
+// #52: every shape, clean or with noise (the parameter, volts RMS: 0.02 is 1% of the amplitude), at
+// 10 to 3000 samples per cycle and 10 to 1000 cycles (records up to 100001 samples) spans 2 V, far
+// more than 0.2 div, so it is never No signal.
+TEST_P(NoSignalSweepTest, ASignalIsNeverNoSignal) {
+  const double noise = GetParam();
+  const std::uint64_t seeds = noise > 0.0 ? kNoiseSeeds : 1;
+  for (const std::string_view shape : {"SIN", "SQU", "TRI", "RAMP"}) {
+    for (const double samples_per_cycle : {10.0, 11.1, 30.0, 100.0, 1000.0, 3000.0}) {
+      for (const double cycles : {10.0, 30.0, 100.0, 1000.0}) {
+        const NoisySignal signal = cycles_of(shape, samples_per_cycle, cycles, noise);
+        if (signal.record_length > 100'001) {
+          continue;
+        }
+        for (std::uint64_t seed = 1; seed <= seeds; ++seed) {
+          EXPECT_NE(measure_noisy(seed, signal, "MEAS:FREQ?").second, kNoSignalReply)
+              << std::format("{} at {} samples per cycle, {} cycles, seed {}", shape,
+                             samples_per_cycle, cycles, seed);
+        }
+      }
+    }
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(CleanAndOnePercentNoise, NoSignalSweepTest, testing::Values(0.0, 0.02));
 
 /// A 1 kHz square wave, with noise at 1% of its amplitude in NoisySquareTimingTest.
 constexpr NoisySignal kNoisySquare{"SQU", 1e3, 10'000};

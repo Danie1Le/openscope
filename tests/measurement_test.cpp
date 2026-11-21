@@ -541,6 +541,22 @@ TEST_P(ShortTriangleTest, FallsBackToItsExtremes) {
 INSTANTIATE_TEST_SUITE_P(ShortCaptures, ShortTriangleTest,
                          testing::Values(64, 128, 256, 512, 1000, 2000));
 
+// #52: a triangle sampled 30 times a cycle repeats the same few voltages every cycle, so its
+// histogram is a comb of narrow clusters with empty bins between them, each far fuller than the
+// average bin. The signal passes through each cluster and stays at none, so none is a level: top
+// and base are its extremes.
+TEST(SignalLevelsTest, ClustersTheSignalPassesThroughAreNoLevels) {
+  for (const double start : {0.0, 1.0 / 60.0, 0.37}) {
+    const std::vector<float> samples = triangle_wave(900, 30.0, start);
+    const auto [lowest, highest] = std::ranges::minmax(samples);
+
+    const SignalLevels levels = find_levels(samples);
+
+    EXPECT_DOUBLE_EQ(levels.top, highest) << start;
+    EXPECT_DOUBLE_EQ(levels.base, lowest) << start;
+  }
+}
+
 // A level counts once it holds 1/128 of the samples (78.125 of 10000): a pulse of 79 samples is
 // top, one of 78 is a glitch.
 TEST(SignalLevelsTest, LevelHoldingOneSampleIn128IsSettled) {
