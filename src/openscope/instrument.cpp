@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -271,7 +272,11 @@ void Instrument::add_keyword_setting(
         set(caller, arguments, value_of<scpi::Choice>(arguments).index);
       },
       [keywords, get = std::move(get)](Session& caller, const Arguments& arguments) {
-        return std::string(scpi::short_form(keywords[get(caller, arguments)]));
+        const std::size_t index = get(caller, arguments);
+        if (index >= keywords.size()) {
+          throw std::out_of_range("setting has no keyword");  // An enum value without a keyword.
+        }
+        return std::string(scpi::short_form(keywords[index]));
       });
 }
 
