@@ -731,9 +731,8 @@ void Instrument::advance(std::size_t samples) {
     if (block) {
       // Every capture counts, not only the last of the block, so the statistics do not depend on
       // how `advance` is chunked; and before held lines resume, so they see the Single's capture.
-      pushed = assemble(*block, [this](const Capture& capture) {
-        statistics_.add(measure_all(capture));
-      });
+      pushed = assemble(*block,
+                        [this](const Capture& capture) { statistics_.add(measure_all(capture)); });
       // The Single's capture ends the operation at its last sample: the lines it resumes run with
       // the clock there, and the next block starts there under whatever they changed, so how
       // `advance` is chunked never changes a capture or a reply (ADR 0003).

@@ -191,8 +191,7 @@ using Driver = void (*)(Instrument& instrument, std::size_t samples, std::size_t
 
 /// MEAS:STAT? of every measurement on `instrument`, seed 7 with noise, after `samples` samples
 /// that `drive` takes `step` at a time.
-std::optional<std::string> stepped_statistics(std::size_t samples, std::size_t step,
-                                              Driver drive) {
+std::optional<std::string> stepped_statistics(std::size_t samples, std::size_t step, Driver drive) {
   Instrument instrument(7);
   ScpiSession session(instrument);
   session.send(kUntriggeredCaptures);
@@ -241,8 +240,8 @@ std::string stepped_single(std::size_t step) {
 TEST(StatisticsSteppingTest, HowTheClockIsSteppedAcrossASingleNeverChangesTheStatistics) {
   const std::string whole = stepped_single(Instrument::kMaxBlockLength);
   EXPECT_THAT(whole, testing::EndsWith(",31"));  // 30 captures, then the Single's.
-  for (const std::size_t step : {std::size_t{1}, std::size_t{299}, kRecord - 1, kRecord,
-                                 kRecord + 1}) {
+  for (const std::size_t step :
+       {std::size_t{1}, std::size_t{299}, kRecord - 1, kRecord, kRecord + 1}) {
     EXPECT_EQ(stepped_single(step), whole) << "step " << step;
   }
 }
@@ -320,12 +319,13 @@ INSTANTIATE_TEST_SUITE_P(
                     StatisticsCase{"CHAN1:DISP ON", true}, StatisticsCase{"CHAN1:SCAL 1", true},
                     StatisticsCase{"CHAN1:OFFS 0", true}, StatisticsCase{"CHAN2:DISP OFF", true},
                     StatisticsCase{"ACQ:SRAT 1E6", true}, StatisticsCase{"ACQ:POIN 1000", true},
-                    StatisticsCase{"TIM:SCAL 0.001", false}, StatisticsCase{"TRIG:SOUR CHAN1", true},
-                    StatisticsCase{"TRIG:LEV 100", true}, StatisticsCase{"TRIG:SLOP POS", true},
-                    StatisticsCase{"TRIG:MODE AUTO", true}, StatisticsCase{"TRIG:HOLD 0", true},
-                    StatisticsCase{"TRIG:POS 0", true}, StatisticsCase{"*RST", true},
-                    StatisticsCase{"WAV:SOUR CHAN1", false}, StatisticsCase{"WAV:FORM REAL", false},
-                    StatisticsCase{"FFT:SOUR CHAN1", false}, StatisticsCase{"FFT:WIND HANN", false},
+                    StatisticsCase{"TIM:SCAL 0.001", false},
+                    StatisticsCase{"TRIG:SOUR CHAN1", true}, StatisticsCase{"TRIG:LEV 100", true},
+                    StatisticsCase{"TRIG:SLOP POS", true}, StatisticsCase{"TRIG:MODE AUTO", true},
+                    StatisticsCase{"TRIG:HOLD 0", true}, StatisticsCase{"TRIG:POS 0", true},
+                    StatisticsCase{"*RST", true}, StatisticsCase{"WAV:SOUR CHAN1", false},
+                    StatisticsCase{"WAV:FORM REAL", false}, StatisticsCase{"FFT:SOUR CHAN1", false},
+                    StatisticsCase{"FFT:WIND HANN", false},
                     StatisticsCase{"SOUR1:FAUL GLIT,0", false}, StatisticsCase{"RUN", false},
                     StatisticsCase{"STOP", false}, StatisticsCase{"SINGle", false},
                     StatisticsCase{"*CLS", false}, StatisticsCase{"*IDN?", false},
