@@ -209,6 +209,9 @@ constexpr Band kDoubtBand{.lower = 0.4, .upper = 0.6};
 /// from 50%, which is at most a tenth of a cycle (a triangle's edge; a sine's takes 6%).
 constexpr double kDoubtfulCycleShare = 0.125;
 
+/// The band rise and fall time are measured across: the 10% and 90% reference levels.
+constexpr Band kRiseFallBand{.lower = 0.1, .upper = 0.9};
+
 /// One move of the signal from beyond one level of a band to beyond the other. Its times are in
 /// sample periods.
 struct Edge {
@@ -216,6 +219,9 @@ struct Edge {
   Direction direction;
   /// When the edge last crossed the 50% level, from the first sample.
   double middle;
+  /// How long the edge took from last leaving the band level it started from (the lower one when
+  /// rising, the upper one when falling) to reaching the other one.
+  double duration;
 };
 
 /// When `samples` last reached `level` going up (`sign` 1) or down (-1) at or before sample
@@ -255,9 +261,13 @@ std::vector<Edge> find_edges(const MeasuredSignal& signal, Band band) {
     }
     if (now != side && side != Side::kUnknown) {
       const bool rising = now == Side::kHigh;
-      edges.push_back(
-          {.direction = rising ? Edge::Direction::kRising : Edge::Direction::kFalling,
-           .middle = crossing_before(signal.samples, index, middle, rising ? 1.0 : -1.0)});
+      const auto [start, far] = rising ? std::pair{lower, upper} : std::pair{upper, lower};
+      const auto crossing = [&](double level) {
+        return crossing_before(signal.samples, index, level, rising ? 1.0 : -1.0);
+      };
+      edges.push_back({.direction = rising ? Edge::Direction::kRising : Edge::Direction::kFalling,
+                       .middle = crossing(middle),
+                       .duration = crossing(far) - crossing(start)});
     }
     side = now;
   }
@@ -349,6 +359,24 @@ std::optional<double> positive_duty_cycle(const MeasuredSignal& signal) {
   return 100.0 * high / cycles->length;
 }
 
+/// The mean time the edges in `kDirection` in `signal` take from one outer reference level to the
+/// other, in seconds, or nullopt when there is no such edge.
+template <Edge::Direction kDirection>
+std::optional<double> transition_time(const MeasuredSignal& signal) {
+  double total = 0.0;
+  std::size_t count = 0;
+  for (const Edge& edge : find_edges(signal, kRiseFallBand)) {
+    if (edge.direction == kDirection) {
+      total += edge.duration;
+      ++count;
+    }
+  }
+  if (count == 0) {
+    return std::nullopt;
+  }
+  return total / static_cast<double>(count) / signal.sample_rate;
+}
+
 constexpr std::array kMeasurements{
     Measurement{.mnemonic = "VPP",
                 .measure = [](const MeasuredSignal& signal) -> std::optional<double> {
@@ -378,6 +406,12 @@ constexpr std::array kMeasurements{
                 .needs_signal = true},
     Measurement{.mnemonic = "PERiod", .measure = period, .needs_signal = true},
     Measurement{.mnemonic = "DUTYcycle", .measure = positive_duty_cycle, .needs_signal = true},
+    Measurement{.mnemonic = "RISetime",
+                .measure = transition_time<Edge::Direction::kRising>,
+                .needs_signal = true},
+    Measurement{.mnemonic = "FALLtime",
+                .measure = transition_time<Edge::Direction::kFalling>,
+                .needs_signal = true},
 };
 
 }  // namespace

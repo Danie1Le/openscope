@@ -382,7 +382,8 @@ TEST_F(MeasurementTest, SignalClippedFlatIsNoSignalForAMeasurementThatNeedsASign
 }
 
 TEST_F(MeasurementTest, OnlyTheTimingMeasurementsNeedASignal) {
-  constexpr std::array<std::string_view, 3> kTiming{"FREQuency", "PERiod", "DUTYcycle"};
+  constexpr std::array<std::string_view, 5> kTiming{"FREQuency", "PERiod", "RISetime", "FALLtime",
+                                                    "DUTYcycle"};
   for (const Measurement& measurement : measurements()) {
     EXPECT_EQ(measurement.needs_signal,
               std::ranges::find(kTiming, measurement.mnemonic) != kTiming.end())
