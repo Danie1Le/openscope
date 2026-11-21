@@ -100,7 +100,10 @@ INSTANTIATE_TEST_SUITE_P(
         NumericSetting{"CHAN1:OFFS", "0", "-50", "-50", "50", "50", "-50.001", "50.001"},
         NumericSetting{"ACQ:SRAT", "1E+06", "1", "1", "1E9", "1E+09", "0.999", "1.001E9"},
         NumericSetting{"ACQ:POIN", "10000", "1", "1", "1048576", "1048576", "0.999", "1048576.001"},
-        NumericSetting{"TIM:SCAL", "0.001", "1E-9", "1E-09", "100", "100", "0.99E-9", "100.001"}),
+        NumericSetting{"TIM:SCAL", "0.001", "1E-9", "1E-09", "100", "100", "0.99E-9", "100.001"},
+        NumericSetting{"TRIG:LEV", "0", "-100", "-100", "100", "100", "-100.001", "100.001"},
+        NumericSetting{"TRIG:HOLD", "0", "0", "0", "10", "10", "-1E-9", "10.001"},
+        NumericSetting{"TRIG:POS", "50", "0", "0", "100", "100", "-0.001", "100.001"}),
     [](const testing::TestParamInfo<NumericSetting>& setting) {
       std::string name;
       for (const char c : setting.param.header) {
@@ -118,11 +121,14 @@ TEST_F(SettingsTest, LongFormsAreAccepted) {
   session.send(":CHANnel3:SCALe 2;OFFSet 0.5;DISPlay ON");
   session.send(":ACQuire:SRATe 2E6;POINts 500");
   session.send(":TIMebase:SCALe 0.5");
+  session.send(":TRIGger:SOURce CHANnel2;LEVel 0.5;SLOPe NEGative;MODE NORMal;HOLDoff 1E-3");
+  session.send(":TRIGger:POSition 25");
 
   EXPECT_EQ(session.send("SOUR2:FREQ?;AMPL?;OFFS?;NOIS?;FUNC?"), "50;3;-1;0.5;SQU");
   EXPECT_EQ(session.send("CHAN3:SCAL?;OFFS?;DISP?"), "2;0.5;1");
   EXPECT_EQ(session.send("ACQ:SRAT?;POIN?"), "2E+06;500");
   EXPECT_EQ(session.send("TIM:SCAL?"), "0.5");
+  EXPECT_EQ(session.send("TRIG:SOUR?;LEV?;SLOP?;MODE?;HOLD?;POS?"), "CHAN2;0.5;NEG;NORM;0.001;25");
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 
@@ -130,23 +136,28 @@ TEST_F(SettingsTest, NumbersAcceptTheirUnitWithAMultiplier) {
   session.send("SOUR1:FREQ 2.5KHZ;AMPL 500MV;OFFS -250mV;NOIS 10MV");
   session.send(":CHAN1:SCAL 50MV;OFFS 1.5V");
   session.send(":TIM:SCAL 2US");
+  session.send(":TRIG:LEV -250MV;HOLD 20US");
 
   EXPECT_EQ(session.send("SOUR1:FREQ?;AMPL?;OFFS?;NOIS?"), "2500;0.5;-0.25;0.01");
   EXPECT_EQ(session.send("CHAN1:SCAL?;OFFS?"), "0.05;1.5");
   EXPECT_EQ(session.send("TIM:SCAL?"), "2E-06");
+  EXPECT_EQ(session.send("TRIG:LEV?;HOLD?"), "-0.25;2E-05");
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 
-TEST_F(SettingsTest, CountsAndRatesTakeNoUnit) {
+TEST_F(SettingsTest, CountsRatesAndPercentagesTakeNoUnit) {
   session.send("ACQ:SRAT 1KHZ");
   session.send("ACQ:POIN 5V");
   session.send("SOUR1:FREQ 5V");
+  session.send("TRIG:POS 5PCT");
 
+  EXPECT_EQ(session.next_error(), R"(-131,"Invalid suffix")");
   EXPECT_EQ(session.next_error(), R"(-131,"Invalid suffix")");
   EXPECT_EQ(session.next_error(), R"(-131,"Invalid suffix")");
   EXPECT_EQ(session.next_error(), R"(-131,"Invalid suffix")");
   EXPECT_EQ(session.send("ACQ:SRAT?;POIN?"), "1E+06;10000");
   EXPECT_EQ(session.send("SOUR1:FREQ?"), "1000");
+  EXPECT_EQ(session.send("TRIG:POS?"), "50");
 }
 
 TEST_F(SettingsTest, RecordLengthRoundsToTheNearestWholeSample) {
@@ -251,24 +262,105 @@ TEST_F(SettingsTest, DisplayIsABoolean) {
   EXPECT_EQ(session.send("CHAN2:DISP?"), "0");
 }
 
+TEST_F(SettingsTest, TriggerStartsOnChannelOneRisingThroughZeroVoltsInAuto) {
+  EXPECT_EQ(session.send("TRIG:SOUR?;SLOP?;MODE?"), "CHAN1;POS;AUTO");
+}
+
+TEST_F(SettingsTest, TriggerSourceIsAnyChannelEnabledOrNot) {
+  for (const std::string_view channel : {"CHAN2", "CHANNEL3", "chan4", "Channel1"}) {
+    session.send("TRIG:SOUR " + std::string(channel));
+    EXPECT_EQ(session.send("TRIG:SOUR?"),
+              "CHAN" + std::string(channel.substr(channel.size() - 1)))
+        << channel;
+  }
+  session.send("TRIG:SOUR CHAN3");
+  session.send("TRIG:SOUR CHAN");
+  EXPECT_EQ(session.send("TRIG:SOUR?"), "CHAN1");
+  EXPECT_EQ(session.send("CHAN3:DISP?"), "0");
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+TEST_F(SettingsTest, TriggerSourceRejectsAnythingButAChannel) {
+  session.send("TRIG:SOUR CHAN2");
+
+  for (const char* line : {"TRIG:SOUR CHAN5", "TRIG:SOUR CHAN0", "TRIG:SOUR SOUR1", "TRIG:SOUR EXT"}) {
+    session.send(line);
+    EXPECT_EQ(session.next_error(), kIllegalParameterValueReply) << line;
+  }
+  session.send("TRIG:SOUR 1");
+  EXPECT_EQ(session.next_error(), kDataTypeErrorReply);
+  EXPECT_EQ(session.send("TRIG:SOUR?"), "CHAN2");
+}
+
+TEST_F(SettingsTest, TriggerSlopeAndModeAcceptTheirShortAndLongForms) {
+  session.send("TRIG:SLOP NEGATIVE;MODE NORMAL");
+  EXPECT_EQ(session.send("TRIG:SLOP?;MODE?"), "NEG;NORM");
+  session.send("trig:slop pos;mode auto");
+  EXPECT_EQ(session.send("TRIG:SLOP?;MODE?"), "POS;AUTO");
+  session.send("TRIG:SLOP POSITIVE;MODE NORM");
+  EXPECT_EQ(session.send("TRIG:SLOP?;MODE?"), "POS;NORM");
+  session.send("TRIG:SLOP NEG");
+  EXPECT_EQ(session.send("TRIG:SLOP?"), "NEG");
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+TEST_F(SettingsTest, TriggerSlopeAndModeRejectOtherKeywordsAndNumbers) {
+  session.send("TRIG:SLOP NEG;MODE NORM");
+
+  session.send("TRIG:SLOP EITHER");
+  session.send("TRIG:SLOP 1");
+  session.send("TRIG:MODE AUT");
+  session.send("TRIG:MODE 0");
+
+  EXPECT_EQ(session.next_error(), kIllegalParameterValueReply);
+  EXPECT_EQ(session.next_error(), kDataTypeErrorReply);
+  EXPECT_EQ(session.next_error(), kIllegalParameterValueReply);
+  EXPECT_EQ(session.next_error(), kDataTypeErrorReply);
+  EXPECT_EQ(session.send("TRIG:SLOP?;MODE?"), "NEG;NORM");
+}
+
+// Spec #1: Single is a run-control action (`SINGle`), not a trigger mode.
+TEST_F(SettingsTest, TriggerModeSingleIsAnIllegalParameterValue) {
+  session.send("TRIG:MODE NORM");
+
+  session.send("TRIG:MODE SING");
+  session.send("TRIGger:MODE SINGle");
+
+  EXPECT_EQ(session.next_error(), kIllegalParameterValueReply);
+  EXPECT_EQ(session.next_error(), kIllegalParameterValueReply);
+  EXPECT_EQ(session.send("TRIG:MODE?"), "NORM");
+}
+
+TEST_F(SettingsTest, TriggerNodesTakeNoSuffix) {
+  session.send("TRIG2:LEV 1");
+  session.send("TRIG:MODE2?");
+
+  EXPECT_EQ(session.next_error(), kUndefinedHeaderReply);
+  EXPECT_EQ(session.next_error(), kUndefinedHeaderReply);
+  EXPECT_EQ(session.send("TRIG:LEV?"), "0");
+}
+
 TEST_F(SettingsTest, SettingsAreSharedByEverySession) {
   ScpiSession other{instrument};
 
-  other.send("SOUR2:FREQ 7;:CHAN2:DISP ON;:ACQ:POIN 64;:TIM:SCAL 0.25");
+  other.send("SOUR2:FREQ 7;:CHAN2:DISP ON;:ACQ:POIN 64;:TIM:SCAL 0.25;:TRIG:SOUR CHAN3;LEV 1");
 
-  EXPECT_EQ(session.send("SOUR2:FREQ?;:CHAN2:DISP?;:ACQ:POIN?;:TIM:SCAL?"), "7;1;64;0.25");
+  EXPECT_EQ(session.send("SOUR2:FREQ?;:CHAN2:DISP?;:ACQ:POIN?;:TIM:SCAL?;:TRIG:SOUR?;LEV?"),
+            "7;1;64;0.25;CHAN3;1");
 }
 
 TEST_F(SettingsTest, RstRestoresEveryInstrumentWideSetting) {
   session.send("SOUR4:FUNC NOIS;FREQ 5;AMPL 3;OFFS 2;NOIS 1");
   session.send(":CHAN1:DISP OFF;:CHAN4:DISP ON;SCAL 0.1;OFFS -3");
   session.send(":ACQ:SRAT 5000;POIN 77;:TIM:SCAL 3");
+  session.send(":TRIG:SOUR CHAN4;LEV 1.5;SLOP NEG;MODE NORM;HOLD 0.5;POS 10");
 
   session.send("*RST");
 
   EXPECT_EQ(session.send("SOUR4:FUNC?;FREQ?;AMPL?;OFFS?;NOIS?"), "SIN;1000;2;0;0");
   EXPECT_EQ(session.send("CHAN1:DISP?;:CHAN4:DISP?;SCAL?;OFFS?"), "1;0;1;0");
   EXPECT_EQ(session.send("ACQ:SRAT?;POIN?;:TIM:SCAL?"), "1E+06;10000;0.001");
+  EXPECT_EQ(session.send("TRIG:SOUR?;LEV?;SLOP?;MODE?;HOLD?;POS?"), "CHAN1;0;POS;AUTO;0;50");
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 

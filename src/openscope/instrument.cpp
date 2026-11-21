@@ -23,6 +23,7 @@
 #include "openscope/scpi/response.hpp"
 #include "openscope/scpi_error.hpp"
 #include "openscope/session.hpp"
+#include "openscope/trigger.hpp"
 
 namespace openscope {
 namespace {
@@ -38,6 +39,14 @@ static_assert(kFunctionKeywords.size() == static_cast<std::size_t>(GeneratorFunc
 /// The `WAVeform:FORMat` keywords, in WaveformFormat order.
 constexpr std::array<std::string_view, 2> kFormatKeywords{"ASCii", "REAL"};
 static_assert(kFormatKeywords.size() == static_cast<std::size_t>(WaveformFormat::kReal) + 1);
+
+/// The `TRIGger:SLOPe` keywords, in TriggerSlope order.
+constexpr std::array<std::string_view, 2> kSlopeKeywords{"POSitive", "NEGative"};
+static_assert(kSlopeKeywords.size() == static_cast<std::size_t>(TriggerSlope::kNegative) + 1);
+
+/// The `TRIGger:MODE` keywords, in TriggerMode order. There is no `SINGle`: Single is run control.
+constexpr std::array<std::string_view, 2> kModeKeywords{"AUTO", "NORMal"};
+static_assert(kModeKeywords.size() == static_cast<std::size_t>(TriggerMode::kNormal) + 1);
 
 /// Samples as comma-separated values, each in the shortest form that reads back as the same float.
 std::string ascii_values(std::span<const float> samples) {
@@ -112,6 +121,7 @@ Instrument::Instrument(std::uint64_t seed)
   add_channel_commands();
   add_acquisition_commands();
   add_timebase_commands();
+  add_trigger_commands();
   add_waveform_commands();
 }
 
@@ -187,16 +197,30 @@ void Instrument::add_timebase_commands() {
       [this](Session&, const Arguments&) { return scpi::format_real(timebase_scale_); });
 }
 
+void Instrument::add_trigger_commands() {
+  add_channel_choice(
+      "TRIGger:SOURce",
+      [this](Session&, std::size_t channel) {
+        change_trigger([channel](TriggerSettings& settings) { settings.source = channel; });
+      },
+      [this](Session&) { return trigger_.source; });
+  add_trigger_number("TRIGger:LEVel", {.min = -100.0, .max = 100.0, .unit = "V"},
+                     &TriggerSettings::level);
+  add_trigger_keyword("TRIGger:SLOPe", kSlopeKeywords, &TriggerSettings::slope);
+  add_trigger_keyword("TRIGger:MODE", kModeKeywords, &TriggerSettings::mode);
+  add_trigger_number("TRIGger:HOLDoff", {.min = 0.0, .max = 10.0, .unit = "S"},
+                     &TriggerSettings::holdoff);
+  // A percentage of the record, so it takes no unit (like ACQ:POIN).
+  add_trigger_number("TRIGger:POSition", {.min = 0.0, .max = 100.0, .unit = ""},
+                     &TriggerSettings::position);
+}
+
 void Instrument::add_waveform_commands() {
   // ADR 0002: the source and format belong to the calling Session.
-  add_setting(
-      "WAVeform:SOURce", scpi::KeywordParameter{.choices = {"CHANnel<1-4>"}},
-      [](Session& caller, const Arguments& arguments) {
-        caller.waveform().source = value_of<scpi::Choice>(arguments).suffix;
-      },
-      [](Session& caller, const Arguments&) {
-        return std::format("CHAN{}", caller.waveform().source);
-      });
+  add_channel_choice(
+      "WAVeform:SOURce",
+      [](Session& caller, std::size_t channel) { caller.waveform().source = channel; },
+      [](Session& caller) { return caller.waveform().source; });
   add_keyword_setting(
       "WAVeform:FORMat", kFormatKeywords,
       [](Session& caller, const Arguments&, std::size_t keyword) {
@@ -308,6 +332,47 @@ void Instrument::add_channel_number(std::string_view header, NumericParameter ra
       });
 }
 
+void Instrument::add_channel_choice(std::string_view header,
+                                    std::function<void(Session&, std::size_t)> set,
+                                    std::function<std::size_t(Session&)> get) {
+  add_setting(
+      header, scpi::KeywordParameter{.choices = {"CHANnel<1-4>"}},
+      [set = std::move(set)](Session& caller, const Arguments& arguments) {
+        set(caller, value_of<scpi::Choice>(arguments).suffix);
+      },
+      [get = std::move(get)](Session& caller, const Arguments&) {
+        return std::format("CHAN{}", get(caller));
+      });
+}
+
+void Instrument::add_trigger_number(std::string_view header, NumericParameter range,
+                                    double TriggerSettings::*field) {
+  add_setting(
+      header, std::move(range),
+      [this, field](Session&, const Arguments& arguments) {
+        change_trigger([&](TriggerSettings& settings) {
+          settings.*field = value_of<double>(arguments);
+        });
+      },
+      [this, field](Session&, const Arguments&) { return scpi::format_real(trigger_.*field); });
+}
+
+template <typename Keyword>
+void Instrument::add_trigger_keyword(std::string_view header,
+                                     std::span<const std::string_view> keywords,
+                                     Keyword TriggerSettings::*field) {
+  add_keyword_setting(
+      header, keywords,
+      [this, field](Session&, const Arguments&, std::size_t keyword) {
+        change_trigger([&](TriggerSettings& settings) {
+          settings.*field = static_cast<Keyword>(keyword);
+        });
+      },
+      [this, field](Session&, const Arguments&) {
+        return static_cast<std::size_t>(trigger_.*field);
+      });
+}
+
 void Instrument::change_generator(const Arguments& arguments,
                                   const std::function<void(GeneratorSettings&)>& change) {
   Generator& generator = generators_.at(channel_of(arguments));
@@ -330,10 +395,16 @@ void Instrument::change_acquisition(const std::function<void(AcquisitionSettings
   captures_.discard();
 }
 
+void Instrument::change_trigger(const std::function<void(TriggerSettings&)>& change) {
+  change(trigger_);
+  captures_.discard();
+}
+
 void Instrument::reset() {
   acquisition_ = {};
   channels_ = default_channels();
   timebase_scale_ = kDefaultTimebaseScale;
+  trigger_ = {};
   // Fresh Generators rather than reconfigured ones: phase continuity would carry the phase built
   // up by earlier settings past *RST, so the output would depend on the commands sent before it.
   generators_ = make_generators(seed_, acquisition_.sample_rate);
