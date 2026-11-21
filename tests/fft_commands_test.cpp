@@ -158,7 +158,7 @@ TEST_F(FftCommandsTest, ARecordLengthOfOneGivesOneDcBin) {
 }
 
 TEST_F(FftCommandsTest, TheLongestRecordLengthGivesHalfAMillionBins) {
-  session.send("ACQ:POIN 1048576");
+  session.send("ACQ:POIN 1048576;:TRIG:POS 0");
   instrument.advance(1'048'576);
 
   EXPECT_EQ(decode_float32_block(session.send("FFT:DATA?").value_or("")).size(), 524'289);
@@ -166,7 +166,7 @@ TEST_F(FftCommandsTest, TheLongestRecordLengthGivesHalfAMillionBins) {
 }
 
 TEST_F(FftCommandsTest, SilenceReadsTheFloorInEveryBin) {
-  session.send("ACQ:POIN 8;:SOUR1:FUNC DC");
+  session.send("ACQ:POIN 8;:TRIG:POS 0;:SOUR1:FUNC DC");
   instrument.advance(8);
 
   EXPECT_EQ(decode_float32_block(session.send("FFT:DATA?").value_or("")),
@@ -174,7 +174,7 @@ TEST_F(FftCommandsTest, SilenceReadsTheFloorInEveryBin) {
 }
 
 TEST_F(FftCommandsTest, SpacingReportsTheSettingsTheCaptureWasTakenWith) {
-  session.send("ACQ:SRAT 2E6;POIN 4096");
+  session.send("ACQ:SRAT 2E6;POIN 4096;:TRIG:POS 0");
   instrument.advance(4096);
 
   session.send("ACQ:SRAT 5;POIN 7");
