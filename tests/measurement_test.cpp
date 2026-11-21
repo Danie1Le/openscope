@@ -431,7 +431,7 @@ std::vector<float> square_wave(std::size_t length) {
   return samples;
 }
 
-/// The samples of 10000-sample captures that top and base are checked against.
+/// The length of the hand-built captures that top and base are checked on.
 constexpr std::size_t kLength = 10'000;
 
 TEST(SignalLevelsTest, SquareWaveLevelsAreItsHighAndLow) {
@@ -448,6 +448,18 @@ struct Disturbance {
   float volts;
 };
 
+/// A one-sample spike and a 20-sample glitch out from each level of square_wave().
+constexpr std::array kDisturbances{Disturbance{.first = 75, .length = 1, .volts = 5.0F},
+                                   Disturbance{.first = 25, .length = 1, .volts = -4.0F},
+                                   Disturbance{.first = 150, .length = 20, .volts = 3.0F},
+                                   Disturbance{.first = 210, .length = 20, .volts = -2.0F}};
+
+/// Overwrites `samples` with `disturbance`.
+void disturb(std::vector<float>& samples, const Disturbance& disturbance) {
+  std::fill_n(samples.begin() + static_cast<std::ptrdiff_t>(disturbance.first), disturbance.length,
+              disturbance.volts);
+}
+
 class DisturbedSquareWaveTest : public testing::TestWithParam<Disturbance> {};
 
 // Spec story 57: noise spikes do not distort top and base. Each disturbance is alone on its side
@@ -455,8 +467,7 @@ class DisturbedSquareWaveTest : public testing::TestWithParam<Disturbance> {};
 TEST_P(DisturbedSquareWaveTest, MovesNeitherTopNorBase) {
   const Disturbance disturbance = GetParam();
   std::vector<float> samples = square_wave(kLength);
-  std::fill_n(samples.begin() + static_cast<std::ptrdiff_t>(disturbance.first), disturbance.length,
-              disturbance.volts);
+  disturb(samples, disturbance);
 
   const SignalLevels levels = find_levels(samples);
 
@@ -466,10 +477,42 @@ TEST_P(DisturbedSquareWaveTest, MovesNeitherTopNorBase) {
 }
 
 INSTANTIATE_TEST_SUITE_P(SpikesAndShortGlitches, DisturbedSquareWaveTest,
-                         testing::Values(Disturbance{.first = 75, .length = 1, .volts = 5.0F},
-                                         Disturbance{.first = 25, .length = 1, .volts = -4.0F},
-                                         Disturbance{.first = 150, .length = 20, .volts = 3.0F},
-                                         Disturbance{.first = 210, .length = 20, .volts = -2.0F}));
+                         testing::ValuesIn(kDisturbances));
+
+// Outliers at both ends are set aside together.
+TEST(SignalLevelsTest, SpikesAndGlitchesOnBothLevelsAtOnce) {
+  std::vector<float> samples = square_wave(kLength);
+  for (const Disturbance& disturbance : kDisturbances) {
+    disturb(samples, disturbance);
+  }
+
+  const SignalLevels levels = find_levels(samples);
+
+  EXPECT_DOUBLE_EQ(levels.top, 1.0);
+  EXPECT_DOUBLE_EQ(levels.base, 0.0);
+}
+
+// In a short capture one sample is already 1/128 of it, but a settled level needs two.
+TEST(SignalLevelsTest, SingleSpikeInAShortCaptureIsNotTop) {
+  std::vector<float> samples = square_wave(100);
+  samples.at(75) = 5.0F;
+
+  const SignalLevels levels = find_levels(samples);
+
+  EXPECT_DOUBLE_EQ(levels.top, 1.0);
+  EXPECT_DOUBLE_EQ(levels.base, 0.0);
+}
+
+// Setting the lone extremes of two or three samples aside would leave too few for a level.
+TEST(SignalLevelsTest, TinyCapturesKeepEverySample) {
+  for (const std::vector<float>& samples :
+       {std::vector<float>{-1.0F, 1.0F}, std::vector<float>{-1.0F, 0.0F, 1.0F}}) {
+    const SignalLevels levels = find_levels(samples);
+
+    EXPECT_DOUBLE_EQ(levels.top, 1.0) << samples.size();
+    EXPECT_DOUBLE_EQ(levels.base, -1.0) << samples.size();
+  }
+}
 
 // A level counts once it holds 1/128 of the samples (78.125 of 10000): a pulse of 79 samples is
 // top, one of 78 is a glitch.
