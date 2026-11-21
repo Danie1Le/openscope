@@ -20,48 +20,45 @@ namespace {
 
 using testing::FloatNear;
 
-// The *RST acquisition: CH1 only, a 1 V 1 kHz sine, 1 MSa/s, 10000 points.
-constexpr std::size_t kRecordLength = 10'000;
-
 using CaptureTest = test::InstrumentFixture;
 
 TEST_F(CaptureTest, NoCaptureUntilOneRecordLengthHasBeenSampled) {
   EXPECT_EQ(instrument.latest_capture(), nullptr);
 
-  instrument.advance(kRecordLength - 1);
+  instrument.advance(test::kResetRecordLength - 1);
 
   EXPECT_EQ(instrument.latest_capture(), nullptr);
 }
 
 TEST_F(CaptureTest, AdvancingByZeroSamplesDoesNothing) {
   instrument.advance(0);
-  instrument.advance(kRecordLength - 1);
+  instrument.advance(test::kResetRecordLength - 1);
   instrument.advance(0);
 
   EXPECT_EQ(instrument.latest_capture(), nullptr);
 }
 
 TEST_F(CaptureTest, CaptureSpansOneRecordLengthOfTheEnabledChannelsOnly) {
-  instrument.advance(kRecordLength);
+  instrument.advance(test::kResetRecordLength);
 
   const std::shared_ptr<const Capture> capture = instrument.latest_capture();
   ASSERT_NE(capture, nullptr);
   EXPECT_EQ(capture->first_index, 0U);
   EXPECT_EQ(capture->sample_rate, 1e6);
-  EXPECT_EQ(capture->record_length, kRecordLength);
+  EXPECT_EQ(capture->record_length, test::kResetRecordLength);
   EXPECT_TRUE(capture->untriggered);
   EXPECT_EQ(capture->trigger_position, 0U);
   const CapturedChannel channel = test::captured(instrument, 1);
   EXPECT_EQ(channel.scale, 1.0);
   EXPECT_EQ(channel.offset, 0.0);
-  EXPECT_EQ(channel.samples.size(), kRecordLength);
+  EXPECT_EQ(channel.samples.size(), test::kResetRecordLength);
   for (std::size_t n = 1; n < kChannelCount; ++n) {
     EXPECT_FALSE(capture->channels.at(n).has_value()) << "CH" << n + 1;
   }
 }
 
 TEST_F(CaptureTest, ChannelOneCarriesGeneratorOnesSine) {
-  instrument.advance(kRecordLength);
+  instrument.advance(test::kResetRecordLength);
 
   const std::vector<float> samples = test::captured(instrument, 1).samples;
   EXPECT_EQ(samples[0], 0.0F);
@@ -72,22 +69,22 @@ TEST_F(CaptureTest, ChannelOneCarriesGeneratorOnesSine) {
 }
 
 TEST_F(CaptureTest, CapturesFollowEachOtherBackToBackAndOnlyTheLatestIsKept) {
-  instrument.advance((2 * kRecordLength) + 5000);
-  EXPECT_EQ(instrument.latest_capture()->first_index, kRecordLength);
+  instrument.advance((2 * test::kResetRecordLength) + 5000);
+  EXPECT_EQ(instrument.latest_capture()->first_index, test::kResetRecordLength);
 
   instrument.advance(4999);
-  EXPECT_EQ(instrument.latest_capture()->first_index, kRecordLength);
+  EXPECT_EQ(instrument.latest_capture()->first_index, test::kResetRecordLength);
 
   instrument.advance(1);
-  EXPECT_EQ(instrument.latest_capture()->first_index, 2 * kRecordLength);
+  EXPECT_EQ(instrument.latest_capture()->first_index, 2 * test::kResetRecordLength);
 }
 
 TEST_F(CaptureTest, APublishedCaptureNeverChanges) {
-  instrument.advance(kRecordLength);
+  instrument.advance(test::kResetRecordLength);
   const std::shared_ptr<const Capture> first = instrument.latest_capture();
   const std::vector<float> samples = test::captured(instrument, 1).samples;
 
-  instrument.advance(3 * kRecordLength);
+  instrument.advance(3 * test::kResetRecordLength);
 
   EXPECT_NE(instrument.latest_capture(), first);
   EXPECT_EQ(first->first_index, 0U);
@@ -107,7 +104,8 @@ TEST_F(CaptureTest, CaptureDoesNotDependOnHowTheClockWasStepped) {
 
   const std::shared_ptr<const Capture> whole = instrument.latest_capture();
   const std::shared_ptr<const Capture> pieces = stepped.latest_capture();
-  EXPECT_EQ(whole->first_index, ((kSamples / kRecordLength) - 1) * kRecordLength);
+  EXPECT_EQ(whole->first_index,
+            ((kSamples / test::kResetRecordLength) - 1) * test::kResetRecordLength);
   EXPECT_EQ(pieces->first_index, whole->first_index);
   EXPECT_EQ(test::captured(stepped, 1).samples, test::captured(instrument, 1).samples);
 }

@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <iterator>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -39,7 +38,8 @@ void CaptureAssembler::push(const SampleBlock& block, const AcquisitionSettings&
           throw std::logic_error("sample block lacks a channel of the capture in progress");
         }
         const auto from = block.channels.at(n).begin() + static_cast<std::ptrdiff_t>(used);
-        std::copy_n(from, take, std::back_inserter(channel->samples));
+        channel->samples.insert(channel->samples.end(), from,
+                                from + static_cast<std::ptrdiff_t>(take));
       }
     }
     used += take;

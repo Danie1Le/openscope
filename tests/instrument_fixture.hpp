@@ -11,6 +11,9 @@
 
 namespace openscope::test {
 
+/// The `*RST` record length, which facade tests advance by to complete one capture.
+inline constexpr std::size_t kResetRecordLength = 10'000;
+
 /// `channel` (1 to 4) of `instrument`'s latest capture. Fails the test and returns an empty
 /// channel when there is no capture or the channel is not in it.
 inline CapturedChannel captured(const Instrument& instrument, std::size_t channel) {
