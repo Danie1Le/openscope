@@ -7,10 +7,9 @@
   ],
   "features": {
     "benchmarks": {
-      "description": "Google Benchmark, and KissFFT as the reference the FFT is measured against",
+      "description": "Google Benchmark, for the targets in bench/",
       "dependencies": [
-        "benchmark",
-        "kissfft"
+        "benchmark"
       ]
     }
   }

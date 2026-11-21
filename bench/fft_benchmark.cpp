@@ -1,5 +1,6 @@
 // Our radix-2 FFT against KissFFT, the reference, from 4K to 1M points; and the whole FFT:DATA?
-// spectrum on top of it. Results are recorded in docs/benchmarks.md.
+// spectrum on top of it. Both FFTs are built by this project with the same compiler and flags
+// (bench/CMakeLists.txt). Results are recorded in docs/benchmarks.md.
 
 #include <benchmark/benchmark.h>
 #include <kiss_fft.h>
@@ -30,6 +31,12 @@ std::vector<float> test_signal(std::size_t points) {
   return samples;
 }
 
+/// test_signal as the complex input of a transform, with zero imaginary parts.
+std::vector<std::complex<double>> complex_test_signal(std::size_t points) {
+  const std::vector<float> samples = test_signal(points);
+  return {samples.begin(), samples.end()};
+}
+
 /// Reports points per second and the point count for the N log N fit.
 void set_counters(benchmark::State& state) {
   state.SetItemsProcessed(state.iterations() * state.range(0));
@@ -44,12 +51,25 @@ void set_counters(benchmark::State& state) {
 void BM_OpenScopeFft(benchmark::State& state) {
   const auto points = static_cast<std::size_t>(state.range(0));
   const Fft fft(points);
-  const std::vector<float> samples = test_signal(points);
-  const std::vector<std::complex<double>> input(samples.begin(), samples.end());
+  const std::vector<std::complex<double>> input = complex_test_signal(points);
   std::vector<std::complex<double>> data(points);
   for (auto _ : state) {
     data = input;
     fft.transform(data);
+    benchmark::DoNotOptimize(data.data());
+    benchmark::ClobberMemory();
+  }
+  set_counters(state);
+}
+
+/// The copy BM_OpenScopeFft makes before each transform, alone: how much of that time is not the
+/// transform.
+void BM_InputCopy(benchmark::State& state) {
+  const auto points = static_cast<std::size_t>(state.range(0));
+  const std::vector<std::complex<double>> input = complex_test_signal(points);
+  std::vector<std::complex<double>> data(points);
+  for (auto _ : state) {
+    data = input;
     benchmark::DoNotOptimize(data.data());
     benchmark::ClobberMemory();
   }
@@ -96,6 +116,7 @@ void four_k_to_one_m_points(benchmark::Benchmark* family) {
 }
 
 BENCHMARK(BM_OpenScopeFft)->Apply(four_k_to_one_m_points);
+BENCHMARK(BM_InputCopy)->Apply(four_k_to_one_m_points);
 BENCHMARK(BM_KissFft)->Apply(four_k_to_one_m_points);
 BENCHMARK(BM_MagnitudeSpectrum)->Apply(four_k_to_one_m_points);
 
