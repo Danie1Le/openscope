@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -64,14 +65,54 @@ class Instrument {
   [[nodiscard]] std::shared_ptr<const Capture> latest_capture() const { return captures_.latest(); }
 
  private:
+  /// The `*RST` timebase scale in seconds per division.
+  static constexpr double kDefaultTimebaseScale = 1e-3;
+
+  void add_generator_commands();
+  void add_channel_commands();
+  void add_acquisition_commands();
+  void add_timebase_commands();
+
+  /// Registers `<header> <parameter>`, which runs `set`, and `<header>?`, which replies what `get`
+  /// returns. Both receive the calling Session, for the settings a Session owns (ADR 0002).
+  void add_setting(std::string_view header, scpi::ParameterSpec parameter,
+                   std::function<void(Session&, const scpi::Arguments&)> set,
+                   std::function<std::string(Session&, const scpi::Arguments&)> get);
+  /// add_setting for one numeric field of the Generator a `SOURce<n>` header names.
+  void add_generator_number(std::string_view header, scpi::NumericParameter range,
+                            double GeneratorSettings::*field);
+  /// add_setting for one numeric field of the channel a `CHANnel<n>` header names.
+  void add_channel_number(std::string_view header, scpi::NumericParameter range,
+                          double ChannelSettings::*field);
+
+  /// Applies `change` to the settings of the Generator a `SOURce<n>` command names, from the next
+  /// sample index on.
+  void change_generator(const scpi::Arguments& arguments,
+                        const std::function<void(GeneratorSettings&)>& change);
+  /// Applies `change` to the settings of the channel a `CHANnel<n>` command names and discards the
+  /// capture in progress, since a capture keeps the channel settings of the block that started it.
+  void change_channel(const scpi::Arguments& arguments,
+                      const std::function<void(ChannelSettings&)>& change);
+  /// Applies `change` to the acquisition settings and discards the capture in progress.
+  /// Generators keep their phase across a sample-rate change.
+  void change_acquisition(const std::function<void(AcquisitionSettings&)>& change);
+  /// `*RST`: restores every instrument-wide setting, restarts every Generator as if it had run at
+  /// its defaults since sample index 0, and drops the latest capture. The sample clock keeps
+  /// counting and Sessions keep their own state (ADR 0002).
+  void reset();
+
   scpi::CommandTree commands_;
   std::unordered_map<SessionId, Session> sessions_;
   std::uint32_t next_session_id_ = 0;
 
+  /// The seed every Generator's seed derives from, kept for `*RST`.
+  std::uint64_t seed_;
   SampleClock clock_;
   AcquisitionSettings acquisition_;
   std::array<ChannelSettings, kChannelCount> channels_;
   std::array<Generator, kChannelCount> generators_;
+  /// Seconds per division of the display viewport. It never changes what is captured (ADR 0004).
+  double timebase_scale_ = kDefaultTimebaseScale;
   CaptureAssembler captures_;
 };
 

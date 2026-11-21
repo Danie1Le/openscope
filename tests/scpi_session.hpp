@@ -8,6 +8,14 @@
 
 namespace openscope::test {
 
+/// `SYST:ERR?` replies that more than one test file expects, written out as a client sees them.
+inline constexpr auto kNoErrorReply = R"(0,"No error")";
+inline constexpr auto kDataTypeErrorReply = R"(-104,"Data type error")";
+inline constexpr auto kParameterNotAllowedReply = R"(-108,"Parameter not allowed")";
+inline constexpr auto kMissingParameterReply = R"(-109,"Missing parameter")";
+inline constexpr auto kUndefinedHeaderReply = R"(-113,"Undefined header")";
+inline constexpr auto kIllegalParameterValueReply = R"(-224,"Illegal parameter value")";
+
 /// One Session on an Instrument, driven with SCPI lines the way a client drives it, so facade
 /// tests read as a SCPI conversation.
 class ScpiSession {

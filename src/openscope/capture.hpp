@@ -15,6 +15,9 @@ namespace openscope {
 
 /// The settings that alone define a capture (ADR 0004). The defaults are the `*RST` values.
 struct AcquisitionSettings {
+  /// The longest record length `ACQuire:POINts` accepts (2^20 samples).
+  static constexpr std::size_t kMaxRecordLength = std::size_t{1} << 20U;
+
   /// Samples per second on the sample clock (`ACQuire:SRATe`).
   double sample_rate = 1e6;
   /// Sample indexes per capture (`ACQuire:POINts`).
@@ -24,7 +27,7 @@ struct AcquisitionSettings {
 /// One enabled channel's part of a capture, with the vertical settings its samples were taken at.
 struct CapturedChannel {
   /// The channel's settings when the capture started, so its input-range limits are the ones
-  /// that clipped the samples.
+  /// that clipped the samples. `enabled` is always true: only enabled channels are captured.
   ChannelSettings settings;
   /// One sample per sample index of the capture, in volts, already clipped.
   std::vector<float> samples;

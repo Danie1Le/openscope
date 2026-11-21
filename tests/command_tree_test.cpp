@@ -659,5 +659,14 @@ TEST_F(CommandTreeTest, NumericUnitIsCopiedWhenAdded) {
   expect_rejected("LEV 1Q", kInvalidSuffix.code);
 }
 
+TEST(ShortFormTest, IsTheLeadingUpperCaseLetters) {
+  EXPECT_EQ(short_form("SINusoid"), "SIN");
+  EXPECT_EQ(short_form("CHANnel<1-4>"), "CHAN");
+  EXPECT_EQ(short_form("RAMP"), "RAMP");
+  EXPECT_EQ(short_form("DC"), "DC");
+  EXPECT_EQ(short_form("lower"), "");
+  EXPECT_EQ(short_form(""), "");
+}
+
 }  // namespace
 }  // namespace openscope::scpi

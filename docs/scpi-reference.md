@@ -2,7 +2,7 @@
 
 OpenScope is controlled with SCPI text, one line at a time. This document lists the grammar the instrument accepts, the error codes it reports and the commands it implements. It follows IEEE 488.2 and SCPI-99; where those leave a choice, the choice OpenScope made is stated here.
 
-Examples in the grammar sections use commands that later releases add (such as `CHAN:SCAL` and `MEAS:FREQ?`) to show the rules; until a command exists it answers `-113,"Undefined header"`. The [Commands](#commands) table lists what the instrument implements now.
+Examples in the grammar sections use commands that later releases add (such as `MEAS:FREQ?`) to show the rules; until a command exists it answers `-113,"Undefined header"`. The [Commands](#commands) table lists what the instrument implements now.
 
 ## Lines
 
@@ -112,6 +112,49 @@ The queue holds 20 entries. When it is full, the newest entry is replaced by `-3
 | Command | Reply | Notes |
 |---|---|---|
 | `*IDN?` | `OpenScope,OS-4,<serial>,<version>` | |
-| `*RST` | none | Restores instrument-wide settings; leaves the error queue alone |
+| `*RST` | none | Restores every instrument-wide setting to its `*RST` value below, restarts every Generator from phase zero at sample index 0 (see Generators), and drops the latest capture and the capture in progress; leaves the error queue alone |
 | `*CLS` | none | Empties the calling Session's error queue |
 | `SYSTem:ERRor[:NEXT]?` | `<code>,"<message>"` | Removes and returns the oldest error |
+
+### Settings
+
+Each setting has a setter and a query: `SOUR2:FREQ 5kHz` sets it, `SOUR2:FREQ?` replies with its value. A rejected setter (`-222` for a value out of range, `-224` for an unknown keyword) leaves the setting as it was. Generators, channels, acquisition and the timebase are instrument-wide: a change from one Session is seen by all.
+
+Query replies write numbers in the shortest form that reads back as the same value, with an upper-case exponent: `1000`, `0.001`, `1E+06`. Booleans reply `1` or `0`, keywords their short form (`SIN`), and the record length a whole number.
+
+| Setting | Values | `*RST` | Notes |
+|---|---|---|---|
+| `SOURce<n>:FUNCtion` | `SINusoid`, `SQUare`, `TRIangle`, `RAMP`, `DC`, `NOISe` | `SIN` | The shape Generator n feeds Channel n, below |
+| `SOURce<n>:FREQuency` | 0.001 Hz to 1 GHz (unit `HZ`) | 1 kHz | Ignored by `DC` and `NOISe`. Changing it keeps the phase continuous |
+| `SOURce<n>:AMPLitude` | 0 V to 100 V peak to peak (unit `V`) | 2 V | Peak-to-peak amplitude, as on a bench generator: the signal swings from offset - amplitude/2 to offset + amplitude/2. Ignored by `DC` |
+| `SOURce<n>:OFFSet` | -50 V to 50 V (unit `V`) | 0 V | Added to the whole signal |
+| `SOURce<n>:NOISe` | 0 V to 50 V (unit `V`) | 0 V | RMS of Gaussian noise added to the signal |
+| `CHANnel<n>:DISPlay` | boolean | CH1 `ON`, CH2 to CH4 `OFF` | Only enabled channels are kept in a capture |
+| `CHANnel<n>:SCALe` | 1 mV to 10 V per division (unit `V`) | 1 V | Vertical scale |
+| `CHANnel<n>:OFFSet` | -50 V to 50 V (unit `V`) | 0 V | The voltage at the centre of the input range |
+| `ACQuire:SRATe` | 1 to 1E9 samples per second (no unit) | 1E+06 | The sample rate of the sample clock, shared by all channels |
+| `ACQuire:POINts` | 1 to 1048576 (no unit) | 10000 | The record length: sample indexes per capture. The range applies to the value as sent, so `0.6` and `1048576.4` get `-222`. A fraction inside it rounds to the nearest whole number, half away from zero (`2.5` is 3) |
+| `TIMebase:SCALe` | 1 ns to 100 s per division (unit `S`) | 1 ms | The display viewport only; it never changes what is captured (ADR 0004) |
+
+`<n>` is 1 to 4 and defaults to 1.
+
+### Generators
+
+Generator n always feeds Channel n. Time is the sample index divided by the sample rate (ADR 0003). The same seed and the same commands at the same sample indexes give bit-identical samples on every run.
+
+A setting change takes effect at the next sample index. Frequency and sample-rate changes keep the phase continuous: the waveform carries on from where it was at the new rate, with no jump. So a Generator's output depends on the instrument's seed, the sample index and the settings sent since the last `*RST`, including the sample indexes they were sent at. `*RST` restarts every Generator as if it had run at its defaults since sample index 0, so the samples after `*RST` are the ones a freshly started instrument with the same seed produces at the same sample indexes.
+
+Over one cycle, with A half the peak-to-peak amplitude and the offset added on top:
+
+- `SINusoid`: A sin(2π phase), starting at zero and rising.
+- `SQUare`: +A for the first half of the cycle, -A for the second.
+- `TRIangle`: rises from 0 to +A at a quarter cycle, falls to -A at three quarters, and rises back to 0.
+- `RAMP`: rises linearly from -A to +A across the cycle, then drops back.
+- `DC`: the offset alone.
+- `NOISe`: uniform random values from -A to +A, independent from one sample index to the next.
+
+### Channels and captures
+
+A channel's input range is its offset plus or minus four vertical divisions (four times its scale). A sample outside it is clipped: held at the nearer limit. The sample rate and record length alone define a capture. Captures are taken back to back, each spanning one record length of sample indexes, and only the latest capture is kept.
+
+A capture takes its settings from its first sample, so changing a channel setting (`CHAN<n>:DISP`, `SCAL`, `OFFS`) or an acquisition setting (`ACQ:SRAT`, `POIN`) drops the capture in progress, and the next capture starts at the next sample index. The latest capture already completed stays as it was. Generator and timebase changes do not drop the capture in progress.

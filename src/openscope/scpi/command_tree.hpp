@@ -62,6 +62,10 @@ using HandlerResult = std::variant<std::optional<std::string>, ScpiError>;
 /// Runs a matched command for the calling Session.
 using Handler = std::function<HandlerResult(Session&, const Arguments&)>;
 
+/// The short form of a mnemonic or keyword pattern: its leading upper-case letters (`SINusoid` is
+/// `SIN`, `CHANnel<1-4>` is `CHAN`). Queries reply with keywords in this form.
+std::string_view short_form(std::string_view pattern);
+
 /// One command: its header pattern, its parameters and its handler. Patterns are written as in
 /// instrument manuals: `*IDN?`, `SYSTem:ERRor[:NEXT]?`, `CHANnel<1-4>:SCALe`. A query is a
 /// separate command from its setter.
