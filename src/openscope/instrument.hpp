@@ -18,6 +18,7 @@
 #include "openscope/capture.hpp"
 #include "openscope/channel.hpp"
 #include "openscope/generator.hpp"
+#include "openscope/measurement.hpp"
 #include "openscope/sample_clock.hpp"
 #include "openscope/scpi/command_tree.hpp"
 #include "openscope/session.hpp"
@@ -37,9 +38,9 @@ enum class SessionId : std::uint64_t {};
 using ReplyHandler = std::function<void(std::optional<std::string> reply)>;
 
 /// The single entry point for instrument behaviour. It owns every Session and the instrument-wide
-/// state (generators, channels, acquisition and trigger settings, the run state, the sample clock
-/// and the latest capture), and executes SCPI text on a Session's behalf, so transports and tests
-/// all reach the instrument through the same path.
+/// state (generators, channels, acquisition and trigger settings, the run state, the sample clock,
+/// the latest capture and its measurements), and executes SCPI text on a Session's behalf, so
+/// transports and tests all reach the instrument through the same path.
 ///
 /// The sample clock runs in one of two ways, never both on one Instrument. In test mode one thread
 /// steps it with `advance`. In live mode an acquisition thread calls `acquire` and a processing
@@ -177,6 +178,7 @@ class Instrument {
   void add_trigger_commands();
   void add_waveform_commands();
   void add_fft_commands();
+  void add_measurement_commands();
 
   /// Replies what `reply` writes from the latest capture and channel `source` (1 to 4) in it.
   /// Before the first capture completes it reports -230; when the source channel is not in the
@@ -270,6 +272,7 @@ class Instrument {
   double timebase_scale_ = kDefaultTimebaseScale;
   TriggerSettings trigger_;
   RunState run_state_ = RunState::kRunning;
+  MeasurementEngine measurements_;
   /// At most one per Session: a Session with a held line sends no other.
   std::vector<HeldLine> held_;
   /// The generation of the blocks acquired from now on (AcquiredBlock::generation).
