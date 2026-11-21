@@ -11,6 +11,7 @@
 #include <format>
 #include <numbers>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <tuple>
 #include <vector>
@@ -144,6 +145,14 @@ class BinCentredToneTest : public testing::TestWithParam<ToneCase> {
       magnitude_spectrum_db(sine(tone.length, static_cast<double>(tone.bin)), lobe.window);
 };
 
+/// The test name of a case, such as `Hann_1024Points`.
+std::string tone_case_name(const testing::TestParamInfo<ToneCase>& info) {
+  constexpr std::array<std::string_view, 3> kWindowNames{"Rectangular", "Hann", "BlackmanHarris"};
+  const auto& [lobe, tone] = info.param;
+  return std::format("{}_{}Points", kWindowNames[static_cast<std::size_t>(lobe.window)],
+                     tone.length);
+}
+
 TEST_P(BinCentredToneTest, ReadsItsRmsLevelInItsBinAndTheWindowsLevelsBesideIt) {
   ASSERT_EQ(spectrum.size(), (tone.length / 2) + 1);
   EXPECT_NEAR(spectrum[tone.bin], kOneVoltPeakSineDb, 1e-4);
@@ -173,13 +182,7 @@ INSTANTIATE_TEST_SUITE_P(
                                                              0.01168 / (2 * 0.35875)}}),
                      testing::Values(ToneBin{.length = 1024, .bin = 100},
                                      ToneBin{.length = std::size_t{1} << 20U, .bin = 100'000})),
-    [](const testing::TestParamInfo<ToneCase>& info) {
-      constexpr std::array<std::string_view, 3> kWindowNames{"Rectangular", "Hann",
-                                                             "BlackmanHarris"};
-      const auto& [lobe, tone] = info.param;
-      return std::format("{}_{}Points", kWindowNames[static_cast<std::size_t>(lobe.window)],
-                         tone.length);
-    });
+    tone_case_name);
 
 /// A window with its scalloping loss, the dB a tone exactly half-way between two bins reads below
 /// its level (Harris 1978, table 1), and the bounds on the level ten bins further out, relative to
