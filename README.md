@@ -50,4 +50,5 @@ The `benchmark` preset (Release) installs the vcpkg `benchmarks` feature (Google
 CC=gcc-14 CXX=g++-14 cmake --preset benchmark && cmake --build --preset benchmark
 build/benchmark/bench/fft_benchmark
 build/benchmark/bench/ring_buffer_benchmark
+build/benchmark/bench/live_run 60   # live mode at 4 channels x 1 MS/s for 60 s: prints drop counts
 ```

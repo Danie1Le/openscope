@@ -75,3 +75,21 @@ Measured 2026-11-21 on the machine above (Intel Core i7-9700F, `openscope-dev:24
 What the table shows: a hand-over took 21 to 34 ns, and fewer pushes found the queue full as it grew. The live pipeline is meant to hand over one sample block per millisecond at 1 MS/s, about 1000 blocks per second, so the queue is tens of thousands of times faster than it needs to be: the cost of a block is generating and assembling its samples, not passing it on.
 
 Not measured, so only a hypothesis: that most of each hand-over is the two cores passing the indexes' and the slot's cache lines back and forth.
+
+## Live mode at 4 channels x 1 MS/s (NFR-1)
+
+`bench/live_run.cpp` runs the instrument live (`openscope::LivePipeline`) with all four channels enabled, each a 1 kHz sine with 10 mV RMS noise, at the `*RST` 1 MS/s and record length of 10 000, and prints once a second how far the latest capture reaches on the sample clock against the samples the wall clock has released, with the dropped-block and discarded-capture counts:
+
+```sh
+build/benchmark/bench/live_run 60
+```
+
+Measured 2026-11-21 on the machine above (same container and build flags as the ring buffer), for 60 seconds while other builds and tests shared the machine:
+
+| | Result |
+|---|---|
+| Dropped blocks | 0 |
+| Captures discarded for spanning a dropped block | 0 |
+| Latest capture's end behind the wall clock, sampled each second | 2 079 to 13 083 samples (2.1 to 13.1 ms) |
+
+What the table shows: NFR-1's target of zero dropped blocks at 4 channels x 1 MS/s held for this run. Captures complete every 10 000 samples, so the latest capture's end trails the wall clock by up to one record length (10 ms) plus the time to acquire and process the block that completes it; the most seen was 13.1 ms, and it did not grow over the run, so live mode kept pace with real time. This is one 60-second run, not a soak test, and nothing was measured under heavier load than this shared machine.

@@ -27,3 +27,7 @@ target_link_libraries(fft_benchmark PRIVATE openscope openscope_warnings benchma
 add_executable(ring_buffer_benchmark ring_buffer_benchmark.cpp)
 target_link_libraries(ring_buffer_benchmark PRIVATE openscope openscope_warnings
   benchmark::benchmark_main Threads::Threads)
+
+# Not a Google Benchmark: runs the live pipeline in real time and prints its drop counts.
+add_executable(live_run live_run.cpp)
+target_link_libraries(live_run PRIVATE openscope openscope_warnings)
