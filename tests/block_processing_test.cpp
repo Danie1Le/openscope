@@ -236,6 +236,21 @@ TEST_F(BlockProcessingTest, BlockFromASingleCompletedAfterRunKeepsTheInstrumentR
   EXPECT_EQ(first_index(instrument), kResetRecordLength);
 }
 
+// The rest of that block, after the Single's capture, is captured as Running: captures follow on
+// with no gap, as when the instrument had been Running all along.
+TEST_F(BlockProcessingTest, RunDuringASinglesBlockCapturesTheRestOfTheBlock) {
+  session.send("ACQ:POIN 10;:SINGle");
+  const AcquiredBlock armed = acquired(instrument, 25);
+  session.send("RUN");
+
+  instrument.process(armed);
+  EXPECT_EQ(first_index(instrument), 10U);  // Captures 0..9 and 10..19; 20..24 in progress.
+  instrument.process(acquired(instrument, 25));
+
+  EXPECT_EQ(first_index(instrument), 40U);
+  EXPECT_EQ(instrument.discarded_captures(), 0U);
+}
+
 TEST_F(BlockProcessingTest, ResetDropsTheLatestCaptureAndTheBlocksAcquiredBeforeIt) {
   instrument.process(acquired(instrument, kResetRecordLength));
   const AcquiredBlock before = acquired(instrument, kResetRecordLength);
