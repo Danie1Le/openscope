@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <cstddef>
@@ -195,7 +196,8 @@ INSTANTIATE_TEST_SUITE_P(Windows, OffBinToneTest,
 TEST(MagnitudeSpectrumTest, DcReadsItsVoltageInEveryWindow) {
   for (const FftWindow window :
        {FftWindow::kRectangular, FftWindow::kHann, FftWindow::kBlackmanHarris}) {
-    const std::vector<float> spectrum = magnitude_spectrum_db(std::vector<float>(256, -0.5F), window);
+    const std::vector<float> spectrum =
+        magnitude_spectrum_db(std::vector<float>(256, -0.5F), window);
     EXPECT_NEAR(spectrum[0], dbv(0.5), 1e-4);
   }
 }
@@ -228,8 +230,8 @@ TEST(MagnitudeSpectrumTest, UsesOnlyTheFirstSpectrumLengthSamples) {
 }
 
 TEST(MagnitudeSpectrumTest, OneSampleIsOneDcBin) {
-  const std::vector<float> spectrum = magnitude_spectrum_db(std::vector<float>{2.0F},
-                                                            FftWindow::kRectangular);
+  const std::vector<float> spectrum =
+      magnitude_spectrum_db(std::vector<float>{2.0F}, FftWindow::kRectangular);
   ASSERT_EQ(spectrum.size(), 1);
   EXPECT_NEAR(spectrum[0], dbv(2.0), 1e-4);
 }
@@ -238,10 +240,11 @@ TEST(MagnitudeSpectrumTest, EveryWindowGivesFiniteLevelsForTheShortestRecords) {
   for (const FftWindow window :
        {FftWindow::kRectangular, FftWindow::kHann, FftWindow::kBlackmanHarris}) {
     for (std::size_t count = 1; count <= 4; ++count) {
-      for (const float level : magnitude_spectrum_db(std::vector<float>(count, 1.0F), window)) {
-        EXPECT_TRUE(std::isfinite(level)) << count << " samples";
-        EXPECT_GE(level, kSpectrumFloorDb);
-      }
+      const std::vector<float> spectrum =
+          magnitude_spectrum_db(std::vector<float>(count, 1.0F), window);
+      EXPECT_TRUE(std::ranges::all_of(
+          spectrum, [](float level) { return std::isfinite(level) && level >= kSpectrumFloorDb; }))
+          << count << " samples";
     }
   }
 }
