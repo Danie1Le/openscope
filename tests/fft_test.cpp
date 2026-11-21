@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "decibels.hpp"
+#include "openscope/fft_window.hpp"
 
 namespace openscope {
 namespace {
