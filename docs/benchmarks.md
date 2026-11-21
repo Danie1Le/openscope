@@ -7,6 +7,7 @@ Measured numbers for the performance claims in the spec. CI runs the same benchm
 ```sh
 CC=gcc-14 CXX=g++-14 cmake --preset benchmark && cmake --build --preset benchmark
 build/benchmark/bench/fft_benchmark --benchmark_repetitions=10 --benchmark_enable_random_interleaving=true --benchmark_report_aggregates_only=true
+build/benchmark/bench/ring_buffer_benchmark --benchmark_repetitions=10 --benchmark_enable_random_interleaving=true --benchmark_report_aggregates_only=true
 ```
 
 The `benchmark` preset is a Release build with the vcpkg `benchmarks` feature, which adds Google Benchmark. KissFFT is a reference for comparison only; OpenScope never links it outside `bench/`.

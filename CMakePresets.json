@@ -76,7 +76,7 @@
     { "name": "tsan", "configurePreset": "tsan" },
     { "name": "coverage", "configurePreset": "coverage" },
     { "name": "fuzz", "configurePreset": "fuzz", "targets": ["execute_line_fuzzer"] },
-    { "name": "benchmark", "configurePreset": "benchmark", "targets": ["fft_benchmark"] }
+    { "name": "benchmark", "configurePreset": "benchmark", "targets": ["fft_benchmark", "ring_buffer_benchmark"] }
   ],
   "testPresets": [
     {
