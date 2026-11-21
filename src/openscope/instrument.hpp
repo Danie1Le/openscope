@@ -77,14 +77,15 @@ class Instrument {
   void add_timebase_commands();
   void add_trigger_commands();
   void add_waveform_commands();
+  void add_fft_commands();
   void add_measurement_commands();
 
-  /// Replies what `reply` writes from the latest capture and its channel `channel` (1 to 4).
-  /// Before the first capture completes it reports -230; when the channel is not in the latest
-  /// capture, -221 (a query never reads a channel that was not captured).
-  scpi::HandlerResult reply_with_channel(
-      std::size_t channel, const std::function<std::string(const std::shared_ptr<const Capture>&,
-                                                           const CapturedChannel&)>& reply) const;
+  /// Replies what `reply` writes from the latest capture and channel `source` (1 to 4) in it.
+  /// Before the first capture completes it reports -230; when the source channel is not in the
+  /// latest capture, -221 (a query never reads a channel that was not captured).
+  scpi::HandlerResult reply_with_source(
+      std::size_t source,
+      const std::function<std::string(const Capture&, const CapturedChannel&)>& reply) const;
 
   /// Registers `<header> <parameter>`, which runs `set`, and `<header>?`, which replies what `get`
   /// returns. Both receive the calling Session, for the settings a Session owns (ADR 0002).
