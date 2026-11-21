@@ -657,9 +657,8 @@ void Instrument::reset() {
   // Fresh Generators rather than reconfigured ones: phase continuity would carry the phase built
   // up by earlier settings past *RST, so the output would depend on the commands sent before it.
   generators_ = make_generators(seed_, acquisition_.sample_rate);
-  discard_capture();
+  capture_setting_changed();
   latest_.store(nullptr);
-  statistics_.reset();
   run_state_ = RunState::kRunning;
 }
 
@@ -727,22 +726,22 @@ void Instrument::advance(std::size_t samples) {
   while (samples > 0) {
     std::size_t count = std::min(samples, kMaxBlockLength);
     const std::optional<AcquiredBlock> block = sample(count);
-    Pushed pushed;
+    std::optional<std::size_t> single_end;
     if (block) {
       // Every capture counts, not only the last of the block, so the statistics do not depend on
       // how `advance` is chunked; and before held lines resume, so they see the Single's capture.
-      pushed = assemble(*block, [this](const std::shared_ptr<const Capture>& capture) {
-        statistics_.add(measure_all(*capture));
+      single_end = assemble(*block, [&](const std::shared_ptr<const Capture>& capture) {
+        publish(*block, capture, measure_all(*capture));
       });
       // The Single's capture ends the operation at its last sample: the lines it resumes run with
       // the clock there, and the next block starts there under whatever they changed, so how
       // `advance` is chunked never changes a capture or a reply (ADR 0003).
-      count = pushed.end.value_or(count);
+      count = single_end.value_or(count);
     }
     clock_.take(count);
     samples -= count;
-    if (block) {
-      conclude(*block, pushed);
+    if (single_end) {
+      conclude(*block);
     }
   }
 }
@@ -769,26 +768,20 @@ std::optional<AcquiredBlock> Instrument::acquire(std::size_t count) {
 }
 
 void Instrument::process(const AcquiredBlock& block) {
-  // Each capture is measured as it completes, without the mutex, then counted and published under
-  // one hold of it, only while no command has discarded its generation (the rule conclude
-  // publishes by): the statistics never hold a capture of settings older than a command that has
-  // returned, and their current result is always the latest capture's.
-  const CaptureSink count = [this, &block](const std::shared_ptr<const Capture>& capture) {
+  // Each capture is measured as it completes, without the mutex, and published under it.
+  const CaptureSink publish_measured = [this, &block](const std::shared_ptr<const Capture>& capture) {
     const CaptureResults results = measure_all(*capture);
     const std::scoped_lock lock(mutex_);
-    if (block.generation == generation_) {
-      statistics_.add(results);
-      latest_.store(capture);
-    }
+    publish(block, capture, results);
   };
-  const Pushed pushed = assemble(block, count);
-  if (pushed.capture == nullptr && !pushed.end) {
+  const std::optional<std::size_t> single_end = assemble(block, publish_measured);
+  if (!single_end) {
     return;
   }
   bool rest_runs = false;
   {
     const std::scoped_lock lock(mutex_);
-    rest_runs = conclude(block, pushed);
+    rest_runs = conclude(block);
   }
   // RUN came after the block was acquired for a Single. The Single still ends at its capture, and
   // the trigger restarts there as after any Single, but the instrument runs on: the samples after
@@ -796,13 +789,9 @@ void Instrument::process(const AcquiredBlock& block) {
   if (rest_runs) {
     run_generation_ = block.generation;
   }
-  if (rest_runs && *pushed.end < block.samples.count) {
-    const Pushed rest = captures_.push(samples_from(block.samples, *pushed.end), block.acquisition,
-                                       block.channels, block.trigger, CaptureLimit::kEvery, count);
-    if (rest.capture != nullptr) {
-      const std::scoped_lock lock(mutex_);
-      conclude(block, rest);
-    }
+  if (rest_runs && *single_end < block.samples.count) {
+    captures_.push(samples_from(block.samples, *single_end), block.acquisition, block.channels,
+                   block.trigger, CaptureLimit::kEvery, publish_measured);
   }
 }
 
@@ -835,7 +824,8 @@ std::optional<AcquiredBlock> Instrument::snapshot() {
                        .sequence = next_sequence_++};
 }
 
-Pushed Instrument::assemble(const AcquiredBlock& block, const CaptureSink& on_completed) {
+std::optional<std::size_t> Instrument::assemble(const AcquiredBlock& block,
+                                                const CaptureSink& on_completed) {
   const bool follows_drop = block.sequence != expected_sequence_;
   expected_sequence_ = block.sequence + 1;
   const bool new_generation = block.generation != assembled_generation_;
@@ -857,16 +847,20 @@ Pushed Instrument::assemble(const AcquiredBlock& block, const CaptureSink& on_co
                         on_completed);
 }
 
-bool Instrument::conclude(const AcquiredBlock& block, const Pushed& pushed) {
+void Instrument::publish(const AcquiredBlock& block, const std::shared_ptr<const Capture>& capture,
+                         const CaptureResults& results) {
   // A command since the block was acquired has discarded what it belongs to: its capture would
-  // show settings older than that command, and the Single it would end was restarted or ended.
+  // show settings older than that command. Counting and publishing in one hold of the mutex keeps
+  // the statistics' current result the latest capture's.
+  if (block.generation == generation_) {
+    statistics_.add(results);
+    latest_.store(capture);
+  }
+}
+
+bool Instrument::conclude(const AcquiredBlock& block) {
+  // A command since the block was acquired has restarted or ended the Single it would end.
   if (block.generation != generation_) {
-    return false;
-  }
-  if (pushed.capture != nullptr) {
-    latest_.store(pushed.capture);
-  }
-  if (!pushed.end) {
     return false;
   }
   if (pending()) {

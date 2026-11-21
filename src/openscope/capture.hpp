@@ -62,18 +62,9 @@ enum class CaptureLimit : std::uint8_t {
   kFirst,
 };
 
-/// What `CaptureAssembler::push` made of one sample block.
-struct Pushed {
-  /// The last capture the block completed, or null when it completed none. It never changes, so
-  /// readers may keep it as long as they like.
-  std::shared_ptr<const Capture> capture;
-  /// Under CaptureLimit::kFirst, once a capture completes: the offset in the block just past it.
-  std::optional<std::size_t> end;
-};
-
-/// Called by `CaptureAssembler::push` with each capture as it completes, so every capture can be
-/// measured, and published, although only the last of a block is returned. It never changes, so
-/// the sink may keep it.
+/// Called by `CaptureAssembler::push` with each capture as it completes: the one way captures
+/// leave the assembler, so each can be measured and published. It never changes, so the sink may
+/// keep it.
 using CaptureSink = std::function<void(const std::shared_ptr<const Capture>&)>;
 
 /// Assembles sample blocks into captures placed by the edge trigger. A capture starts collecting
@@ -83,20 +74,21 @@ using CaptureSink = std::function<void(const std::shared_ptr<const Capture>&)>;
 /// without such an event makes the latest record length of samples an untriggered capture.
 class CaptureAssembler {
  public:
-  /// Appends `block`, taken under `acquisition`, `channels` and `trigger`. A capture takes its
-  /// settings from the block that starts it, and the trigger keeps its state from block to block,
-  /// so the caller discards the capture in progress whenever it changes a setting or skips
-  /// samples. A block may complete several captures, of which `limit` says how many to make:
-  /// under kFirst, once a capture completes, it discards and returns the offset in `block` just
-  /// past that capture, so the caller can push the samples after it as a new block; otherwise it
-  /// uses the whole block. Each capture goes to `on_completed`, if given, as it completes, and
-  /// push returns the last one. Throws std::logic_error when `acquisition` has a record length of
-  /// zero, when `block` lacks the trigger channel's samples, or when it lacks samples for a channel
-  /// of the capture in progress, which means a channel was enabled or disabled without a discard.
-  Pushed push(const SampleBlock& block, const AcquisitionSettings& acquisition,
-              std::span<const ChannelSettings, kChannelCount> channels,
-              const TriggerSettings& trigger, CaptureLimit limit = CaptureLimit::kEvery,
-              const CaptureSink& on_completed = {});
+  /// Appends `block`, taken under `acquisition`, `channels` and `trigger`, and hands each capture
+  /// to `on_completed`, if given, as it completes. A capture takes its settings from the block
+  /// that starts it, and the trigger keeps its state from block to block, so the caller discards
+  /// the capture in progress whenever it changes a setting or skips samples. A block may complete
+  /// several captures, of which `limit` says how many to make: under kFirst, once a capture
+  /// completes, it discards and returns the offset in `block` just past that capture, so the
+  /// caller can push the samples after it as a new block; otherwise it uses the whole block and
+  /// returns nullopt. Throws std::logic_error when `acquisition` has a record length of zero, when
+  /// `block` lacks the trigger channel's samples, or when it lacks samples for a channel of the
+  /// capture in progress, which means a channel was enabled or disabled without a discard.
+  std::optional<std::size_t> push(const SampleBlock& block, const AcquisitionSettings& acquisition,
+                                  std::span<const ChannelSettings, kChannelCount> channels,
+                                  const TriggerSettings& trigger,
+                                  CaptureLimit limit = CaptureLimit::kEvery,
+                                  const CaptureSink& on_completed = {});
 
   /// Drops the capture in progress and restarts the trigger, unarmed and with no holdoff
   /// running; the next block starts a new capture. Returns whether a capture was in progress.
@@ -143,7 +135,7 @@ class CaptureAssembler {
   std::size_t pre_trigger_ = 0;
   /// True once a trigger event has placed the capture being collected.
   bool placed_ = false;
-  /// The last capture the block being pushed has completed.
+  /// The capture complete() has just made, until push hands it on.
   std::shared_ptr<const Capture> completed_;
 };
 

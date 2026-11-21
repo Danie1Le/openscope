@@ -161,13 +161,19 @@ class Instrument {
   /// into; nullopt while Stopped. Needs mutex_.
   std::optional<AcquiredBlock> snapshot();
   /// Feeds `block` to the capture assembler, which hands each capture to `on_completed` as it
-  /// completes. Touches the processing state only, so it needs no lock.
-  Pushed assemble(const AcquiredBlock& block, const CaptureSink& on_completed);
-  /// Publishes what assembling `block` produced and ends a Single its capture completes, unless a
-  /// command has discarded the capture in progress since `block` was acquired. Returns true when
-  /// the block's Single capture ended inside it but `RUN` had already ended the Single, so the
-  /// samples after `pushed.end` are still to be captured as Running. Needs mutex_.
-  bool conclude(const AcquiredBlock& block, const Pushed& pushed);
+  /// completes. Returns, when the block's Single capture completed inside it, the offset just past
+  /// that capture. Touches the processing state only, so it needs no lock.
+  std::optional<std::size_t> assemble(const AcquiredBlock& block, const CaptureSink& on_completed);
+  /// Counts `capture`, which completed in `block`, in the measurement statistics with its
+  /// `results` and makes it the latest capture, unless a command has discarded the capture in
+  /// progress since `block` was acquired. Needs mutex_.
+  void publish(const AcquiredBlock& block, const std::shared_ptr<const Capture>& capture,
+               const CaptureResults& results);
+  /// Ends the Single whose capture completed inside `block`, unless a command has discarded the
+  /// capture in progress since `block` was acquired. Returns true when `RUN` had already ended
+  /// the Single, so the samples after that capture are still to be captured as Running. Needs
+  /// mutex_.
+  bool conclude(const AcquiredBlock& block);
   /// Discards the capture in progress: the blocks acquired from now on start a new generation,
   /// and a capture never mixes two generations.
   void discard_capture() { ++generation_; }
