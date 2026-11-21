@@ -41,14 +41,14 @@ std::size_t peak_bin(const std::vector<float>& spectrum) {
       std::distance(spectrum.begin(), std::ranges::max_element(spectrum)));
 }
 
-/// Facade tests on captures with a record length of 1024 at 1.024 MS/s, so the bins are exactly
-/// 1 kHz apart and a tone at a whole number of kilohertz sits on a bin.
+/// Facade tests of the FFT commands, each setting up the capture it reads.
 class FftCommandsTest : public test::InstrumentFixture {
  protected:
   static constexpr std::size_t kRecordLength = 1024;
 
-  /// Sets CH1's sine to `frequency`, takes one capture and returns the CH1 spectrum `FFT:DATA?`
-  /// replies under `window`.
+  /// Sets CH1's sine to `frequency`, takes one capture of kRecordLength samples at 1.024 MS/s (so
+  /// the bins are exactly 1 kHz apart and a tone at a whole number of kilohertz sits on a bin) and
+  /// returns the spectrum of the `FFT:SOUR` channel that `FFT:DATA?` replies under `window`.
   std::vector<float> spectrum_of_sine(std::string_view frequency, std::string_view window) {
     session.send(std::format("ACQ:SRAT 1.024E6;POIN {};:SOUR1:FREQ {};:FFT:WIND {}", kRecordLength,
                              frequency, window));
@@ -92,10 +92,11 @@ TEST_F(FftCommandsTest, SourceAcceptsOnlyAChannel) {
 TEST_F(FftCommandsTest, SourceAndWindowBelongToEachSessionAndSurviveRst) {
   ScpiSession other{instrument};
   other.send("FFT:SOUR CHAN2;WIND RECT;:WAV:SOUR CHAN4");
+  session.send("FFT:SOUR CHAN3;WIND BHAR");
 
   session.send("*RST");
 
-  EXPECT_EQ(session.send("FFT:SOUR?;WIND?"), "CHAN1;HANN");
+  EXPECT_EQ(session.send("FFT:SOUR?;WIND?"), "CHAN3;BHAR");
   EXPECT_EQ(other.send("FFT:SOUR?;WIND?"), "CHAN2;RECT");
   EXPECT_EQ(other.send("WAV:SOUR?"), "CHAN4");  // The two sources are separate settings.
 }
