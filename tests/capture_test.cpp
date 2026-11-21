@@ -3,10 +3,11 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <memory>
+#include <optional>
+#include <span>
 #include <stdexcept>
 #include <vector>
 
@@ -14,11 +15,15 @@
 #include "openscope/channel.hpp"
 #include "openscope/instrument.hpp"
 #include "openscope/sample_block.hpp"
+#include "openscope/sample_clock.hpp"
+#include "openscope/trigger.hpp"
 
 namespace openscope {
 namespace {
 
+using testing::ElementsAre;
 using testing::FloatNear;
+using testing::IsEmpty;
 
 using CaptureTest = test::InstrumentFixture;
 
@@ -102,9 +107,7 @@ TEST_F(CaptureTest, CaptureDoesNotDependOnHowTheClockWasStepped) {
   instrument.advance(kSamples);
 
   Instrument stepped;
-  for (std::size_t done = 0; done < kSamples; done += 999) {
-    stepped.advance(std::min<std::size_t>(999, kSamples - done));
-  }
+  test::advance_in_steps(stepped, kSamples, 999);
 
   const std::shared_ptr<const Capture> whole = instrument.latest_capture();
   const std::shared_ptr<const Capture> pieces = stepped.latest_capture();
@@ -152,6 +155,75 @@ TEST(CaptureAssemblerTest, RecordLengthOfZeroIsALogicError) {
   EXPECT_THROW(assembler.push(block, {.sample_rate = 1.0, .record_length = 0}, channels, {}),
                std::logic_error);
   EXPECT_EQ(assembler.latest(), nullptr);
+}
+
+/// CH1 enabled, triggering on itself.
+constexpr std::array<ChannelSettings, kChannelCount> kChannelOne{{{.enabled = true}, {}, {}, {}}};
+
+/// Auto with time zero on the first sample: a signal that never triggers gives an untriggered
+/// capture every record length.
+constexpr TriggerSettings kUntriggeredEveryRecord{.position = 0.0};
+
+/// A block of CH1 samples from `first` on, rising from 0 V by 1 V a sample, so it never moves the
+/// hysteresis band below the 0 V trigger level and never triggers.
+SampleBlock rising_block(SampleIndex first, std::size_t count) {
+  SampleBlock block{.first_index = first, .count = count, .channels = {}};
+  for (std::size_t n = 0; n < count; ++n) {
+    block.channels[0].push_back(static_cast<float>(first + n));
+  }
+  return block;
+}
+
+/// The first sample index of each of `captures`.
+std::vector<SampleIndex> first_indexes(std::span<const std::shared_ptr<const Capture>> captures) {
+  std::vector<SampleIndex> indexes;
+  for (const auto& capture : captures) {
+    indexes.push_back(capture->first_index);
+  }
+  return indexes;
+}
+
+TEST(CaptureAssemblerTest, PushReportsEveryCaptureItCompletesOldestFirst) {
+  CaptureAssembler assembler;
+  const AcquisitionSettings acquisition{.sample_rate = 1.0, .record_length = 2};
+
+  assembler.push(rising_block(0, 7), acquisition, kChannelOne, kUntriggeredEveryRecord);
+
+  const std::vector<std::shared_ptr<const Capture>> completed = assembler.take_completed();
+  EXPECT_THAT(first_indexes(completed), ElementsAre(0U, 2U, 4U));
+  EXPECT_EQ(completed.empty() ? nullptr : completed.back(), assembler.latest());
+  EXPECT_THAT(assembler.take_completed(), IsEmpty());
+
+  assembler.push(rising_block(7, 1), acquisition, kChannelOne, kUntriggeredEveryRecord);
+
+  EXPECT_THAT(first_indexes(assembler.take_completed()), ElementsAre(6U));
+
+  assembler.push(rising_block(8, 1), acquisition, kChannelOne, kUntriggeredEveryRecord);
+
+  EXPECT_THAT(assembler.take_completed(), IsEmpty());
+  ASSERT_NE(assembler.latest(), nullptr);
+  EXPECT_EQ(assembler.latest()->first_index, 6U);
+}
+
+TEST(CaptureAssemblerTest, PushDropsCapturesNotTaken) {
+  CaptureAssembler assembler;
+  const AcquisitionSettings acquisition{.sample_rate = 1.0, .record_length = 2};
+
+  assembler.push(rising_block(0, 4), acquisition, kChannelOne, kUntriggeredEveryRecord);
+  assembler.push(rising_block(4, 2), acquisition, kChannelOne, kUntriggeredEveryRecord);
+
+  EXPECT_THAT(first_indexes(assembler.take_completed()), ElementsAre(4U));
+}
+
+TEST(CaptureAssemblerTest, PushOfTheFirstCaptureOnlyReportsThatCapture) {
+  CaptureAssembler assembler;
+
+  const std::optional<std::size_t> end =
+      assembler.push(rising_block(0, 7), {.sample_rate = 1.0, .record_length = 2}, kChannelOne,
+                     kUntriggeredEveryRecord, CaptureLimit::kFirst);
+
+  EXPECT_EQ(end, 2U);
+  EXPECT_THAT(first_indexes(assembler.take_completed()), ElementsAre(0U));
 }
 
 }  // namespace

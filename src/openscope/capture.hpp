@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <utility>
 #include <vector>
 
 #include "openscope/channel.hpp"
@@ -96,6 +97,13 @@ class CaptureAssembler {
   /// changes once published, so readers may keep it as long as they like.
   [[nodiscard]] std::shared_ptr<const Capture> latest() const { return latest_; }
 
+  /// Moves out every capture the last `push` completed, oldest first, so each can be measured for
+  /// the statistics although only the last becomes the latest capture. Empty when it completed
+  /// none or they have been taken already; the next `push` drops any not taken.
+  [[nodiscard]] std::vector<std::shared_ptr<const Capture>> take_completed() {
+    return std::exchange(completed_, {});
+  }
+
  private:
   /// Offsets of trigger events within the block being pushed.
   using EventIterator = std::vector<std::size_t>::const_iterator;
@@ -132,8 +140,8 @@ class CaptureAssembler {
   /// True once a trigger event has placed the capture being collected.
   bool placed_ = false;
   std::shared_ptr<const Capture> latest_;
-  /// How many captures have been published, so `push` can tell whether it published one.
-  std::size_t published_ = 0;
+  /// The captures the last `push` completed, oldest first.
+  std::vector<std::shared_ptr<const Capture>> completed_;
 };
 
 }  // namespace openscope
