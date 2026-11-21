@@ -20,7 +20,6 @@ inline constexpr auto kDataStaleReply = R"(-230,"Data corrupt or stale")";
 inline constexpr auto kInvalidSuffixReply = R"(-131,"Invalid suffix")";
 inline constexpr auto kSuffixOutOfRangeReply = R"(-114,"Header suffix out of range")";
 inline constexpr auto kOutOfRangeReply = R"(-222,"Data out of range")";
-inline constexpr auto kDataStaleReply = R"(-230,"Data corrupt or stale")";
 
 /// One Session on an Instrument, driven with SCPI lines the way a client drives it, so facade
 /// tests read as a SCPI conversation.
