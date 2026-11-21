@@ -35,7 +35,7 @@ _Avoid_: Hardware source
 ## Control
 
 **Session**:
-One connected client (a script over TCP or a browser over WebSocket). It owns its own error queue and waveform-transfer settings; everything else is shared instrument state.
+One connected client (a script over TCP or a browser over WebSocket). It owns its own error queue, waveform-transfer settings and FFT settings (source and window); everything else is shared instrument state.
 _Avoid_: Connection, client (as the noun for the state)
 
 ## Acquisition
@@ -120,6 +120,18 @@ _Avoid_: Error code, quality
 
 **Measurement statistics**:
 Current, mean, minimum, maximum and standard deviation of one measurement across captures since the last statistics reset. Any setting change resets them.
+
+**Spectrum**:
+The magnitude of one channel of the latest capture at each frequency bin, in dBV RMS, computed by the FFT through a window.
+_Avoid_: FFT (for the result), frequency domain trace
+
+**Window**:
+The weighting (rectangular, Hann or Blackman-Harris) applied to the samples before the FFT, trading frequency resolution against leakage. Chosen per Session.
+_Avoid_: Taper, apodization
+
+**Bin spacing**:
+The frequency step between neighbouring bins of a spectrum: the sample rate divided by the number of samples the FFT takes.
+_Avoid_: Resolution bandwidth, frequency resolution
 
 ## Display
 

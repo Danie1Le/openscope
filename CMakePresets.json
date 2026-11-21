@@ -57,6 +57,16 @@
         "CMAKE_CXX_FLAGS": "-fsanitize=fuzzer-no-link,address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer",
         "OPENSCOPE_FUZZ": "ON"
       }
+    },
+    {
+      "name": "benchmark",
+      "displayName": "Release build of the Google Benchmark targets",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "VCPKG_MANIFEST_FEATURES": "benchmarks",
+        "OPENSCOPE_BENCHMARKS": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -65,7 +75,8 @@
     { "name": "asan", "configurePreset": "asan" },
     { "name": "tsan", "configurePreset": "tsan" },
     { "name": "coverage", "configurePreset": "coverage" },
-    { "name": "fuzz", "configurePreset": "fuzz", "targets": ["execute_line_fuzzer"] }
+    { "name": "fuzz", "configurePreset": "fuzz", "targets": ["execute_line_fuzzer"] },
+    { "name": "benchmark", "configurePreset": "benchmark", "targets": ["fft_benchmark"] }
   ],
   "testPresets": [
     {

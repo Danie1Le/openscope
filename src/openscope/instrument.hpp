@@ -22,11 +22,14 @@
 
 namespace openscope {
 
-/// Identifies one Session opened on an Instrument.
-enum class SessionId : std::uint32_t {};
+/// Identifies one Session opened on an Instrument. Ids count up and are never reused: 64 bits do
+/// not wrap, so a closed Session's id never reaches a later client.
+enum class SessionId : std::uint64_t {};
 
 /// Receives the reply to one line when the line ends: the replies of its queries joined with `;`,
-/// or nullopt when no query replied.
+/// or nullopt when no query replied. The line may end after `execute` returns, inside `advance`
+/// (which may run on another thread) or inside another Session's `execute`. So a ReplyHandler
+/// must not call back into the Instrument; it only hands the reply to the transport.
 using ReplyHandler = std::function<void(std::optional<std::string> reply)>;
 
 /// The single entry point for instrument behaviour. It owns every Session and the instrument-wide
@@ -69,16 +72,18 @@ class Instrument {
   /// While an operation is pending (a Single is armed), `*OPC?` and `*WAI` hold the line: the rest
   /// of it runs, and `on_reply` is called, only once nothing is pending, from inside the call that
   /// ended the operation (`advance`, or `execute` for any Session), after that call's own reply.
-  /// There is no timeout. So `on_reply` must not call back into the Instrument, and a transport
-  /// waits for it without blocking, then sends the Session's next line (the Session's commands run
-  /// in order). Throws std::logic_error when `session` still has a line held, and
-  /// std::out_of_range for a SessionId this Instrument did not open or already closed.
+  /// There is no timeout. A transport waits for `on_reply` without blocking, then sends the
+  /// Session's next line (the Session's commands run in order). Throws std::logic_error when
+  /// `session` still has a line held, and std::out_of_range for a SessionId this Instrument did
+  /// not open or already closed.
   void execute(SessionId session, std::string_view line, ReplyHandler on_reply);
 
   /// Advances the sample clock by `samples` sample indexes with no wall-clock pacing, as tests do
   /// (ADR 0003), in sample blocks of at most kMaxBlockLength. Unless the instrument is Stopped,
-  /// every enabled channel is sampled and each capture that fills becomes the latest capture; a
-  /// Single's capture stops the instrument and ends the lines held on it after its block.
+  /// every enabled channel is sampled and each capture that fills becomes the latest capture. A
+  /// Single's capture stops the instrument and ends the lines held on it at its last sample, and
+  /// the samples after it follow whatever those lines change. So one call gives the same captures
+  /// and replies as any split of it into smaller calls.
   void advance(std::size_t samples);
 
   /// The latest capture, or null before the first capture completes.
@@ -114,12 +119,13 @@ class Instrument {
   void add_timebase_commands();
   void add_trigger_commands();
   void add_waveform_commands();
+  void add_fft_commands();
 
-  /// Replies what `reply` writes from the latest capture and the caller's `WAV:SOUR` channel in
-  /// it. Before the first capture completes it reports -230; when the source channel is not in
-  /// the latest capture, -221 (a query never reads a channel that was not captured).
+  /// Replies what `reply` writes from the latest capture and channel `source` (1 to 4) in it.
+  /// Before the first capture completes it reports -230; when the source channel is not in the
+  /// latest capture, -221 (a query never reads a channel that was not captured).
   scpi::HandlerResult reply_with_source(
-      Session& caller,
+      std::size_t source,
       const std::function<std::string(const Capture&, const CapturedChannel&)>& reply) const;
 
   /// Registers `<header> <parameter>`, which runs `set`, and `<header>?`, which replies what `get`
@@ -192,7 +198,7 @@ class Instrument {
 
   scpi::CommandTree commands_;
   std::unordered_map<SessionId, Session> sessions_;
-  std::uint32_t next_session_id_ = 0;
+  std::uint64_t next_session_id_ = 0;
 
   /// The seed every Generator's seed derives from, kept for `*RST`.
   std::uint64_t seed_;
