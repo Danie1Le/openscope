@@ -107,18 +107,17 @@ class Instrument {
   [[nodiscard]] std::optional<AcquiredBlock> acquire(std::size_t count);
 
   /// Live mode's processing half: assembles `block`, from `acquire`, into captures without the
-  /// mutex that commands take; it takes it only to count a capture in the measurement statistics,
-  /// publish a capture or end a Single, which happens about once a capture. Each capture is
-  /// measured for the statistics as it completes, outside the mutex. A capture is counted, and
-  /// completes into the latest capture, only when no command has discarded the capture in
-  /// progress since the block was acquired, so neither ever holds settings older than a command
-  /// that has already returned. A Single's capture stops the
-  /// instrument and ends the lines held on it, on this thread; when `RUN` has ended the Single
-  /// since the block was acquired, the rest of the block, and every later block acquired while
-  /// the Single was armed, is captured as Running, with the trigger restarted at the Single's
-  /// capture as after any Single. Blocks must come in the order they were acquired; a block that
-  /// never arrives is a dropped block, and the capture that would span it is discarded and
-  /// counted.
+  /// mutex that commands take, and measures each capture for the measurement statistics as it
+  /// completes, also without it. It takes the mutex only to count and publish a capture or end a
+  /// Single, about once a capture. A capture is counted, and becomes the latest capture in the
+  /// same hold of the mutex, only when no command has discarded the capture in progress since the
+  /// block was acquired, so neither ever holds settings older than a command that has already
+  /// returned. A Single's capture stops the instrument and ends the lines held on it, on this
+  /// thread; when `RUN` has ended the Single since the block was acquired, the rest of the block,
+  /// and every later block acquired while the Single was armed, is captured as Running, with the
+  /// trigger restarted at the Single's capture as after any Single. Blocks must come in the order
+  /// they were acquired; a block that never arrives is a dropped block, and the capture that would
+  /// span it is discarded and counted.
   void process(const AcquiredBlock& block);
 
   /// Samples per second on the sample clock (`ACQuire:SRATe`), which live mode paces against.

@@ -52,4 +52,30 @@ inline double number(const std::optional<std::string>& reply) {
   return values.front();
 }
 
+/// The fields of a MEAS:STAT? reply, in reply order.
+struct Statistics {
+  double current = 0.0;
+  double mean = 0.0;
+  double minimum = 0.0;
+  double maximum = 0.0;
+  double standard_deviation = 0.0;
+  double count = 0.0;
+};
+
+/// The fields of a MEAS:STAT? reply. Fails the test and returns -1 in every field when the reply
+/// is not six numbers.
+inline Statistics statistics_of(const std::optional<std::string>& reply) {
+  const std::vector<double> fields = numbers(reply);
+  if (fields.size() != 6) {
+    ADD_FAILURE() << "not a statistics reply: " << reply.value_or("<no reply>");
+    return {-1.0, -1.0, -1.0, -1.0, -1.0, -1.0};
+  }
+  return {.current = fields.at(0),
+          .mean = fields.at(1),
+          .minimum = fields.at(2),
+          .maximum = fields.at(3),
+          .standard_deviation = fields.at(4),
+          .count = fields.at(5)};
+}
+
 }  // namespace openscope::test

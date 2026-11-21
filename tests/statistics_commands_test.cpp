@@ -36,7 +36,8 @@ using test::kParameterNotAllowedReply;
 using test::kSettingsConflictReply;
 using test::kUndefinedHeaderReply;
 using test::kUntriggeredCaptures;
-using test::numbers;
+using test::Statistics;
+using test::statistics_of;
 using test::ScpiSession;
 using testing::DoubleNear;
 
@@ -46,32 +47,6 @@ constexpr std::size_t kRecord = 1000;
 /// Sets kRecord as the record length: with kUntriggeredCaptures, every kRecord samples complete one
 /// untriggered capture.
 std::string short_records() { return std::format("ACQ:POIN {}", kRecord); }
-
-/// The fields of a MEAS:STAT? reply, in reply order.
-struct Statistics {
-  double current;
-  double mean;
-  double minimum;
-  double maximum;
-  double standard_deviation;
-  double count;
-};
-
-/// The fields of a MEAS:STAT? reply. Fails the test and returns -1 in every field when the reply
-/// is not six numbers.
-Statistics statistics_of(const std::optional<std::string>& reply) {
-  const std::vector<double> fields = numbers(reply);
-  if (fields.size() != 6) {
-    ADD_FAILURE() << "not a statistics reply: " << reply.value_or("<no reply>");
-    return {-1.0, -1.0, -1.0, -1.0, -1.0, -1.0};
-  }
-  return {.current = fields.at(0),
-          .mean = fields.at(1),
-          .minimum = fields.at(2),
-          .maximum = fields.at(3),
-          .standard_deviation = fields.at(4),
-          .count = fields.at(5)};
-}
 
 /// The count a MEAS:STAT? reply ends with (-1 and a test failure for anything else).
 double count_of(const std::optional<std::string>& reply) { return statistics_of(reply).count; }
@@ -189,14 +164,20 @@ TEST_F(StatisticsTest, UntriggeredCapturesCount) {
 /// live mode's two threads do.
 using Driver = void (*)(Instrument& instrument, std::size_t samples, std::size_t step);
 
+/// Sets `session`'s instrument, built with seed 7, to untriggered kRecord captures of a noisy sine
+/// that no two captures see alike, so a capture counted twice or missed changes the statistics.
+void send_noisy_short_records(ScpiSession& session) {
+  session.send(kUntriggeredCaptures);
+  session.send(short_records());
+  session.send("SOUR1:FREQ 1234;NOIS 0.2");
+}
+
 /// MEAS:STAT? of every measurement on `instrument`, seed 7 with noise, after `samples` samples
 /// that `drive` takes `step` at a time.
 std::optional<std::string> stepped_statistics(std::size_t samples, std::size_t step, Driver drive) {
   Instrument instrument(7);
   ScpiSession session(instrument);
-  session.send(kUntriggeredCaptures);
-  session.send(short_records());
-  session.send("SOUR1:FREQ 1234;NOIS 0.2");
+  send_noisy_short_records(session);
   drive(instrument, samples, step);
   return session.send(
       "MEAS:STAT? VPP,CHAN1;STAT? VMIN,CHAN1;STAT? VMAX,CHAN1;STAT? VAV,CHAN1;"
@@ -225,9 +206,7 @@ TEST(StatisticsSteppingTest, HowTheClockIsSteppedNeverChangesTheStatistics) {
 std::string stepped_single(std::size_t step) {
   Instrument instrument(7);
   ScpiSession session(instrument);
-  session.send(kUntriggeredCaptures);
-  session.send(short_records());
-  session.send("SOUR1:FREQ 1234;NOIS 0.2");
+  send_noisy_short_records(session);
   test::advance_in_steps(instrument, (30 * kRecord) + 300, step);
   const auto held = session.start("SINGle;*OPC?;:MEAS:STAT? VPP,CHAN1");
   test::advance_in_steps(instrument, 3 * kRecord, step);

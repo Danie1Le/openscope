@@ -14,7 +14,6 @@
 #include <string>
 #include <thread>
 #include <utility>
-#include <vector>
 
 #include "instrument_fixture.hpp"
 #include "openscope/capture.hpp"
@@ -134,23 +133,23 @@ TEST_F(LivePipelineTest, StatisticsCountOnlyTheNewSignalAfterASettingChange) {
   const LivePipeline live(instrument);
   for (const float offset : {0.25F, -0.5F, 1.0F}) {
     session.send("SOUR1:OFFS " + std::to_string(offset));
-    std::vector<double> fields;
+    test::Statistics statistics;
 
     const bool counted = eventually([&] {
       const std::optional<std::string> reply = session.send("MEAS:STAT? VAV,CHAN1");
-      fields = reply ? test::numbers(reply) : std::vector<double>{};
-      return fields.size() == 6 && fields[5] >= 2;  // The count.
+      statistics = reply ? test::statistics_of(reply) : test::Statistics{};
+      return statistics.count >= 2;
     });
 
     ASSERT_TRUE(counted) << offset;
-    EXPECT_EQ(fields[2], offset);  // The minimum.
-    EXPECT_EQ(fields[3], offset);  // The maximum.
+    EXPECT_EQ(statistics.minimum, offset);
+    EXPECT_EQ(statistics.maximum, offset);
   }
 }
 
-// The processing thread counts a capture before it publishes it, so MEAS:STAT? checks the channel
-// against the statistics: right after a channel change, the latest capture may still have the old
-// channels while the statistics already count a capture with the new ones.
+// The processing thread counts and publishes each capture under one hold of the mutex, so right
+// after a channel change MEAS:STAT? never finds statistics of the new channels beside a latest
+// capture of the old ones, or the reverse.
 TEST_F(LivePipelineTest, StatisticsHoldTheChannelsOfTheCapturesTheyCount) {
   session.send("ACQ:POIN 10");  // Many captures a block, so the race is often there to lose.
   const LivePipeline live(instrument);

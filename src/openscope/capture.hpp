@@ -72,8 +72,9 @@ struct Pushed {
 };
 
 /// Called by `CaptureAssembler::push` with each capture as it completes, so every capture can be
-/// measured although only the last of a block is returned.
-using CaptureSink = std::function<void(const Capture&)>;
+/// measured, and published, although only the last of a block is returned. It never changes, so
+/// the sink may keep it.
+using CaptureSink = std::function<void(const std::shared_ptr<const Capture>&)>;
 
 /// Assembles sample blocks into captures placed by the edge trigger. A capture starts collecting
 /// samples as soon as the one before completes. A trigger event places its time zero once it holds
