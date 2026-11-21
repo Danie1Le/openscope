@@ -49,7 +49,7 @@ The position of a sample on the sample clock, counting from zero since acquisiti
 _Avoid_: Timestamp
 
 **Sample block**:
-A run of consecutive sample indexes carrying one sample per enabled channel at each index.
+A run of consecutive sample indexes carrying one sample per enabled channel at each index, plus the trigger channel's samples when it is disabled.
 _Avoid_: Chunk, packet, buffer
 
 **Dropped block**:
@@ -88,8 +88,16 @@ What the instrument does when no trigger event arrives: Auto (capture anyway aft
 The sample index where the trigger channel crosses the trigger level in the chosen slope direction, after first moving past the level by a fixed hysteresis band on the other side.
 _Avoid_: Trigger (alone, when the event is meant), crossing
 
+**Trigger position**:
+Where in a capture time zero sits, as a percentage of the way from its first sample to its last. The samples before time zero are the pre-trigger samples.
+**Holdoff**:
+The least time, counted in samples on the sample clock, from the trigger event that placed one capture to the trigger event that may place the next.
+
+**Auto timeout**:
+In Auto trigger mode, one record length of samples, counted from when the pre-trigger samples have filled. If no trigger event places the capture by then, an untriggered capture is taken.
+
 **Untriggered capture**:
-A capture taken in Auto trigger mode because no trigger event arrived before the timeout. Time zero sits at the pre-trigger position instead of at a trigger event.
+A capture taken in Auto trigger mode because no trigger event arrived before the Auto timeout. Time zero sits at the trigger position instead of at a trigger event.
 _Avoid_: Auto capture, free-run capture
 
 ## Measurement
