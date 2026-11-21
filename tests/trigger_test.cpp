@@ -286,25 +286,24 @@ TEST_F(TriggerTest, NormalModeKeepsTheLatestCaptureWhileItWaits) {
 // first trigger event is at 125000. Normal mode waits for it however many records that takes and
 // keeps the samples just before it, wherever the position puts time zero: each captured sample is
 // the sine at its own sample index.
-TEST_F(TriggerTest, NormalModeWaitsAsLongAsItTakesForATriggerEvent) {
-  for (const std::string_view position : {"0", "50", "100"}) {
-    Instrument fresh;
-    test::ScpiSession client{fresh};
-    client.send("SOUR1:FREQ 8;:TRIG:MODE NORM;POS " + std::string(position));
+class NormalModeTest : public TriggerTest, public testing::WithParamInterface<std::string_view> {};
 
-    fresh.advance(140'000);
+TEST_P(NormalModeTest, WaitsAsLongAsItTakesForATriggerEvent) {
+  session.send("SOUR1:FREQ 8;:TRIG:MODE NORM;POS " + std::string(GetParam()));
 
-    const std::shared_ptr<const Capture> capture = fresh.latest_capture();
-    ASSERT_NE(capture, nullptr) << position;
-    EXPECT_FALSE(capture->untriggered) << position;
-    EXPECT_EQ(capture->first_index + capture->trigger_position, 125'000U) << position;
-    const std::vector<float> samples = captured(fresh, 1).samples;
-    for (std::size_t k = 0; k < samples.size(); k += 997) {
-      const double t = static_cast<double>(capture->first_index + k) / 1e6;
-      EXPECT_NEAR(samples[k], std::sin(2.0 * std::numbers::pi * 8.0 * t), 1e-6) << position << k;
-    }
+  instrument.advance(140'000);
+
+  const std::shared_ptr<const Capture> capture = test::latest(instrument);
+  EXPECT_FALSE(capture->untriggered);
+  EXPECT_EQ(capture->first_index + capture->trigger_position, 125'000U);
+  const std::vector<float> samples = captured(instrument, 1).samples;
+  for (std::size_t k = 0; k < samples.size(); k += 997) {
+    const double t = static_cast<double>(capture->first_index + k) / 1e6;
+    EXPECT_NEAR(samples[k], std::sin(2.0 * std::numbers::pi * 8.0 * t), 1e-6) << k;
   }
 }
+
+INSTANTIATE_TEST_SUITE_P(Positions, NormalModeTest, testing::Values("0", "50", "100"));
 
 // Spec story 53: Auto takes an untriggered capture once one record length of samples has passed
 // without a trigger event after the 5000 pre-trigger samples have filled. A DC signal never
