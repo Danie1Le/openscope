@@ -1,8 +1,11 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <span>
+#include <vector>
 
+#include "openscope/fault.hpp"
 #include "openscope/sample_clock.hpp"
 
 namespace openscope {
@@ -26,12 +29,15 @@ struct GeneratorSettings {
 };
 
 /// The simulated signal producer feeding one channel. Its output is a pure function of its seed,
-/// the settings it has been given since construction, the sample indexes they took effect at, and
-/// the sample index (ADR 0003): the same seed and the same configure calls at the same indexes
-/// give bit-identical samples on every run, and the noise at an index never depends on which other
-/// indexes were generated.
+/// the settings and Faults it has been given since construction, the sample indexes they took
+/// effect at, and the sample index (ADR 0003): the same seed and the same configure and inject
+/// calls at the same indexes give bit-identical samples on every run, and the noise at an index
+/// never depends on which other indexes were generated.
 class Generator {
  public:
+  /// The most Faults a Generator keeps at once, which bounds the work done per sample.
+  static constexpr std::size_t kMaxFaults = 64;
+
   /// A Generator with default settings and phase zero at sample index 0. Generators with
   /// different seeds produce independent noise.
   Generator(std::uint64_t seed, double sample_rate);
@@ -43,12 +49,20 @@ class Generator {
   /// was, so a change of frequency or sample rate never puts a jump in the waveform.
   void configure(const GeneratorSettings& settings, double sample_rate, SampleIndex at);
 
+  /// Adds `fault` to the signal. Faults from before `fault`'s start that have ended are forgotten
+  /// first, so only Faults still to be generated count towards kMaxFaults. Returns false and adds
+  /// nothing when kMaxFaults are still in play. Faults change nothing before their start, so call
+  /// this with a start at or after every index still to be generated, as the sample clock does.
+  [[nodiscard]] bool inject(const Fault& fault);
+
   /// Writes the samples for indexes `first` to `first + samples.size() - 1`, in volts, under the
-  /// current settings.
+  /// current settings and Faults. Faults apply in the order they were injected.
   void generate(SampleIndex first, std::span<float> samples) const;
 
  private:
-  /// The phase at `index` in cycles, in [0, 1).
+  /// The phase of the settings alone at `index`, in cycles and not yet wrapped into [0, 1).
+  [[nodiscard]] double settings_cycles_at(SampleIndex index) const;
+  /// The phase at `index` in cycles with the frequency steps, in [0, 1).
   [[nodiscard]] double phase_at(SampleIndex index) const;
 
   std::uint64_t seed_;
@@ -58,6 +72,8 @@ class Generator {
   /// The phase is `anchor_phase_` at `anchor_index_` and advances by cycles_per_sample_ from there.
   SampleIndex anchor_index_ = 0;
   double anchor_phase_ = 0.0;
+  /// The Faults injected and not yet forgotten, in injection order.
+  std::vector<Fault> faults_;
 };
 
 }  // namespace openscope
