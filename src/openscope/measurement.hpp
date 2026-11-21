@@ -32,7 +32,7 @@ enum class MeasurementStatus : std::uint8_t {
 /// One measurement of one channel of a capture.
 struct MeasurementResult {
   /// Whether the value is valid, questionable (Clipped) or missing.
-  MeasurementStatus status;
+  MeasurementStatus status = MeasurementStatus::kOk;
   /// The measured value in the measurement's unit; present for OK and Clipped only.
   std::optional<double> value;
 };
