@@ -10,7 +10,7 @@
 namespace openscope {
 
 /// A radix-2 complex FFT of one fixed power-of-two length. Construction computes the twiddle
-/// factors and every transform reuses them, as a KissFFT plan does, so the two time the same work.
+/// factors and every transform reuses them.
 class Fft {
  public:
   /// Prepares transforms of `length` points. Throws std::invalid_argument unless `length` is a
