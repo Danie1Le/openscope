@@ -479,33 +479,49 @@ TEST(SignalLevelsTest, TinyCapturesKeepEverySample) {
   }
 }
 
-/// `kLength` samples of a pulse train between 0 V and 1 V, high for `duty` of each 1000-sample
-/// period, with 10 mV RMS of Gaussian noise from a fixed seed.
-std::vector<float> noisy_pulse_train(double duty) {
-  std::mt19937 random(9);
+/// A pulse train of `length` samples between 0 V and 1 V, high for `duty` of each 1000-sample
+/// period.
+struct PulseTrain {
+  std::size_t length;
+  double duty;
+};
+
+/// `train` with 10 mV RMS of Gaussian noise from `seed`.
+std::vector<float> noisy_pulse_train(const PulseTrain& train, unsigned seed) {
+  std::mt19937 random(seed);
   std::normal_distribution<double> noise(0.0, 0.01);
-  std::vector<float> samples(kLength);
-  for (std::size_t index = 0; index < kLength; ++index) {
-    const double level = static_cast<double>(index % 1000) < duty * 1000.0 ? 1.0 : 0.0;
+  std::vector<float> samples(train.length);
+  for (std::size_t index = 0; index < train.length; ++index) {
+    const double level = static_cast<double>(index % 1000) < train.duty * 1000.0 ? 1.0 : 0.0;
     samples[index] = static_cast<float>(level + noise(random));
   }
   return samples;
 }
 
-class NoisyPulseTrainTest : public testing::TestWithParam<double> {};
+class NoisyPulseTrainTest : public testing::TestWithParam<PulseTrain> {};
+
+/// The seeds that NoisyPulseTrainTest checks each train over.
+constexpr unsigned kPulseTrainSeeds = 8;
 
 // Noise spreads a level over several bins, so no single bin holds its share of the samples: a
 // narrow pulse's top (or, mirrored, a wide pulse's base) above 1/128 of the samples is still its
-// level, not the highest noise sample.
+// level, not the highest noise sample. That holds down to a duty just over 1/128, where noise
+// leaves only part of a level's samples within a few bins of a neighbour.
 TEST_P(NoisyPulseTrainTest, LevelsAreThePulseLevels) {
-  const SignalLevels levels = find_levels(noisy_pulse_train(GetParam()));
+  for (unsigned seed = 1; seed <= kPulseTrainSeeds; ++seed) {
+    const SignalLevels levels = find_levels(noisy_pulse_train(GetParam(), seed));
 
-  EXPECT_NEAR(levels.top, 1.0, 0.01);
-  EXPECT_NEAR(levels.base, 0.0, 0.01);
+    EXPECT_NEAR(levels.top, 1.0, 0.01) << seed;
+    EXPECT_NEAR(levels.base, 0.0, 0.01) << seed;
+  }
 }
 
 INSTANTIATE_TEST_SUITE_P(NarrowAndWidePulses, NoisyPulseTrainTest,
-                         testing::Values(0.015, 0.02, 0.03, 0.04, 0.96, 0.985));
+                         testing::Values(PulseTrain{kLength, 0.015}, PulseTrain{kLength, 0.02},
+                                         PulseTrain{kLength, 0.03}, PulseTrain{kLength, 0.04},
+                                         PulseTrain{kLength, 0.96}, PulseTrain{kLength, 0.985},
+                                         PulseTrain{12'800, 1.1 / 128.0},
+                                         PulseTrain{100'000, 1.05 / 128.0}));
 
 /// `length` samples of a triangle wave between 0 V and 1 V that runs `cycles` cycles, starting
 /// `start` of a cycle in.
@@ -556,6 +572,33 @@ TEST(SignalLevelsTest, ClustersTheSignalPassesThroughAreNoLevels) {
     EXPECT_DOUBLE_EQ(levels.top, highest) << start;
     EXPECT_DOUBLE_EQ(levels.base, lowest) << start;
   }
+}
+
+// Documented limit (docs/scpi-reference.md, Top and base): with 2 samples per period no sample has
+// a neighbour at its own level, so no level dwells and top and base are the extremes that are left
+// after the outliers, a spike that is not one included. Signals under 4 samples per period are
+// outside the measurement range.
+TEST(SignalLevelsTest, UndersampledSquareWaveReportsItsSpikesAsLevels) {
+  std::vector<float> samples = test::pulse_train(64, 2, 1);
+  samples.at(11) = 1.3F;
+  samples.at(41) = 1.3F;
+
+  const SignalLevels levels = find_levels(samples);
+
+  EXPECT_DOUBLE_EQ(levels.top, 1.3F);
+  EXPECT_DOUBLE_EQ(levels.base, 0.0);
+}
+
+// At 4 samples per period a level still dwells, so the same spikes are set aside.
+TEST(SignalLevelsTest, SquareWaveAtFourSamplesPerPeriodIgnoresSpikes) {
+  std::vector<float> samples = test::pulse_train(64, 4, 2);
+  samples.at(10) = 1.3F;
+  samples.at(42) = 1.3F;
+
+  const SignalLevels levels = find_levels(samples);
+
+  EXPECT_DOUBLE_EQ(levels.top, 1.0);
+  EXPECT_DOUBLE_EQ(levels.base, 0.0);
 }
 
 // A level counts once it holds 1/128 of the samples (78.125 of 10000): a pulse of 79 samples is
