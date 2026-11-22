@@ -164,6 +164,9 @@ class Instrument {
   /// completes. Returns, when the block's Single capture completed inside it, the offset just past
   /// that capture. Touches the processing state only, so it needs no lock.
   std::optional<std::size_t> assemble(const AcquiredBlock& block, const CaptureSink& on_completed);
+  /// How many captures assembling `block` makes: its own limit, unless `RUN` has already ended
+  /// the Single it was acquired for. Processing state only, so it needs no lock.
+  [[nodiscard]] CaptureLimit capture_limit(const AcquiredBlock& block) const;
   /// Counts `capture`, which completed in `block`, in the measurement statistics with its
   /// `results` and makes it the latest capture, unless a command has discarded the capture in
   /// progress since `block` was acquired. Needs mutex_.
