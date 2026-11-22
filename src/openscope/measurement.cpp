@@ -44,12 +44,12 @@ constexpr double kFewestLevelSamples = 24.0;
 constexpr std::size_t kLevelBins = 4;
 
 /// The counts and sums of samples in kHistogramBins equal bins from `low` volts up, and how many of
-/// each bin's samples are held: within kLevelBins bins of the sample before or after them.
+/// each bin's samples are dwelling: within kLevelBins bins of the sample before or after them.
 struct Histogram {
   double low;
   double bins_per_volt;
   std::array<std::size_t, kHistogramBins> counts{};
-  std::array<std::size_t, kHistogramBins> held{};
+  std::array<std::size_t, kHistogramBins> dwelling{};
   std::array<double, kHistogramBins> sums{};
 };
 
@@ -67,9 +67,9 @@ Histogram make_histogram(std::span<const float> samples, float low, float high) 
   Histogram histogram{
       .low = low,
       .bins_per_volt = static_cast<double>(kHistogramBins) / (static_cast<double>(high) - low)};
-  const double held_volts = static_cast<double>(kLevelBins) / histogram.bins_per_volt;
-  const auto near = [&](float sample, std::size_t other) {
-    return std::abs(static_cast<double>(sample) - samples[other]) <= held_volts;
+  const double dwelling_volts = static_cast<double>(kLevelBins) / histogram.bins_per_volt;
+  const auto close_to = [&](float sample, std::size_t other) {
+    return std::abs(static_cast<double>(sample) - samples[other]) <= dwelling_volts;
   };
   for (std::size_t index = 0; index < samples.size(); ++index) {
     const float sample = samples[index];
@@ -77,9 +77,9 @@ Histogram make_histogram(std::span<const float> samples, float low, float high) 
       const std::size_t bin = bin_of(histogram, sample);
       ++histogram.counts.at(bin);
       histogram.sums.at(bin) += sample;
-      if ((index > 0 && near(sample, index - 1)) ||
-          (index + 1 < samples.size() && near(sample, index + 1))) {
-        ++histogram.held.at(bin);
+      if ((index > 0 && close_to(sample, index - 1)) ||
+          (index + 1 < samples.size() && close_to(sample, index + 1))) {
+        ++histogram.dwelling.at(bin);
       }
     }
   }
@@ -115,28 +115,31 @@ constexpr std::size_t kHalf = kHistogramBins / 2;
 /// must hold at least `settled_samples` samples (and kFewestLevelSamples), and kSettledLevelRatio
 /// times what as many bins hold on average. Without that test, a signal that sweeps evenly but
 /// whose samples land in every second or third bin (a short triangle) would have a level wherever
-/// its bins happen to be fuller. And at least `settled_samples` of them must be held, so that the
-/// signal stays at the level: one sampled at the same few phases of every cycle (a triangle at 30
-/// samples per cycle, a sine at 10) piles its samples into narrow clusters with nothing between
-/// them, each far fuller than the average, but only passes through them (#52).
+/// its bins happen to be fuller. And at least `settled_samples` of those bins' samples must be
+/// dwelling, so that the signal stays at the level: one sampled at the same few phases of every
+/// cycle (a triangle at 30 samples per cycle, a sine at 10) piles its samples into narrow clusters
+/// with nothing between them, each far fuller than the average, but only passes through them (#52).
 double settled_level(const Histogram& histogram, std::size_t begin, double settled_samples,
                      double fallback) {
   const auto counts = std::span(histogram.counts).subspan(begin, kHalf);
+  const auto dwelling = std::span(histogram.dwelling).subspan(begin, kHalf);
+  const auto sums = std::span(histogram.sums).subspan(begin, kHalf);
   const auto fullest = static_cast<std::size_t>(std::ranges::max_element(counts) - counts.begin());
   const std::size_t first = fullest - std::min(fullest, kLevelBins);
   const std::size_t last = std::min(fullest + kLevelBins, counts.size() - 1);
   const std::span<const std::size_t> around = counts.subspan(first, last - first + 1);
-  const auto held = std::span(histogram.held).subspan(begin + first, around.size());
+  const std::span<const std::size_t> dwelling_around = dwelling.subspan(first, around.size());
   const auto level = static_cast<double>(std::reduce(around.begin(), around.end()));
   const auto all = static_cast<double>(std::reduce(counts.begin(), counts.end()));
   const double as_many_on_average =
       all * static_cast<double>(around.size()) / static_cast<double>(counts.size());
+  const auto level_dwelling =
+      static_cast<double>(std::reduce(dwelling_around.begin(), dwelling_around.end()));
   if (level < std::max(settled_samples, kFewestLevelSamples) ||
-      level < kSettledLevelRatio * as_many_on_average ||
-      static_cast<double>(std::reduce(held.begin(), held.end())) < settled_samples) {
+      level < kSettledLevelRatio * as_many_on_average || level_dwelling < settled_samples) {
     return fallback;
   }
-  return histogram.sums.at(begin + fullest) / static_cast<double>(counts[fullest]);
+  return sums[fullest] / static_cast<double>(counts[fullest]);
 }
 
 }  // namespace

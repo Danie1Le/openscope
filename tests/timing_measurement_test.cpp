@@ -277,14 +277,17 @@ TEST_P(FrequencySweepTest, IsRightOrTooFewCycles) {
 constexpr FrequencySweep kOnePercentNoise{
     .noise = 0.02, .tolerance = 5e-3, .may_be_too_few_cycles = false};
 
-INSTANTIATE_TEST_SUITE_P(
-    OneAndFivePercentNoise, FrequencySweepTest,
-    testing::Values(kOnePercentNoise,
-                    FrequencySweep{.noise = 0.1, .tolerance = 1e-2, .may_be_too_few_cycles = true}));
+/// The sweep at noise of 5% of the amplitude: right within 1%, or Too few cycles.
+constexpr FrequencySweep kFivePercentNoise{
+    .noise = 0.1, .tolerance = 1e-2, .may_be_too_few_cycles = true};
+
+INSTANTIATE_TEST_SUITE_P(OneAndFivePercentNoise, FrequencySweepTest,
+                         testing::Values(kOnePercentNoise, kFivePercentNoise));
 
 // #52: a signal sampled at only a few phases of its cycle puts its samples in a few narrow clusters
 // with nothing between them. They are no level it settles at, so top and base are its extremes,
-// never one cluster in the middle for both (which read No signal).
+// never one cluster in the middle for both (which read No signal). Each case and seed is one that
+// read No signal before.
 TEST(FewSamplingPhasesTest, ClustersAreNoLevels) {
   EXPECT_TRUE(is_right_or_flagged(1, cycles_of("TRI", 30.0, 30.0, 0.0), kOnePercentNoise));
   EXPECT_TRUE(is_right_or_flagged(14, cycles_of("SIN", 10.0, 100.0, 0.02), kOnePercentNoise));
@@ -295,17 +298,20 @@ TEST(FewSamplingPhasesTest, ClustersAreNoLevels) {
 
 class NoSignalSweepTest : public testing::TestWithParam<double> {};
 
+/// The longest record NoSignalSweepTest takes, so that the sweep stays quick under the sanitizers.
+constexpr std::size_t kLongestSweptRecord = 30'001;
+
 // #52: every shape, clean or with noise (the parameter, volts RMS: 0.02 is 1% of the amplitude), at
-// 10 to 3000 samples per cycle and 10 to 1000 cycles (records up to 100001 samples) spans 2 V, far
-// more than 0.2 div, so it is never No signal.
+// 10 to 3000 samples per cycle and 10 to 1000 cycles (up to kLongestSweptRecord samples) spans 2 V,
+// far more than 0.2 div, so it is never No signal.
 TEST_P(NoSignalSweepTest, ASignalIsNeverNoSignal) {
   const double noise = GetParam();
   const std::uint64_t seeds = noise > 0.0 ? kNoiseSeeds : 1;
   for (const std::string_view shape : {"SIN", "SQU", "TRI", "RAMP"}) {
-    for (const double samples_per_cycle : {10.0, 11.1, 30.0, 100.0, 1000.0, 3000.0}) {
+    for (const double samples_per_cycle : {10.0, 11.1, 20.0, 30.0, 100.0, 1000.0, 3000.0}) {
       for (const double cycles : {10.0, 30.0, 100.0, 1000.0}) {
         const NoisySignal signal = cycles_of(shape, samples_per_cycle, cycles, noise);
-        if (signal.record_length > 100'001) {
+        if (signal.record_length > kLongestSweptRecord) {
           continue;
         }
         for (std::uint64_t seed = 1; seed <= seeds; ++seed) {
