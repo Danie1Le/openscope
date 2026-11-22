@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       seconds:
-        description: How long the engine runs under load, in seconds
+        description: How long the engine runs under load, in whole seconds (1 to 18000)
         default: "3600"
         required: true
 
@@ -17,26 +17,38 @@ jobs:
   soak:
     name: Soak (${{ inputs.seconds }} s)
     runs-on: ubuntu-24.04
-    # The longest a hosted job may run; the input sets the soak's own length.
+    # The longest a hosted job may run; the soak step has its own, shorter bound.
     timeout-minutes: 360
     env:
       CXX: g++-14
+      # Read by the scripts from the environment only, never expanded into them.
+      OPENSCOPE_SOAK_SECONDS: ${{ inputs.seconds }}
     steps:
+      - name: Check the length
+        # Digits first: bash arithmetic would run a command substitution hidden in the value.
+        run: |
+          if ! [[ "$OPENSCOPE_SOAK_SECONDS" =~ ^[1-9][0-9]{0,4}$ ]] || (( OPENSCOPE_SOAK_SECONDS > 18000 )); then
+            echo "::error::seconds must be a whole number from 1 to 18000"
+            exit 1
+          fi
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/setup-vcpkg
       - run: cmake --preset release
       - run: cmake --build --preset release
-      - name: pytest -m soak
+      - name: pytest --soak -m soak
         working-directory: python
+        # 18000 s of soak plus the 600 s grace below.
+        timeout-minutes: 315
         env:
           OPENSCOPE_ENGINE_PATH: ${{ github.workspace }}/build/release/src/openscope-engine
-          OPENSCOPE_SOAK_SECONDS: ${{ inputs.seconds }}
         run: |
           python3 -m venv "$RUNNER_TEMP/venv"
           "$RUNNER_TEMP/venv/bin/pip" install --quiet -r requirements-dev.txt -e .
-          "$RUNNER_TEMP/venv/bin/pytest" -m soak -s -ra --junitxml=pytest-soak.xml
+          # SIGINT lets pytest end the session and write its report; KILL if it does not.
+          timeout --signal=INT --kill-after=60 "$((OPENSCOPE_SOAK_SECONDS + 600))" \
+            "$RUNNER_TEMP/venv/bin/pytest" --soak -m soak -s -ra --junitxml=pytest-soak.xml
       - name: Publish soak results (JUnit XML)
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pytest-soak
