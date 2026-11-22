@@ -61,19 +61,22 @@ std::string describe(const tcp::endpoint& endpoint) {
 template <int Name>
 using TcpOption = asio::detail::socket_option::integer<IPPROTO_TCP, Name>;
 
-/// Turns on TCP keepalive with ScpiServer's probe settings.
-error_code enable_keepalive(tcp::socket& socket) {
-  error_code error;
-  const auto set = [&](const auto& option) {
-    if (!error) {
-      std::ignore = socket.set_option(option, error);
-    }
-  };
-  set(tcp::socket::keep_alive(true));
-  set(TcpOption<TCP_KEEPIDLE>(static_cast<int>(ScpiServer::kKeepAliveIdle.count())));
-  set(TcpOption<TCP_KEEPINTVL>(static_cast<int>(ScpiServer::kKeepAliveInterval.count())));
-  set(TcpOption<TCP_KEEPCNT>(ScpiServer::kKeepAliveProbes));
-  return error;
+/// An acceptor listening as `options` say, with TCP keepalive on at ScpiServer's probe settings.
+/// They are set before it listens, and Linux gives every socket it accepts the same options.
+/// Throws boost::system::system_error when the address is not an IP address or cannot be bound.
+tcp::acceptor listening_acceptor(asio::io_context& io, const ServerOptions& options) {
+  const tcp::endpoint endpoint(asio::ip::make_address(options.address), options.port);
+  tcp::acceptor acceptor(io, endpoint.protocol());
+  acceptor.set_option(tcp::acceptor::reuse_address(true));
+  acceptor.set_option(tcp::acceptor::keep_alive(true));
+  acceptor.set_option(
+      TcpOption<TCP_KEEPIDLE>(static_cast<int>(ScpiServer::kKeepAliveIdle.count())));
+  acceptor.set_option(
+      TcpOption<TCP_KEEPINTVL>(static_cast<int>(ScpiServer::kKeepAliveInterval.count())));
+  acceptor.set_option(TcpOption<TCP_KEEPCNT>(ScpiServer::kKeepAliveProbes));
+  acceptor.bind(endpoint);
+  acceptor.listen();
+  return acceptor;
 }
 
 }  // namespace
@@ -267,7 +270,7 @@ ScpiServer::ScpiServer(asio::io_context& io, Instrument& instrument, const Serve
     : instrument_(&instrument),
       log_(&log),
       idle_timeout_(options.idle_timeout),
-      acceptor_(io, tcp::endpoint(asio::ip::make_address(options.address), options.port)),
+      acceptor_(listening_acceptor(io, options)),
       accept_retry_(io),
       port_(acceptor_.local_endpoint().port()) {
   log_->write("listening", {{"address", options.address}, {"port", port_}});
@@ -319,17 +322,9 @@ void ScpiServer::admit(tcp::socket socket) {
     return;
   }
   std::string peer = describe(endpoint);
-  const auto refuse = [&](std::string_view reason) {
-    log_->write("refuse", {{"peer", peer}, {"reason", reason}});
-    std::ignore = socket.close(error);
-  };
   if (connections_.size() >= kMaxClients) {
-    refuse("too many clients");
-    return;
-  }
-  // Without keepalive a vanished client could hold its slot for good.
-  if (const error_code keepalive_error = enable_keepalive(socket)) {
-    refuse(keepalive_error.message());
+    log_->write("refuse", {{"peer", peer}, {"reason", "too many clients"}});
+    std::ignore = socket.close(error);
     return;
   }
   auto connection = std::make_shared<Connection>(*this, std::move(socket), std::move(peer));
