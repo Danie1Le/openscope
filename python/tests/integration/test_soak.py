@@ -37,16 +37,15 @@ SIGNALS = (
 )
 
 
-def rounds(step: Callable[[int], object], until: float, failed: threading.Event) -> int:
-    """Runs `step(round)` over and over until `until` (time.monotonic()) or until a worker has
-    failed; returns the count. A step that raises sets `failed`, so every worker stops within a
-    round."""
+def rounds(step: Callable[[int], object], until: float, stop: threading.Event) -> int:
+    """Runs `step(round)` over and over until `until` (time.monotonic()) or until `stop` is set;
+    returns the count. A step that raises sets `stop`, so every worker stops within a round."""
     count = 0
-    while not failed.is_set() and time.monotonic() < until:
+    while not stop.is_set() and time.monotonic() < until:
         try:
             step(count)
         except BaseException:
-            failed.set()
+            stop.set()
             raise
         count += 1
     return count
@@ -104,14 +103,17 @@ def test_the_engine_holds_up_under_load(engine, open_client):
     ]
 
     until = time.monotonic() + SECONDS
-    failed = threading.Event()
+    stop = threading.Event()
     memory: list[int] = []
     with ThreadPoolExecutor(len(steps)) as pool:
-        running = [pool.submit(rounds, step, until, failed) for step in steps]
-        while not all(work.done() for work in running):
-            if failed.wait(MEMORY_INTERVAL if time.monotonic() < until else 0.1):
-                break  # The other workers stop within a round.
-            memory.append(engine.resident_kib())
+        running = [pool.submit(rounds, step, until, stop) for step in steps]
+        try:
+            while not all(work.done() for work in running):
+                if stop.wait(MEMORY_INTERVAL if time.monotonic() < until else 0.1):
+                    break  # A worker failed; the others stop within a round.
+                memory.append(engine.resident_kib())
+        finally:
+            stop.set()  # Also when interrupted (the Soak workflow's timeout sends SIGINT).
         counts = [work.result() for work in running]  # Raises what a worker raised.
 
     print(f"\nRounds per worker {counts}; resident KiB {memory[0]} warmed up, {max(memory)} max")
