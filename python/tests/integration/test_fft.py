@@ -1,10 +1,12 @@
 """The FFT over TCP against ground truth from the windows' formulas: a tone's level and bin, how
-far each window spreads it, DC, the bin spacing, and per-Session settings
-(docs/scpi-reference.md, FFT)."""
+far each window spreads it, DC, the last bin, the samples taken, the bin spacing, and per-Session
+settings (docs/scpi-reference.md, FFT)."""
 
 import cmath
 import functools
+import itertools
 import math
+import statistics
 
 import pytest
 from engine_helpers import take_capture
@@ -112,11 +114,38 @@ def test_a_dc_level_reads_its_voltage_in_the_first_bin(scope, window):
     assert scope.fft.spectrum()[0] == pytest.approx(20 * math.log10(0.5), abs=1e-4)
 
 
-def test_the_reset_record_length_uses_its_first_8192_samples(scope):
+@pytest.mark.parametrize("window", list(Window))
+def test_a_tone_at_half_the_sample_rate_reads_its_rms_level_in_the_last_bin(scope, window):
+    # A 500 kHz square wave is sampled once in each half cycle: +1 V and -1 V in turn, 1 V RMS,
+    # all in the last bin, which has no mirror image to fold in. Every window passes it whole.
+    Signal(Function.SQUARE, SAMPLE_RATE / 2).apply(scope)
+    scope.acquisition.record_length = TRANSFORM_LENGTH
+    scope.fft.window = window
     take_capture(scope)
 
+    samples = scope.waveform.read().samples
+    assert abs(samples[0]) == 1.0
+    assert all(a == -b for a, b in itertools.pairwise(samples))
+    assert scope.fft.spectrum()[-1] == pytest.approx(0.0, abs=1e-4)
+
+
+def test_the_reset_record_length_uses_its_first_8192_samples(scope):
+    # Half a cycle of a slow ramp from its rising 0 V crossing: the first 8192 of the 10000
+    # samples average 0.41 V, the last 8192 0.59 V. Through the rectangular window the first bin
+    # reads the mean of the samples transformed.
+    Signal(Function.RAMP, 50.0).apply(scope)
+    scope.write("TRIG:MODE NORM;POS 0")
+    scope.fft.window = Window.RECTANGULAR
+    take_capture(scope)
+
+    samples = scope.waveform.read().samples
+    first = statistics.fmean(samples[:TRANSFORM_LENGTH])
+    last = statistics.fmean(samples[-TRANSFORM_LENGTH:])
+    assert last - first > 0.1  # Apart by far more than the tolerance below.
     assert scope.fft.bin_spacing() == SPACING
-    assert len(scope.fft.spectrum()) == TRANSFORM_LENGTH // 2 + 1
+    spectrum = scope.fft.spectrum()
+    assert len(spectrum) == TRANSFORM_LENGTH // 2 + 1
+    assert spectrum[0] == pytest.approx(20 * math.log10(first), abs=1e-4)
 
 
 def test_fft_settings_belong_to_each_session(engine, open_client):

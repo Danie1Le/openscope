@@ -80,13 +80,16 @@ def test_the_hysteresis_band_is_a_tenth_of_a_division(scope, scale, amplitude, t
 
 
 def test_a_disabled_channel_can_be_the_trigger_source(scope):
-    # Both Generators run at 1 kHz from the same phase: the square rises where the sine does.
+    # Both Generators run at 1 kHz from the same phase: the square steps up through 0.3 V where
+    # the sine on channel 1 starts its cycle, at 0 V; the sine reaches 0.3 V 49 samples later.
     Signal(Function.SQUARE).apply(scope, 2)
-    scope.write("TRIG:SOUR CHAN2;MODE NORM")
+    scope.write("TRIG:SOUR CHAN2;MODE NORM;LEV 0.3")
     take_capture(scope)
 
     assert scope.channel(2).enabled is False
-    assert_reaches_level(scope.waveform.read(), 0.0, Slope.POSITIVE)
+    waveform = scope.waveform.read()
+    assert not waveform.preamble.untriggered
+    assert abs(waveform.samples[waveform.preamble.time_zero]) < SINE_STEP
 
 
 def test_normal_mode_captures_only_on_a_trigger_event(scope):
@@ -142,9 +145,13 @@ def test_auto_mode_takes_an_untriggered_capture_every_auto_timeout(scope):
 
 # The square wave rises every 1000 samples. The next capture collects its 50000 pre-trigger
 # samples after the previous one ends, 50000 after its trigger event, so with no holdoff the next
-# event that places a capture is 100000 samples on; a holdoff of 300.2 ms holds it off to 301000.
+# event that places a capture is 100000 samples on. A holdoff takes the first edge at or after its
+# end: 3 samples short of the edge 300000 samples on, it takes that edge; 3 samples past, the next.
 @SOCKET_ONLY
-@pytest.mark.parametrize(("holdoff", "spacing"), [(0.0, 100_000), (0.3002, 301_000)])
+@pytest.mark.parametrize(
+    ("holdoff", "spacing"),
+    [(0.0, 100_000), (0.299997, 300_000), (0.300003, 301_000), (0.3002, 301_000)],
+)
 def test_the_holdoff_spaces_the_trigger_events_of_captures(scope, holdoff, spacing):
     start_index_clock(scope)
     Signal(Function.SQUARE).apply(scope)
