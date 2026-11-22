@@ -254,6 +254,18 @@ testing::AssertionResult is_right_or_flagged(std::uint64_t seed, const NoisySign
                         signal.frequency, signal.record_length, seed, frequency, error);
 }
 
+/// Whether is_right_or_flagged() holds for `signal` on Instruments seeded 1 to `seeds`.
+testing::AssertionResult is_right_or_flagged_on_seeds(std::uint64_t seeds,
+                                                      const NoisySignal& signal,
+                                                      const FrequencySweep& sweep) {
+  for (std::uint64_t seed = 1; seed <= seeds; ++seed) {
+    if (const testing::AssertionResult result = is_right_or_flagged(seed, signal, sweep); !result) {
+      return testing::AssertionFailure() << result.message();
+    }
+  }
+  return testing::AssertionSuccess();
+}
+
 class FrequencySweepTest : public testing::TestWithParam<FrequencySweep> {};
 
 // FR-13: across every shape at 10 to 15 samples per cycle, records of 10 and 1000 cycles and
@@ -265,9 +277,7 @@ TEST_P(FrequencySweepTest, IsRightOrTooFewCycles) {
     for (const double samples_per_cycle : {10.0, 10.37, 11.1, 12.3, 13.7, 15.0}) {
       for (const double cycles : {10.0, 1000.0}) {
         const NoisySignal signal = cycles_of(shape, samples_per_cycle, cycles, sweep.noise);
-        for (std::uint64_t seed = 1; seed <= kNoiseSeeds; ++seed) {
-          EXPECT_TRUE(is_right_or_flagged(seed, signal, sweep));
-        }
+        EXPECT_TRUE(is_right_or_flagged_on_seeds(kNoiseSeeds, signal, sweep));
       }
     }
   }
@@ -315,9 +325,7 @@ TEST_P(NoSignalSweepTest, ASignalReadsItsFrequency) {
       for (const double cycles : {10.0, 30.0, 100.0, 1000.0}) {
         const NoisySignal signal = cycles_of(shape, samples_per_cycle, cycles, sweep.noise);
         if (signal.record_length <= kLongestSweptRecord) {
-          for (std::uint64_t seed = 1; seed <= seeds; ++seed) {
-            EXPECT_TRUE(is_right_or_flagged(seed, signal, sweep));
-          }
+          EXPECT_TRUE(is_right_or_flagged_on_seeds(seeds, signal, sweep));
         }
       }
     }
