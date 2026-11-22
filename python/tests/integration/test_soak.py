@@ -5,6 +5,7 @@ workflow (workflow_dispatch) in CI."""
 
 import functools
 import os
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -36,11 +37,17 @@ SIGNALS = (
 )
 
 
-def rounds(step: Callable[[int], object], until: float) -> int:
-    """Runs `step(round)` over and over until `until` (time.monotonic()); returns the count."""
+def rounds(step: Callable[[int], object], until: float, failed: threading.Event) -> int:
+    """Runs `step(round)` over and over until `until` (time.monotonic()) or until a worker has
+    failed; returns the count. A step that raises sets `failed`, so every worker stops within a
+    round."""
     count = 0
-    while time.monotonic() < until:
-        step(count)
+    while not failed.is_set() and time.monotonic() < until:
+        try:
+            step(count)
+        except BaseException:
+            failed.set()
+            raise
         count += 1
     return count
 
@@ -97,11 +104,13 @@ def test_the_engine_holds_up_under_load(engine, open_client):
     ]
 
     until = time.monotonic() + SECONDS
+    failed = threading.Event()
     memory: list[int] = []
     with ThreadPoolExecutor(len(steps)) as pool:
-        running = [pool.submit(rounds, step, until) for step in steps]
+        running = [pool.submit(rounds, step, until, failed) for step in steps]
         while not all(work.done() for work in running):
-            time.sleep(MEMORY_INTERVAL if time.monotonic() < until else 0.1)
+            if failed.wait(MEMORY_INTERVAL if time.monotonic() < until else 0.1):
+                break  # The other workers stop within a round.
             memory.append(engine.resident_kib())
         counts = [work.result() for work in running]  # Raises what a worker raised.
 
