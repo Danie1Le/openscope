@@ -7,9 +7,9 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <boost/asio/buffer.hpp>
@@ -226,7 +226,7 @@ constexpr int kMostDescriptors = 4096;
 int server_socket(std::uint16_t server_port, std::uint16_t client_port) {
   const auto port_of = [](int descriptor, auto name) -> std::uint16_t {
     boost::asio::ip::tcp::endpoint endpoint;
-    socklen_t size = static_cast<socklen_t>(endpoint.capacity());
+    auto size = static_cast<socklen_t>(endpoint.capacity());
     return name(descriptor, endpoint.data(), &size) == 0 ? endpoint.port() : 0;
   };
   for (int descriptor = 0; descriptor < kMostDescriptors; ++descriptor) {
@@ -495,6 +495,7 @@ TEST_F(ScpiServerTest, ProbesAClientThatWaitsOnOpcWithTcpKeepalive) {
   const int socket = server_socket(port(), waiting.local_port());
 
   ASSERT_NE(socket, -1);
+  // NOLINTNEXTLINE(misc-include-cleaner): <sys/socket.h> defines them in private glibc headers.
   EXPECT_EQ(socket_option(socket, SOL_SOCKET, SO_KEEPALIVE), 1);
   EXPECT_EQ(socket_option(socket, IPPROTO_TCP, TCP_KEEPIDLE), ScpiServer::kKeepAliveIdle.count());
   EXPECT_EQ(socket_option(socket, IPPROTO_TCP, TCP_KEEPINTVL),

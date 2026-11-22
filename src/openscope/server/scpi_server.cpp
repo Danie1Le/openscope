@@ -1,6 +1,5 @@
 #include "openscope/server/scpi_server.hpp"
 
-#include <netinet/in.h>
 #include <netinet/tcp.h>
 
 #include <algorithm>
