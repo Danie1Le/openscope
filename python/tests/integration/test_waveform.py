@@ -5,13 +5,12 @@ import array
 
 import pytest
 import pyvisa
-from engine_helpers import LONGEST_RECORD, take_capture
+from engine_helpers import LONGEST_RECORD, RECORD_LENGTH, take_capture
 
 from openscope_client import Function, Preamble, WaveformFormat
 
-#: The `*RST` record length, and the sample time zero sits at for the 50% trigger position:
-#: round(0.5 x 9999), half away from zero.
-POINTS = 10000
+#: The sample time zero sits at for the `*RST` 50% trigger position: round(0.5 x 9999), half away
+#: from zero.
 TIME_ZERO = 5000
 
 
@@ -27,8 +26,8 @@ def test_read_decodes_the_block_and_places_it_with_the_preamble(scope):
 
     waveform = scope.waveform.read()
 
-    assert waveform.preamble == Preamble(1e6, POINTS, 1.0, 0.0, TIME_ZERO, False)
-    assert len(waveform.samples) == POINTS
+    assert waveform.preamble == Preamble(1e6, RECORD_LENGTH, 1.0, 0.0, TIME_ZERO, False)
+    assert len(waveform.samples) == RECORD_LENGTH
     assert set(waveform.samples) == {-1.0, 1.0}  # 2 Vpp, exact in float32.
     # The rising edge is the trigger event at time zero; a cycle is 1000 samples, high for the
     # first half (give or take the sample the phase rounds into at the half-cycle).
@@ -46,7 +45,7 @@ def test_a_dc_level_reads_back_exactly(scope):
 
     waveform = scope.waveform.read()
 
-    assert waveform.samples == (0.375,) * POINTS
+    assert waveform.samples == (0.375,) * RECORD_LENGTH
     assert waveform.preamble.untriggered  # A flat signal never triggers: Auto took it.
 
 
@@ -101,4 +100,4 @@ def test_each_channel_reads_its_own_generator(scope, channel):
     scope.waveform.source = channel
     waveform = scope.waveform.read()
 
-    assert waveform.samples == (-0.5 * channel,) * POINTS
+    assert waveform.samples == (-0.5 * channel,) * RECORD_LENGTH

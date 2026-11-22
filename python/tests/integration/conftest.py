@@ -11,12 +11,10 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
+from engine_helpers import PATIENCE
 
 from openscope_client import ErrorEntry, OpenScope, SocketStream
 from openscope_client.errors import parse_error_entry
-
-#: Seconds to wait for the engine to start, stop or log an event.
-PATIENCE = 20.0
 
 
 class Engine:
