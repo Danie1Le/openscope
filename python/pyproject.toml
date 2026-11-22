@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools==84.2.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openscope-client"
+version = "0.1.0"
+description = "Drives an OpenScope instrument over SCPI, through a raw TCP socket or PyVISA"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+visa = ["pyvisa>=1.14", "pyvisa-py>=0.7"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-markers"]
+xfail_strict = true
+filterwarnings = ["error"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "PL", "PT", "N"]
+ignore = [
+  "PLR2004", # Tests compare with literal expected values on purpose.
+  "PLR0913", # Typed SCPI methods mirror commands that take several parameters.
+]
