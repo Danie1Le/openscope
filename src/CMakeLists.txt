@@ -1,4 +1,6 @@
 find_package(Threads REQUIRED)
+find_package(boost_asio CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 
 add_library(openscope
   openscope/capture.cpp
@@ -18,3 +20,10 @@ add_library(openscope
 target_include_directories(openscope PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(openscope PUBLIC Threads::Threads PRIVATE openscope_warnings)
 target_compile_definitions(openscope PRIVATE OPENSCOPE_VERSION="${PROJECT_VERSION}")
+
+# The SCPI server over TCP (#13), apart from the instrument so only transports need Boost.Asio.
+add_library(openscope_server
+  openscope/server/json_log.cpp
+  openscope/server/scpi_server.cpp)
+target_link_libraries(openscope_server PUBLIC openscope Boost::asio nlohmann_json::nlohmann_json
+  PRIVATE openscope_warnings)
