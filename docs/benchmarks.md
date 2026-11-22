@@ -52,7 +52,7 @@ Neither side uses `-ffast-math`. KissFFT's own CMake project and the vcpkg `kiss
 
 ### Machine
 
-Measured 2026-11-22 on an Intel Core i7-9700F (8 cores, 3.0 GHz, 32 KiB L1d and 256 KiB L2 per core, 12 MiB L3) under Windows 11, in the `openscope-dev:24.04` container on Docker Desktop (WSL2 kernel 6.18.58.1, no CPU limit on the container, so all 8 CPUs), release build (`benchmark` preset, g++-14 14.2.0 `-O3 -DNDEBUG`). The machine was otherwise idle: the load average was 1.2 to 1.9 on 8 cores. Numbers from a run on 2026-11-21 under a load of about 6 were up to 40 % slower, so a shared machine moves them a lot.
+Measured 2026-11-22 on an Intel Core i7-9700F (8 cores, 3.0 GHz, 32 KiB L1d and 256 KiB L2 per core, 12 MiB L3) under Windows 11, in the `openscope-dev:24.04` container on Docker Desktop (WSL2 kernel 6.18.58.1, no CPU limit on the container, so all 8 CPUs), release build (`benchmark` preset, g++-14 14.2.0 `-O3 -DNDEBUG`). The machine was otherwise idle: the load average was 1.2 to 1.9 on 8 cores. Numbers from a run on 2026-11-21 under a load of about 6 were slower by 55 to 94 % in the KissFFT (256K, 1M) and ring buffer (4096 slots) rows, for example 21 ns against 10.8 ns for the ring buffer, so a shared machine moves them a lot.
 
 Median of 10 repetitions with random interleaving (repetitions of the different benchmarks alternate, so load drift hits both sides alike), CPU time. The coefficient of variation between repetitions was 1.2 to 5.5 % for ours, 1.9 to 7.1 % for KissFFT and 1.2 to 5.3 % for the copy, so ratios closer than about 1.1 do not separate.
 
