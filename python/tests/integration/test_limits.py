@@ -51,12 +51,14 @@ def idle_engine(start_engine):
 
 def test_an_idle_client_is_disconnected(idle_engine, open_client, transport):
     scope = open_client(idle_engine.port)
+    # Stamped before the command is sent: the server's idle timer starts from the reply, later
+    # still, so no delay on either side can make the measured interval shorter than the timeout.
+    sent = time.monotonic()
     scope.identify()
-    replied = time.monotonic()
 
     idle_engine.wait_for("disconnect", reason="idle timeout")
 
-    assert 0.9 <= time.monotonic() - replied < 5  # Generous: a loaded CI runner is slow.
+    assert 1 <= time.monotonic() - sent < 5  # Generous: a loaded CI runner is slow.
     with pytest.raises(transport.connection_lost):
         scope.identify()
 
