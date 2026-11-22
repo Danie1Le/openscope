@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -70,6 +71,11 @@ struct Pushed {
   std::optional<std::size_t> end;
 };
 
+/// Called by `CaptureAssembler::push` with each capture as it completes, so every capture can be
+/// measured, and published, although only the last of a block is returned. It never changes, so
+/// the sink may keep it.
+using CaptureSink = std::function<void(const std::shared_ptr<const Capture>&)>;
+
 /// Assembles sample blocks into captures placed by the edge trigger. A capture starts collecting
 /// samples as soon as the one before completes. A trigger event places its time zero once it holds
 /// the pre-trigger samples and the holdoff since the last capture's trigger event has passed. In
@@ -83,13 +89,14 @@ class CaptureAssembler {
   /// samples. A block may complete several captures, of which `limit` says how many to make:
   /// under kFirst, once a capture completes, it discards and returns the offset in `block` just
   /// past that capture, so the caller can push the samples after it as a new block; otherwise it
-  /// uses the whole block. Either way it returns the last capture it completed. Throws
-  /// std::logic_error when `acquisition` has a record length of zero, when `block` lacks the
-  /// trigger channel's samples, or when it lacks samples for a channel of the capture in progress,
-  /// which means a channel was enabled or disabled without a discard.
+  /// uses the whole block. Each capture goes to `on_completed`, if given, as it completes, and
+  /// push returns the last one. Throws std::logic_error when `acquisition` has a record length of
+  /// zero, when `block` lacks the trigger channel's samples, or when it lacks samples for a channel
+  /// of the capture in progress, which means a channel was enabled or disabled without a discard.
   Pushed push(const SampleBlock& block, const AcquisitionSettings& acquisition,
               std::span<const ChannelSettings, kChannelCount> channels,
-              const TriggerSettings& trigger, CaptureLimit limit = CaptureLimit::kEvery);
+              const TriggerSettings& trigger, CaptureLimit limit = CaptureLimit::kEvery,
+              const CaptureSink& on_completed = {});
 
   /// Drops the capture in progress and restarts the trigger, unarmed and with no holdoff
   /// running; the next block starts a new capture. Returns whether a capture was in progress.

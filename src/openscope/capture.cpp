@@ -19,7 +19,8 @@ namespace openscope {
 
 Pushed CaptureAssembler::push(const SampleBlock& block, const AcquisitionSettings& acquisition,
                               std::span<const ChannelSettings, kChannelCount> channels,
-                              const TriggerSettings& trigger, CaptureLimit limit) {
+                              const TriggerSettings& trigger, CaptureLimit limit,
+                              const CaptureSink& on_completed) {
   if (acquisition.record_length == 0) {
     throw std::logic_error("record length of zero");  // No sample would ever fill a capture.
   }
@@ -44,7 +45,15 @@ Pushed CaptureAssembler::push(const SampleBlock& block, const AcquisitionSetting
     Capture& capture = building_ ? *building_ : start(index, acquisition, channels, pre_trigger);
     used = placed_ ? fill(capture, block, used)
                    : collect(capture, block, used, next_event, events.end(), trigger.mode, holdoff);
-    if (limit == CaptureLimit::kFirst && completed_ != nullptr) {
+    if (building_) {
+      continue;  // Still collecting: only complete() ends the capture in progress here.
+    }
+    // Each step completes at most one capture, and it is handed on before the next one exists, so
+    // a block's captures never pile up however many it completes.
+    if (on_completed) {
+      on_completed(completed_);
+    }
+    if (limit == CaptureLimit::kFirst) {
       discard();  // The trigger has seen the samples after `used`, which the caller pushes again.
       return {.capture = std::move(completed_), .end = used};
     }
