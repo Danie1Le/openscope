@@ -12,6 +12,7 @@
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -49,9 +50,10 @@ int run(std::span<char*> arguments, openscope::JsonLog& log) {
   try {
     server.emplace(io, instrument, options.server, log);
   } catch (const boost::system::system_error& error) {
-    log.write("error", {{"error", std::format("cannot listen on {} port {}: {}",
-                                              options.server.address, options.server.port,
-                                              error.code().message())}});
+    const std::string message =
+        std::format("cannot listen on {} port {}: {}", options.server.address, options.server.port,
+                    error.code().message());
+    log.write("error", {{"error", message}});
     return 1;
   }
   const openscope::LivePipeline live(instrument);
