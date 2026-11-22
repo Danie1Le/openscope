@@ -10,9 +10,11 @@ The engine serves SCPI over TCP on `127.0.0.1:5025` by default (PyVISA resource 
 
 - Each connection is one Session with its own error queue, waveform-transfer and FFT settings.
 - A connection's lines run in the order they arrive, each once the one before it has replied. A reply is one line ending in `\n`. Lines that do not reply send nothing back.
-- At most 8 connections are served at once. A further connection is closed as soon as it is accepted, without a reply.
+- At most 8 connections are served at once. A further connection is closed as soon as it is accepted, without a reply. Eight connections that all wait on `*OPC?` or `*WAI` for a Single that never ends (Normal trigger mode, no trigger) therefore block every new connection, including one that would send `STOP`, until one of them disconnects or the engine restarts.
 - A connection with no command and no reply for the idle timeout (300 s by default) is closed. A partial line does not count as a command. A Session waiting on `*OPC?` or `*WAI` is never idle.
 - Closing the connection ends the Session at once: a line still waiting on `*OPC?` or `*WAI` is dropped, and lines not yet run are not run. Keep the connection open until every reply has been read.
+- A client that sends 4 KB or more behind a line waiting on `*OPC?` or `*WAI` and then disconnects is noticed only when that line ends (the Single completes, or any connection sends `STOP`, `RUN` or `*RST`).
+- TCP keepalive probes a silent connection after 30 s, 3 times 5 s apart: a client whose host loses power or network, sending no FIN or RST, is closed within about 45 s, even while it waits on `*OPC?`.
 - No command runs a program or reads or writes a file.
 - The engine logs connects, refused connections, disconnects (with the reason), over-long lines and I/O errors to standard error, one JSON object per line.
 

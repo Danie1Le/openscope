@@ -31,7 +31,7 @@ With Clang, the sanitizer and coverage presets need the compiler runtime (`libcl
 
 ## Running the engine
 
-`openscope-engine` runs the instrument live (4 channels on a 1 MS/s sample clock at `*RST`) and serves SCPI over TCP until Ctrl+C or SIGTERM. Every build preset builds it into `build/<preset>/src/`.
+`openscope-engine` runs the instrument live (4 channels on a 1 MS/s sample clock at `*RST`) and serves SCPI over TCP until Ctrl+C or SIGTERM. The debug, release, asan, tsan and coverage presets build it into `build/<preset>/src/`.
 
 ```sh
 build/release/src/openscope-engine            # 127.0.0.1:5025
