@@ -53,6 +53,8 @@ class ScpiServer {
   static constexpr std::chrono::seconds kKeepAliveInterval{5};
   /// See kKeepAliveIdle.
   static constexpr int kKeepAliveProbes = 3;
+  static_assert(kKeepAliveIdle + kKeepAliveProbes * kKeepAliveInterval <= std::chrono::minutes(1),
+                "a vanished client is noticed within a minute of its last traffic");
 
   /// Listens as `options` say and starts accepting on `io`. `instrument` and `log` must outlive the
   /// server. Throws boost::system::system_error when the address is not an IP address or cannot be
@@ -80,8 +82,7 @@ class ScpiServer {
 
   /// Accepts the next connection; after a failure, tries again after kAcceptRetryDelay.
   void accept();
-  /// Serves `socket` with TCP keepalive on, or closes it when kMaxClients connections are open
-  /// already.
+  /// Serves `socket`, or closes it when kMaxClients connections are open already.
   void admit(boost::asio::ip::tcp::socket socket);
 
   Instrument* instrument_;
