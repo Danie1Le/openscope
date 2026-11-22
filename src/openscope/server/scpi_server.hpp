@@ -25,9 +25,13 @@ namespace openscope {
 /// one is closed as soon as it is accepted; a connection that goes ServerOptions::idle_timeout
 /// without a command or a reply is closed, also when it never reads the reply being written, but
 /// not while the Instrument has not replied yet (a line held by `*OPC?` waits for as long as the
-/// Single takes). A client that disconnects ends its Session at
-/// once, dropping any line it has waiting. Connects, refusals, disconnects and errors go to the
-/// JsonLog.
+/// Single takes). A client that disconnects ends its Session at once, dropping any line it has
+/// waiting; so does one whose host vanishes (loses power or network, sending no FIN or RST), once
+/// TCP keepalive gives up on it. Connects, refusals, disconnects and errors go to the JsonLog.
+///
+/// shortcut: kMaxClients connections that each wait on a Single that never ends (Normal mode, no
+/// trigger) block every new connection, including the one that would send `STOP`, until one of
+/// them disconnects or the engine restarts, as on a bench instrument with a client limit.
 ///
 /// All of its work runs on the io_context's thread, which must be one thread, so connections need
 /// no locking. Replies that end on another thread (inside `Instrument::process` or `advance`) are
@@ -36,6 +40,16 @@ class ScpiServer {
  public:
   /// Connections served at once (spec #1, story 82).
   static constexpr std::size_t kMaxClients = 8;
+
+  /// TCP keepalive on every connection: after kKeepAliveIdle without traffic, kKeepAliveProbes
+  /// probes kKeepAliveInterval apart. A peer that answers none fails the pending read and its
+  /// connection closes. The idle timeout is off while a line is held, so this is what frees the
+  /// slot of a client whose host vanished while it waited on `*OPC?` (spec #1, stories 35 and 83).
+  static constexpr std::chrono::seconds kKeepAliveIdle{30};
+  /// See kKeepAliveIdle.
+  static constexpr std::chrono::seconds kKeepAliveInterval{5};
+  /// See kKeepAliveIdle.
+  static constexpr int kKeepAliveProbes = 3;
 
   /// Listens as `options` say and starts accepting on `io`. `instrument` and `log` must outlive the
   /// server. Throws boost::system::system_error when the address is not an IP address or cannot be
@@ -63,7 +77,8 @@ class ScpiServer {
 
   /// Accepts the next connection; after a failure, tries again after kAcceptRetryDelay.
   void accept();
-  /// Serves `socket`, or closes it when kMaxClients connections are open already.
+  /// Serves `socket` with TCP keepalive on, or closes it when kMaxClients connections are open
+  /// already.
   void admit(boost::asio::ip::tcp::socket socket);
 
   Instrument* instrument_;

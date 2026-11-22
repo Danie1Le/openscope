@@ -1,18 +1,23 @@
 // The SCPI server over real loopback sockets (#13): framing, ordering, one Session per
 // connection, the line and client limits, the idle timeout, `*OPC?` waits across connections,
-// cleanup on disconnect, and garbage input. The server runs on its own I/O thread, as in the
-// engine, so the TSan build checks every reply handed to it from another thread.
+// cleanup on disconnect, TCP keepalive, and garbage input. The server runs on its own I/O thread,
+// as in the engine, so the TSan build checks every reply handed to it from another thread.
 
 #include "openscope/server/scpi_server.hpp"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <sys/socket.h>
 
 #include <algorithm>
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/asio/io_context.hpp>
+#include <boost/asio/ip/address.hpp>
 #include <boost/asio/ip/address_v4.hpp>
+#include <boost/asio/ip/address_v6.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/post.hpp>
 #include <boost/asio/read_until.hpp>
@@ -129,9 +134,13 @@ class RunningServer {
 /// A SCPI client on a raw socket, with a deadline on every read.
 class Client {
  public:
-  explicit Client(std::uint16_t port) {
-    socket_.connect({boost::asio::ip::address_v4::loopback(), port});
+  explicit Client(std::uint16_t port,
+                  const boost::asio::ip::address& host = boost::asio::ip::address_v4::loopback()) {
+    socket_.connect({host, port});
   }
+
+  /// The port of this end of the connection.
+  [[nodiscard]] std::uint16_t local_port() const { return socket_.local_endpoint().port(); }
 
   /// Sends `text` as it is: terminators are the caller's.
   void send(std::string_view text) { boost::asio::write(socket_, boost::asio::buffer(text)); }
@@ -208,6 +217,33 @@ std::vector<std::unique_ptr<Client>> all_clients(std::uint16_t port) {
 
 /// Matches the reply to `*IDN?`, which shows that a line ran and the connection works.
 auto idn_reply() { return testing::Optional(StartsWith("OpenScope,")); }
+
+/// The descriptors this process could have open: more than any test opens.
+constexpr int kMostDescriptors = 4096;
+
+/// The server's socket for the connection from the client at `client_port`: the descriptor of
+/// this process bound to `server_port` whose peer is at `client_port`, or -1.
+int server_socket(std::uint16_t server_port, std::uint16_t client_port) {
+  const auto port_of = [](int descriptor, auto name) -> std::uint16_t {
+    boost::asio::ip::tcp::endpoint endpoint;
+    socklen_t size = static_cast<socklen_t>(endpoint.capacity());
+    return name(descriptor, endpoint.data(), &size) == 0 ? endpoint.port() : 0;
+  };
+  for (int descriptor = 0; descriptor < kMostDescriptors; ++descriptor) {
+    if (port_of(descriptor, ::getsockname) == server_port &&
+        port_of(descriptor, ::getpeername) == client_port) {
+      return descriptor;
+    }
+  }
+  return -1;
+}
+
+/// The int socket option `name` at `level` of `descriptor`, or -1.
+int socket_option(int descriptor, int level, int name) {
+  int value = -1;
+  socklen_t size = sizeof value;
+  return ::getsockopt(descriptor, level, name, &value, &size) == 0 ? value : -1;
+}
 
 class ScpiServerTest : public testing::Test {
  protected:
@@ -444,6 +480,32 @@ TEST_F(ScpiServerTest, DisconnectWhileWaitingOnOpcEndsTheSessionAndFreesItsSlot)
   EXPECT_THAT(clients.back()->query("*IDN?"), idn_reply());
 }
 
+// A client host that loses power or network sends no FIN or RST, and while its line waits on
+// `*OPC?` the idle timeout is off, so only TCP keepalive notices it: its probes go unanswered, the
+// pending read fails and the connection closes as on the disconnect above, freeing the slot. On
+// loopback the client's kernel answers every probe, and making a peer go silent needs privileges
+// tests do not have (a firewall rule or TCP_REPAIR), so this checks the probe settings on the
+// server's end of a connection that waits.
+TEST_F(ScpiServerTest, ProbesAClientThatWaitsOnOpcWithTcpKeepalive) {
+  Client waiting(port());
+  ASSERT_THAT(waiting.query("*IDN?"), idn_reply());  // Admitted.
+  waiting.send("SING;*OPC?\n");
+  EXPECT_EQ(waiting.read_line(kQuiet), std::nullopt);
+
+  const int socket = server_socket(port(), waiting.local_port());
+
+  ASSERT_NE(socket, -1);
+  EXPECT_EQ(socket_option(socket, SOL_SOCKET, SO_KEEPALIVE), 1);
+  EXPECT_EQ(socket_option(socket, IPPROTO_TCP, TCP_KEEPIDLE), ScpiServer::kKeepAliveIdle.count());
+  EXPECT_EQ(socket_option(socket, IPPROTO_TCP, TCP_KEEPINTVL),
+            ScpiServer::kKeepAliveInterval.count());
+  EXPECT_EQ(socket_option(socket, IPPROTO_TCP, TCP_KEEPCNT), ScpiServer::kKeepAliveProbes);
+  // A vanished client is noticed within a minute of its last traffic.
+  EXPECT_LE(
+      ScpiServer::kKeepAliveIdle + ScpiServer::kKeepAliveProbes * ScpiServer::kKeepAliveInterval,
+      std::chrono::minutes(1));
+}
+
 TEST_F(ScpiServerTest, StoppingTheServerEndsItsSessionsEvenWhileOneWaits) {
   Client waiting(port());
   waiting.send("SING;*OPC?\n");
@@ -533,6 +595,24 @@ TEST_F(ScpiServerTest, LogsAnOversizedLineAndAClientDisconnect) {
   EXPECT_EQ(disconnect["reason"], "closed by client");
   EXPECT_EQ(disconnect["session"], connect["session"]);
   EXPECT_EQ(disconnect["peer"], connect["peer"]);
+}
+
+// An IPv6 peer is logged as `[address]:port`, so the port can be split off.
+TEST(ScpiServerIpv6Test, LogsAPeerInBrackets) {
+  Instrument instrument;
+  std::unique_ptr<RunningServer> server;
+  try {
+    server =
+        std::make_unique<RunningServer>(instrument, ServerOptions{.address = "::1", .port = 0});
+  } catch (const boost::system::system_error& error) {
+    GTEST_SKIP() << "no IPv6 loopback: " << error.what();
+  }
+  EXPECT_THAT(Client(server->port(), boost::asio::ip::address_v6::loopback()).query("*IDN?"),
+              idn_reply());
+
+  const nlohmann::json connect = first_event(server->events_once_logged("connect"), "connect");
+
+  EXPECT_THAT(connect["peer"].get<std::string>(), testing::MatchesRegex(R"(\[::1\]:[0-9]+)"));
 }
 
 /// What a ScpiServer needs, for tests that only construct one.
