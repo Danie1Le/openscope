@@ -34,18 +34,27 @@ int run(std::span<char*> arguments, openscope::JsonLog& log) {
   try {
     options = openscope::parse_engine_options(options_text);
   } catch (const std::invalid_argument& error) {
-    std::cerr << "openscope-engine: " << error.what() << "\n\n" << openscope::kEngineUsage;
+    std::cerr << "openscope-engine: " << error.what() << "\n\n" << openscope::engine_usage();
     return kUsageError;
   }
   if (options.help) {
-    std::cout << openscope::kEngineUsage;
+    std::cout << openscope::engine_usage();
     return 0;
   }
 
   // Destroyed in reverse: the pipeline's threads stop first, so no reply is posted while the server
   // ends its Sessions, and both go before the io_context replies are posted to.
-  openscope::Instrument instrument(options.seed);
   boost::asio::io_context io;
+  // Caught from here on, so a signal while the engine starts still stops it cleanly: io.run()
+  // handles it at once.
+  boost::asio::signal_set signals(io, SIGINT, SIGTERM);
+  signals.async_wait([&](const auto& error, int signal) {
+    if (!error) {
+      log.write("stopping", {{"signal", signal}});
+      io.stop();
+    }
+  });
+  openscope::Instrument instrument(options.seed);
   std::optional<openscope::ScpiServer> server;
   try {
     server.emplace(io, instrument, options.server, log);
@@ -57,13 +66,6 @@ int run(std::span<char*> arguments, openscope::JsonLog& log) {
     return 1;
   }
   const openscope::LivePipeline live(instrument);
-  boost::asio::signal_set signals(io, SIGINT, SIGTERM);
-  signals.async_wait([&](const auto& error, int signal) {
-    if (!error) {
-      log.write("stopping", {{"signal", signal}});
-      io.stop();
-    }
-  });
   io.run();
   return 0;
 }
