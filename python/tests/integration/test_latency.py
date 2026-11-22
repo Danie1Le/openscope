@@ -100,7 +100,9 @@ def test_first_measurement_of_a_fresh_longest_record(
     assert latency.p95 < 2000
 
 
-@pytest.mark.xfail(strict=True, reason="#58: a pipelined reply waits for a delayed ACK")
+@pytest.mark.xfail(
+    strict=True, raises=AssertionError, reason="#58: a pipelined reply waits for a delayed ACK"
+)
 def test_pipelined_replies_are_not_delayed(scope):
     # The client sends `SYST:ERR?` behind every query: two replies to one write.
     times = timed(itertools.repeat(scope.identify, 50))
