@@ -4,7 +4,7 @@ settings (ADR 0002), while instrument settings are shared."""
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from engine_helpers import take_capture
+from engine_helpers import REJECTED_LINES, take_capture
 from server_limits import MAX_CLIENTS
 
 from openscope_client import NO_ERROR, ErrorEntry, Function, ScpiError, WaveformFormat
@@ -64,17 +64,24 @@ def test_instrument_settings_are_shared(engine, open_client):
 
 def test_eight_concurrent_clients_never_see_each_others_errors_or_settings(engine, open_client):
     clients = [open_client(engine.port) for _ in range(MAX_CLIENTS)]
+    # Each client has its own error and its own (channel, format) pair, so a queue or a setting
+    # shared between any two Sessions shows up as the other client's.
+    expected = [
+        (REJECTED_LINES[number], (number % 4 + 1, tuple(WaveformFormat)[number // 4]))
+        for number in range(MAX_CLIENTS)
+    ]
+    for distinct in zip(*expected, strict=True):
+        assert len(set(distinct)) == MAX_CLIENTS
 
     def work(number: int) -> None:
         scope = clients[number]
-        channel = number % 4 + 1
-        form = (WaveformFormat.ASCII, WaveformFormat.REAL)[number % 2]
+        (line, error), (channel, form) = expected[number]
         for _ in range(25):
             scope.waveform.source = channel
             scope.waveform.format = form
             with pytest.raises(ScpiError) as raised:
-                scope.write(f"BOGUS{number}")
-            assert raised.value.errors == (UNDEFINED_HEADER,)
+                scope.write(line)
+            assert raised.value.errors == (error,)
             assert (scope.waveform.source, scope.waveform.format) == (channel, form)
 
     with ThreadPoolExecutor(len(clients)) as pool:
