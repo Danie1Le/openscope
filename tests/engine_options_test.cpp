@@ -1,9 +1,11 @@
 #include "engine/engine_options.hpp"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <chrono>
 #include <cstdint>
+#include <format>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -13,6 +15,8 @@
 
 namespace openscope {
 namespace {
+
+using testing::HasSubstr;
 
 EngineOptions parse(const std::vector<std::string_view>& arguments) {
   return parse_engine_options(arguments);
@@ -46,7 +50,29 @@ TEST(EngineOptionsTest, ReadsTheLargestValues) {
   EXPECT_EQ(options.server.port, 65535);
   EXPECT_EQ(options.server.idle_timeout, std::chrono::seconds(1));
   EXPECT_EQ(options.seed, std::numeric_limits<std::uint64_t>::max());
-  EXPECT_TRUE(parse({"--help"}).help);
+}
+
+TEST(EngineOptionsTest, HelpHasALongForm) { EXPECT_TRUE(parse({"--help"}).help); }
+
+TEST(EngineOptionsTest, ReadsAnIpv6Address) {
+  EXPECT_EQ(parse({"--address", "::1"}).server.address, "::1");
+}
+
+// The usage text names the defaults a command line without options gets.
+TEST(EngineOptionsTest, UsageNamesTheDefaults) {
+  const EngineOptions defaults = parse({});
+  const std::string usage = engine_usage();
+
+  EXPECT_THAT(usage, HasSubstr(std::format("(default {})", defaults.server.address)));
+  EXPECT_THAT(usage, HasSubstr(std::format("(default {})", defaults.server.port)));
+  EXPECT_THAT(
+      usage,
+      HasSubstr(std::format(
+          "(default {})",
+          std::chrono::duration_cast<std::chrono::seconds>(defaults.server.idle_timeout).count())));
+  EXPECT_THAT(usage, HasSubstr(std::format("(default {})", defaults.seed)));
+  EXPECT_THAT(usage, HasSubstr("--port <0-65535>"));
+  EXPECT_THAT(usage, HasSubstr("--idle-timeout <1-86400>"));
 }
 
 class BadEngineOptionsTest
@@ -55,12 +81,8 @@ class BadEngineOptionsTest
 TEST_P(BadEngineOptionsTest, AreRejectedWithAMessageNamingTheOption) {
   const auto& [arguments, message] = GetParam();
 
-  try {
-    parse(arguments);
-    ADD_FAILURE() << "accepted";
-  } catch (const std::invalid_argument& error) {
-    EXPECT_EQ(error.what(), message);
-  }
+  EXPECT_THAT([&] { parse(arguments); },
+              testing::ThrowsMessage<std::invalid_argument>(testing::StrEq(message)));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -70,6 +92,12 @@ INSTANTIATE_TEST_SUITE_P(
                     std::pair{std::vector<std::string_view>{"--port"}, "--port needs a value"},
                     std::pair{std::vector<std::string_view>{"--address"},
                               "--address needs a value"},
+                    std::pair{std::vector<std::string_view>{"--address", "localhost"},
+                              "--address takes an IPv4 or IPv6 address, not 'localhost'"},
+                    std::pair{std::vector<std::string_view>{"--address", "999.1.1.1"},
+                              "--address takes an IPv4 or IPv6 address, not '999.1.1.1'"},
+                    std::pair{std::vector<std::string_view>{"--address", ""},
+                              "--address takes an IPv4 or IPv6 address, not ''"},
                     std::pair{std::vector<std::string_view>{"--port", "65536"},
                               "--port takes a whole number from 0 to 65535, not '65536'"},
                     std::pair{std::vector<std::string_view>{"--port", "-1"},
