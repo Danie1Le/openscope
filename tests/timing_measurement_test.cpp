@@ -32,7 +32,6 @@ namespace {
 
 using test::kClippedReply;
 using test::kNoErrorReply;
-using test::kNoSignalReply;
 using test::kResetRecordLength;
 using test::kTooFewCyclesReply;
 using test::kUntriggeredCaptures;
@@ -287,8 +286,8 @@ INSTANTIATE_TEST_SUITE_P(OneAndFivePercentNoise, FrequencySweepTest,
 
 // #52: a signal sampled at only a few phases of its cycle puts its samples in a few narrow clusters
 // with nothing between them. They are no level it settles at, so top and base are its extremes,
-// never one cluster in the middle for both (which read No signal). Each case and seed is one that
-// read No signal before.
+// never one cluster in the middle for both (which read No signal). The cases are the examples of
+// #52 and one seed for each shape.
 TEST(FewSamplingPhasesTest, ClustersAreNoLevels) {
   EXPECT_TRUE(is_right_or_flagged(1, cycles_of("TRI", 30.0, 30.0, 0.0), kOnePercentNoise));
   EXPECT_TRUE(is_right_or_flagged(14, cycles_of("SIN", 10.0, 100.0, 0.02), kOnePercentNoise));
@@ -297,42 +296,36 @@ TEST(FewSamplingPhasesTest, ClustersAreNoLevels) {
   EXPECT_TRUE(is_right_or_flagged(11, cycles_of("TRI", 10.0, 1000.0, 0.02), kOnePercentNoise));
 }
 
-/// Whether `signal`, measured on Instruments seeded 1 to `seeds`, never reads No signal.
-testing::AssertionResult is_never_no_signal(const NoisySignal& signal, std::uint64_t seeds) {
-  for (std::uint64_t seed = 1; seed <= seeds; ++seed) {
-    if (measure_noisy(seed, signal, "MEAS:FREQ?").second == kNoSignalReply) {
-      return testing::AssertionFailure()
-             << std::format("{} at {} Hz, {} samples, seed {}: No signal", signal.function,
-                            signal.frequency, signal.record_length, seed);
-    }
-  }
-  return testing::AssertionSuccess();
-}
+/// The sweep with no noise: right within 0.1%.
+constexpr FrequencySweep kNoNoise{.noise = 0.0, .tolerance = 1e-3, .may_be_too_few_cycles = false};
 
-class NoSignalSweepTest : public testing::TestWithParam<double> {};
+class NoSignalSweepTest : public testing::TestWithParam<FrequencySweep> {};
 
 /// The longest record NoSignalSweepTest takes, so that the sweep stays quick under the sanitizers.
 constexpr std::size_t kLongestSweptRecord = 30'001;
 
-// #52: every shape, clean or with noise (the parameter, volts RMS: 0.02 is 1% of the amplitude), at
-// 10 to 3000 samples per cycle and 10 to 1000 cycles (up to kLongestSweptRecord samples) spans 2 V,
-// far more than 0.2 div, so it is never No signal.
-TEST_P(NoSignalSweepTest, ASignalIsNeverNoSignal) {
-  const double noise = GetParam();
-  const std::uint64_t seeds = noise > 0.0 ? kNoiseSeeds : 1;
+// #52: every shape, clean or at 1% noise, at 10 to 3000 samples per cycle and 10 to 1000 cycles (up
+// to kLongestSweptRecord samples) spans 2 V, far more than 0.2 div, so its frequency is right, and
+// in particular never No signal.
+TEST_P(NoSignalSweepTest, ASignalReadsItsFrequency) {
+  const FrequencySweep sweep = GetParam();
+  const std::uint64_t seeds = sweep.noise > 0.0 ? kNoiseSeeds : 1;
   for (const std::string_view shape : {"SIN", "SQU", "TRI", "RAMP"}) {
     for (const double samples_per_cycle : {10.0, 11.1, 20.0, 30.0, 100.0, 1000.0, 3000.0}) {
       for (const double cycles : {10.0, 30.0, 100.0, 1000.0}) {
-        const NoisySignal signal = cycles_of(shape, samples_per_cycle, cycles, noise);
+        const NoisySignal signal = cycles_of(shape, samples_per_cycle, cycles, sweep.noise);
         if (signal.record_length <= kLongestSweptRecord) {
-          EXPECT_TRUE(is_never_no_signal(signal, seeds));
+          for (std::uint64_t seed = 1; seed <= seeds; ++seed) {
+            EXPECT_TRUE(is_right_or_flagged(seed, signal, sweep));
+          }
         }
       }
     }
   }
 }
 
-INSTANTIATE_TEST_SUITE_P(CleanAndOnePercentNoise, NoSignalSweepTest, testing::Values(0.0, 0.02));
+INSTANTIATE_TEST_SUITE_P(CleanAndOnePercentNoise, NoSignalSweepTest,
+                         testing::Values(kNoNoise, kOnePercentNoise));
 
 /// A 1 kHz square wave, with noise at 1% of its amplitude in NoisySquareTimingTest.
 constexpr NoisySignal kNoisySquare{"SQU", 1e3, 10'000};
