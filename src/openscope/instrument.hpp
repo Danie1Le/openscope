@@ -19,6 +19,7 @@
 #include "openscope/channel.hpp"
 #include "openscope/generator.hpp"
 #include "openscope/measurement.hpp"
+#include "openscope/measurement_statistics.hpp"
 #include "openscope/sample_clock.hpp"
 #include "openscope/scpi/command_tree.hpp"
 #include "openscope/session.hpp"
@@ -39,8 +40,8 @@ using ReplyHandler = std::function<void(std::optional<std::string> reply)>;
 
 /// The single entry point for instrument behaviour. It owns every Session and the instrument-wide
 /// state (generators, channels, acquisition and trigger settings, the run state, the sample clock,
-/// the latest capture and its measurements), and executes SCPI text on a Session's behalf, so
-/// transports and tests all reach the instrument through the same path.
+/// the latest capture and its measurements, the measurement statistics), and executes SCPI text
+/// on a Session's behalf, so transports and tests all reach the instrument through the same path.
 ///
 /// The sample clock runs in one of two ways, never both on one Instrument. In test mode one thread
 /// steps it with `advance`. In live mode an acquisition thread calls `acquire` and a processing
@@ -106,16 +107,17 @@ class Instrument {
   [[nodiscard]] std::optional<AcquiredBlock> acquire(std::size_t count);
 
   /// Live mode's processing half: assembles `block`, from `acquire`, into captures without the
-  /// mutex that commands take; it takes it only to publish a capture or end a Single, which
-  /// happens about once a capture. A capture completes into the latest capture only when no
-  /// command has discarded the capture in progress since the block was acquired, so it never
-  /// holds settings older than a command that has already returned. A Single's capture stops the
-  /// instrument and ends the lines held on it, on this thread; when `RUN` has ended the Single
-  /// since the block was acquired, the rest of the block, and every later block acquired while
-  /// the Single was armed, is captured as Running, with the trigger restarted at the Single's
-  /// capture as after any Single. Blocks must come in the order they were acquired; a block that
-  /// never arrives is a dropped block, and the capture that would span it is discarded and
-  /// counted.
+  /// mutex that commands take, and measures each capture for the measurement statistics as it
+  /// completes, also without it. It takes the mutex only to count and publish a capture or end a
+  /// Single, about once a capture. A capture is counted, and becomes the latest capture in the
+  /// same hold of the mutex, only when no command has discarded the capture in progress since the
+  /// block was acquired, so neither ever holds settings older than a command that has already
+  /// returned. A Single's capture stops the instrument and ends the lines held on it, on this
+  /// thread; when `RUN` has ended the Single since the block was acquired, the rest of the block,
+  /// and every later block acquired while the Single was armed, is captured as Running, with the
+  /// trigger restarted at the Single's capture as after any Single. Blocks must come in the order
+  /// they were acquired; a block that never arrives is a dropped block, and the capture that would
+  /// span it is discarded and counted.
   void process(const AcquiredBlock& block);
 
   /// Samples per second on the sample clock (`ACQuire:SRATe`), which live mode paces against.
@@ -158,14 +160,23 @@ class Instrument {
   /// A block of no samples with the current settings and the next sequence number, to sample
   /// into; nullopt while Stopped. Needs mutex_.
   std::optional<AcquiredBlock> snapshot();
-  /// Feeds `block` to the capture assembler. Touches the processing state only, so it needs no
-  /// lock.
-  Pushed assemble(const AcquiredBlock& block);
-  /// Publishes what assembling `block` produced and ends a Single its capture completes, unless a
-  /// command has discarded the capture in progress since `block` was acquired. Returns true when
-  /// the block's Single capture ended inside it but `RUN` had already ended the Single, so the
-  /// samples after `pushed.end` are still to be captured as Running. Needs mutex_.
-  bool conclude(const AcquiredBlock& block, const Pushed& pushed);
+  /// Feeds `block` to the capture assembler, which hands each capture to `on_completed` as it
+  /// completes. Returns, when the block's Single capture completed inside it, the offset just past
+  /// that capture. Touches the processing state only, so it needs no lock.
+  std::optional<std::size_t> assemble(const AcquiredBlock& block, const CaptureSink& on_completed);
+  /// How many captures assembling `block` makes: its own limit, unless `RUN` has already ended
+  /// the Single it was acquired for. Processing state only, so it needs no lock.
+  [[nodiscard]] CaptureLimit capture_limit(const AcquiredBlock& block) const;
+  /// Counts `capture`, which completed in `block`, in the measurement statistics with its
+  /// `results` and makes it the latest capture, unless a command has discarded the capture in
+  /// progress since `block` was acquired. Needs mutex_.
+  void publish(const AcquiredBlock& block, const std::shared_ptr<const Capture>& capture,
+               const CaptureResults& results);
+  /// Ends the Single whose capture completed inside `block`, unless a command has discarded the
+  /// capture in progress since `block` was acquired. Returns true when `RUN` had already ended
+  /// the Single, so the samples after that capture are still to be captured as Running. Needs
+  /// mutex_.
+  bool conclude(const AcquiredBlock& block);
   /// Discards the capture in progress: the blocks acquired from now on start a new generation,
   /// and a capture never mixes two generations.
   void discard_capture() { ++generation_; }
@@ -180,6 +191,8 @@ class Instrument {
   void add_waveform_commands();
   void add_fft_commands();
   void add_measurement_commands();
+  /// `MEASure:STATistics?` and `MEASure:STATistics:RESet`.
+  void add_statistics_commands();
 
   /// Replies what `reply` writes from the latest capture and channel `source` (1 to 4) in it.
   /// Before the first capture completes it reports -230; when the source channel is not in the
@@ -243,9 +256,15 @@ class Instrument {
   /// Applies `change` to the trigger settings and discards the capture in progress, which restarts
   /// the trigger.
   void change_trigger(const std::function<void(TriggerSettings&)>& change);
+  /// What every change of a setting that shapes captures does: discards the capture in progress,
+  /// which no longer matches the settings, and resets the statistics, so they never mix data from
+  /// two settings (spec #1, story 64). The timebase shapes no capture (ADR 0004), so it does
+  /// neither.
+  void capture_setting_changed();
   /// `*RST`: restores every instrument-wide setting and the Running run state, restarts every
   /// Generator as if it had run at its defaults since sample index 0 with no Faults, and drops the
-  /// latest capture. The sample clock keeps counting and Sessions keep their own state (ADR 0002).
+  /// latest capture and the statistics. The sample clock keeps counting and Sessions keep their
+  /// own state (ADR 0002).
   void reset();
   /// Enters `state`. Stopped and Armed-single drop the capture in progress, so the next capture
   /// starts with the samples after the change; Running keeps it.
@@ -274,6 +293,8 @@ class Instrument {
   TriggerSettings trigger_;
   RunState run_state_ = RunState::kRunning;
   MeasurementEngine measurements_;
+  /// Every capture completed since the last capture_setting_changed(), `*RST` or `MEAS:STAT:RES`.
+  MeasurementStatistics statistics_;
   /// At most one per Session: a Session with a held line sends no other.
   std::vector<HeldLine> held_;
   /// The generation of the blocks acquired from now on (AcquiredBlock::generation).

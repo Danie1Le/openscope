@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -170,18 +171,14 @@ SampleBlock rising_block(SampleIndex first, std::size_t count) {
   return block;
 }
 
-/// The captures an assembler hands on as they complete.
+/// The first sample indexes of the captures an assembler hands on, oldest first.
 struct HandedOn {
-  /// Their first sample indexes, oldest first.
   std::vector<SampleIndex> first_indexes;
-  /// The last one.
-  std::shared_ptr<const Capture> last;
 
   /// The sink to pass to `push`.
   CaptureSink sink() {
     return [this](const std::shared_ptr<const Capture>& capture) {
       first_indexes.push_back(capture->first_index);
-      last = capture;
     };
   }
 };
@@ -191,36 +188,31 @@ TEST(CaptureAssemblerTest, PushHandsOnEveryCaptureAsItCompletes) {
   HandedOn handed_on;
   const AcquisitionSettings acquisition{.sample_rate = 1.0, .record_length = 2};
 
-  const Pushed three =
-      assembler.push(rising_block(0, 7), acquisition, kChannelOne, kUntriggeredEveryRecord,
-                     CaptureLimit::kEvery, handed_on.sink());
+  assembler.push(rising_block(0, 7), acquisition, kChannelOne, kUntriggeredEveryRecord,
+                 CaptureLimit::kEvery, handed_on.sink());
   EXPECT_THAT(handed_on.first_indexes, ElementsAre(0U, 2U, 4U));
-  EXPECT_EQ(handed_on.last, three.capture);  // The last one handed on is returned.
 
-  const Pushed one =
-      assembler.push(rising_block(7, 1), acquisition, kChannelOne, kUntriggeredEveryRecord,
-                     CaptureLimit::kEvery, handed_on.sink());
+  assembler.push(rising_block(7, 1), acquisition, kChannelOne, kUntriggeredEveryRecord,
+                 CaptureLimit::kEvery, handed_on.sink());
   EXPECT_THAT(handed_on.first_indexes, ElementsAre(0U, 2U, 4U, 6U));
-  EXPECT_EQ(handed_on.last, one.capture);
 
-  const Pushed none =
+  const std::optional<std::size_t> end =
       assembler.push(rising_block(8, 1), acquisition, kChannelOne, kUntriggeredEveryRecord,
                      CaptureLimit::kEvery, handed_on.sink());
   EXPECT_THAT(handed_on.first_indexes, ElementsAre(0U, 2U, 4U, 6U));
-  EXPECT_EQ(none.capture, nullptr);
+  EXPECT_EQ(end, std::nullopt);
 }
 
 TEST(CaptureAssemblerTest, PushOfTheFirstCaptureOnlyHandsOnThatCapture) {
   CaptureAssembler assembler;
   HandedOn handed_on;
 
-  const Pushed pushed =
+  const std::optional<std::size_t> end =
       assembler.push(rising_block(0, 7), {.sample_rate = 1.0, .record_length = 2}, kChannelOne,
                      kUntriggeredEveryRecord, CaptureLimit::kFirst, handed_on.sink());
 
-  EXPECT_EQ(pushed.end, 2U);
+  EXPECT_EQ(end, 2U);
   EXPECT_THAT(handed_on.first_indexes, ElementsAre(0U));
-  EXPECT_EQ(handed_on.last, pushed.capture);
 }
 
 }  // namespace

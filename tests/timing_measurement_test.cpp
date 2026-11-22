@@ -24,6 +24,7 @@
 #include "openscope/instrument.hpp"
 #include "openscope/measurement.hpp"
 #include "openscope/scpi/response.hpp"
+#include "reply_numbers.hpp"
 #include "scpi_session.hpp"
 
 namespace openscope {
