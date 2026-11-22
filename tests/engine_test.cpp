@@ -76,11 +76,10 @@ class EngineProcess {
     ::close(output_end_);
   }
 
-  /// Whether the output contains `text`, reading until it does, ends, or kPatience runs out.
+  /// Whether the output contains `text`, reading until it does, ends, or deadline_ passes.
   bool printed(std::string_view text) {
-    const auto deadline = std::chrono::steady_clock::now() + test::kPatience;
     while (output_.find(text) == std::string::npos) {
-      if (!read_some(deadline)) {
+      if (!read_some()) {
         return false;
       }
     }
@@ -92,10 +91,9 @@ class EngineProcess {
   void signal(int signal) const { ::kill(pid_, signal); }
 
   /// The exit status once the engine exits, as a shell gives it: 128 plus the signal number if a
-  /// signal ended it; -1 if its output has not ended within kPatience.
+  /// signal ended it; -1 if its output has not ended by deadline_.
   int exit_status() {
-    const auto deadline = std::chrono::steady_clock::now() + test::kPatience;
-    while (read_some(deadline)) {
+    while (read_some()) {
     }
     if (!output_ended_) {
       return -1;
@@ -111,14 +109,14 @@ class EngineProcess {
   [[nodiscard]] const std::string& output() const { return output_; }
 
  private:
-  /// Appends what the engine writes next to output_; false once the output ends or `deadline`
+  /// Appends what the engine writes next to output_; false once the output ends or deadline_
   /// passes.
-  bool read_some(std::chrono::steady_clock::time_point deadline) {
+  bool read_some() {
     if (output_ended_) {
       return false;
     }
     const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
-        deadline - std::chrono::steady_clock::now());
+        deadline_ - std::chrono::steady_clock::now());
     pollfd readable{.fd = output_end_, .events = POLLIN, .revents = 0};
     if (left.count() <= 0 || ::poll(&readable, 1, static_cast<int>(left.count())) <= 0) {
       return false;
@@ -133,6 +131,9 @@ class EngineProcess {
     return true;
   }
 
+  /// Reading the output gives up kPatience after the engine started.
+  std::chrono::steady_clock::time_point deadline_ =
+      std::chrono::steady_clock::now() + test::kPatience;
   pid_t pid_ = 0;
   int output_end_ = -1;
   std::string output_;

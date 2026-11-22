@@ -5,7 +5,6 @@
 
 #include <chrono>
 #include <cstdint>
-#include <format>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -58,21 +57,17 @@ TEST(EngineOptionsTest, ReadsAnIpv6Address) {
   EXPECT_EQ(parse({"--address", "::1"}).server.address, "::1");
 }
 
-// The usage text names the defaults a command line without options gets.
-TEST(EngineOptionsTest, UsageNamesTheDefaults) {
-  const EngineOptions defaults = parse({});
+// The usage text names the defaults and ranges WithoutOptionsListensOnLoopbackPort5025 and the
+// bad-option messages pin.
+TEST(EngineOptionsTest, UsageNamesTheDefaultsAndRanges) {
   const std::string usage = engine_usage();
 
-  EXPECT_THAT(usage, HasSubstr(std::format("(default {})", defaults.server.address)));
-  EXPECT_THAT(usage, HasSubstr(std::format("(default {})", defaults.server.port)));
-  EXPECT_THAT(
-      usage,
-      HasSubstr(std::format(
-          "(default {})",
-          std::chrono::duration_cast<std::chrono::seconds>(defaults.server.idle_timeout).count())));
-  EXPECT_THAT(usage, HasSubstr(std::format("(default {})", defaults.seed)));
-  EXPECT_THAT(usage, HasSubstr("--port <0-65535>"));
+  EXPECT_THAT(usage, HasSubstr("--address <ip>          Local IP address to listen on (default "
+                               "127.0.0.1)"));
+  EXPECT_THAT(usage, HasSubstr("--port <0-65535>        TCP port (default 5025)"));
   EXPECT_THAT(usage, HasSubstr("--idle-timeout <1-86400>"));
+  EXPECT_THAT(usage, HasSubstr("(default 300)"));
+  EXPECT_THAT(usage, HasSubstr("noise (default 0)"));
 }
 
 class BadEngineOptionsTest

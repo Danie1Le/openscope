@@ -41,14 +41,13 @@ Number parse_number(std::string_view option, std::string_view text, Number min, 
 /// `text` if it is an IP address, as ScpiServer reads it. Throws std::invalid_argument naming
 /// `option` otherwise.
 std::string parse_address(std::string_view option, std::string_view text) {
-  std::string address(text);
   boost::system::error_code error;
-  std::ignore = boost::asio::ip::make_address(address, error);
+  std::ignore = boost::asio::ip::make_address(text, error);
   if (error) {
     throw std::invalid_argument(
         std::format("{} takes an IPv4 or IPv6 address, not '{}'", option, text));
   }
-  return address;
+  return std::string(text);
 }
 
 }  // namespace
