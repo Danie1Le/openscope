@@ -108,6 +108,27 @@ def test_an_error_check_that_gets_no_entry_is_a_protocol_error(connect, entry, m
         connected.scope.next_error()
 
 
+def test_a_line_queues_at_most_the_queue_depth_of_errors(connect):
+    queued = [f'-{number},"Error {number}"' for number in range(100, 120)]
+    connected = connect(scripted(errors=queued))
+
+    with pytest.raises(ScpiError) as raised:
+        connected.scope.write("X")
+
+    assert len(raised.value.errors) == 20
+    assert connected.scope.next_error() == NO_ERROR
+
+
+def test_more_entries_than_the_queue_holds_is_a_protocol_error_that_closes_the_client(connect):
+    connected = connect(scripted(errors=['-113,"Undefined header"'] * 21))
+
+    with pytest.raises(ProtocolError, match="more than 20 error-queue entries"):
+        connected.scope.write("X")
+    assert connected.fake.lines == ["X"] + ["SYST:ERR?"] * 21
+    with pytest.raises(ConnectionError, match="closed"):
+        connected.scope.next_error()
+
+
 def test_a_query_whose_error_check_gets_no_entry_is_a_protocol_error_that_closes_the_client(
     connect,
 ):

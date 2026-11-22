@@ -20,6 +20,9 @@ from openscope_client.transport import SocketStream, Stream, block_payload, read
 
 #: The line that reads the next entry of a Session's error queue.
 _NEXT_ERROR = b"SYST:ERR?\n"
+#: The most entries a Session's error queue holds (docs/scpi-reference.md, Error queue): a peer
+#: that reports more for one line is not following the protocol.
+_QUEUE_DEPTH = 20
 #: A query of the error queue, in any of its forms: the client reads the queue itself after
 #: every line, so a line that replied an entry could not be told from that check. Compound
 #: lines are refused too: `*CLS;SYST:ERR?` replies an entry alone.
@@ -532,6 +535,8 @@ class OpenScope:
                 entry = _error_entry(read_response(stream))
             errors: list[ErrorEntry] = []
             while entry.code != NO_ERROR.code:
+                if len(errors) == _QUEUE_DEPTH:
+                    raise ProtocolError(f"more than {_QUEUE_DEPTH} error-queue entries")
                 errors.append(entry)
                 entry = _next_error(stream)
         if errors:
