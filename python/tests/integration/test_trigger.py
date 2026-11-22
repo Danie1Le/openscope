@@ -80,13 +80,16 @@ def test_the_hysteresis_band_is_a_tenth_of_a_division(scope, scale, amplitude, t
 
 
 def test_a_disabled_channel_can_be_the_trigger_source(scope):
-    # Both Generators run at 1 kHz from the same phase: the square rises where the sine does.
+    # Both Generators run at 1 kHz from the same phase: the square steps up through 0.3 V where
+    # the sine on channel 1 starts its cycle, at 0 V; the sine reaches 0.3 V 49 samples later.
     Signal(Function.SQUARE).apply(scope, 2)
-    scope.write("TRIG:SOUR CHAN2;MODE NORM")
+    scope.write("TRIG:SOUR CHAN2;MODE NORM;LEV 0.3")
     take_capture(scope)
 
     assert scope.channel(2).enabled is False
-    assert_reaches_level(scope.waveform.read(), 0.0, Slope.POSITIVE)
+    waveform = scope.waveform.read()
+    assert not waveform.preamble.untriggered
+    assert abs(waveform.samples[waveform.preamble.time_zero]) < SINE_STEP
 
 
 def test_normal_mode_captures_only_on_a_trigger_event(scope):
