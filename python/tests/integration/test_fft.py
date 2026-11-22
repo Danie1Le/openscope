@@ -1,10 +1,11 @@
 """The FFT over TCP against ground truth from the windows' formulas: a tone's level and bin, how
-far each window spreads it, DC, the bin spacing, and per-Session settings
-(docs/scpi-reference.md, FFT)."""
+far each window spreads it, DC, the samples taken, the bin spacing, and per-Session
+settings (docs/scpi-reference.md, FFT)."""
 
 import cmath
 import functools
 import math
+import statistics
 
 import pytest
 from engine_helpers import take_capture
@@ -113,10 +114,22 @@ def test_a_dc_level_reads_its_voltage_in_the_first_bin(scope, window):
 
 
 def test_the_reset_record_length_uses_its_first_8192_samples(scope):
+    # Half a cycle of a slow ramp from its rising 0 V crossing: the first 8192 of the 10000
+    # samples average 0.41 V, the last 8192 0.59 V. Through the rectangular window the first bin
+    # reads the mean of the samples transformed.
+    Signal(Function.RAMP, 50.0).apply(scope)
+    scope.write("TRIG:MODE NORM;POS 0")
+    scope.fft.window = Window.RECTANGULAR
     take_capture(scope)
 
+    samples = scope.waveform.read().samples
+    first = statistics.fmean(samples[:TRANSFORM_LENGTH])
+    last = statistics.fmean(samples[-TRANSFORM_LENGTH:])
+    assert last - first > 0.1  # Apart by far more than the tolerance below.
     assert scope.fft.bin_spacing() == SPACING
-    assert len(scope.fft.spectrum()) == TRANSFORM_LENGTH // 2 + 1
+    spectrum = scope.fft.spectrum()
+    assert len(spectrum) == TRANSFORM_LENGTH // 2 + 1
+    assert spectrum[0] == pytest.approx(20 * math.log10(first), abs=1e-4)
 
 
 def test_fft_settings_belong_to_each_session(engine, open_client):
