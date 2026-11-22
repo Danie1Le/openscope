@@ -40,7 +40,7 @@ PATIENCE = 20.0
 
 #: How many of its newest log events the `engine` fixture keeps: far more than a test reads or
 #: waits on, and bounded however long the engine runs (the soak logs two per connection, #65).
-HISTORY = 1000
+KEPT_EVENTS = 1000
 
 #: Runs a test over the raw socket only, where the other transport adds nothing to what it
 #: checks and would only slow it.

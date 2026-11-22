@@ -1,12 +1,12 @@
-"""The `engine` fixture's log history (conftest.Engine) and the memory reading the soak relies on
-(engine_helpers.resident_kib)."""
+"""The log events the `engine` fixture keeps (conftest.Engine), and the memory reading the soak
+relies on (engine_helpers.resident_kib)."""
 
 import os
 import socket
 import subprocess
 
 import pytest
-from engine_helpers import HISTORY, resident_kib
+from engine_helpers import KEPT_EVENTS, resident_kib
 
 
 def connect_and_leave(port: int) -> str:
@@ -18,18 +18,18 @@ def connect_and_leave(port: int) -> str:
 
 def test_the_engine_keeps_its_newest_events_and_waits_past_the_dropped_ones(engine):
     peers = []
-    for _ in range(HISTORY):  # Two events each: twice the history.
+    for _ in range(KEPT_EVENTS):  # Two events each: twice as many as it keeps.
         peers.append(connect_and_leave(engine.port))
         assert engine.wait_for("disconnect", reason="closed by client")["peer"] == peers[-1]
 
     events = engine.events
-    newest_peers = peers[-HISTORY // 2 :]
+    newest_peers = peers[-KEPT_EVENTS // 2 :]
     assert [event["event"] for event in events] == ["connect", "disconnect"] * len(newest_peers)
     assert [event["peer"] for event in events] == [peer for peer in newest_peers for _ in range(2)]
 
 
 def test_a_wait_fails_when_events_it_has_not_looked_at_were_dropped(engine):
-    for _ in range(HISTORY):
+    for _ in range(KEPT_EVENTS):
         connect_and_leave(engine.port)
 
     with pytest.raises(AssertionError, match=r"events dropped before a wait for refuse"):

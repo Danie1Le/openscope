@@ -22,16 +22,13 @@ SECONDS = float(os.environ.get("OPENSCOPE_SOAK_SECONDS", "600"))
 #: Seconds between two memory readings; the first, after the clients have warmed up, is the
 #: baseline.
 MEMORY_INTERVAL = 5.0
-#: How much the engine's resident memory may grow after the baseline. A release engine stays
-#: near 5 MiB under this load, so this much more is growth, not noise.
+#: How much the resident memory of the engine, and of the test itself, may grow after the
+#: baseline. A release engine stays near 5 MiB under this load, and the test keeps a bounded
+#: engine log (#65), so this much more is growth, not noise.
 MEMORY_GROWTH_KIB = 32 * 1024
-#: How much the test's own (pytest's) resident memory may grow after the baseline. It keeps a
-#: bounded engine log, so this much more is a leak in the tests: an unbounded log grew it by up
-#: to 3.4 MiB a second, past a hosted runner's 7 GB within the hour (#65).
-TEST_MEMORY_GROWTH_KIB = 32 * 1024
-#: Seconds the churn worker pauses after each round: at most 100 connections a second. Unpaused,
-#: it made up to 2,600 a second, and the sockets each leaves in TIME_WAIT for a minute took every
-#: ephemeral port connect() picks from (#65).
+#: Seconds the churn worker pauses after each round: at most 100 connections a second, so the
+#: sockets each leaves in TIME_WAIT for a minute hold a few thousand ephemeral ports, well short
+#: of the ~14,000 that connect() picks from (#65).
 CHURN_PAUSE = 0.01
 #: The levels `FFT:DATA?` replies for the `*RST` record, whose first 8192 samples it takes.
 SPECTRUM_LENGTH = 8192 // 2 + 1
@@ -113,25 +110,23 @@ def test_the_engine_holds_up_under_load(engine, open_client):
 
     until = time.monotonic() + SECONDS
     stop = threading.Event()
-    engine_memory: list[int] = []
-    test_memory: list[int] = []
+    processes = {"engine": engine.pid, "test": os.getpid()}
+    memory: dict[str, list[int]] = {name: [] for name in processes}
     with ThreadPoolExecutor(len(steps)) as pool:
         running = [pool.submit(rounds, step, until, stop) for step in steps]
         try:
             while not all(work.done() for work in running):
                 if stop.wait(MEMORY_INTERVAL if time.monotonic() < until else 0.1):
                     break  # A worker failed; the others stop within a round.
-                engine_memory.append(engine.resident_kib())
-                test_memory.append(resident_kib(os.getpid()))
+                for name, pid in processes.items():
+                    memory[name].append(resident_kib(pid))
         finally:
             stop.set()  # Also when interrupted (the Soak workflow's timeout sends SIGINT).
         counts = [work.result() for work in running]  # Raises what a worker raised.
 
-    print(
-        f"\nRounds per worker {counts}; resident KiB warmed up and max: "
-        f"engine {engine_memory[0]} {max(engine_memory)}, test {test_memory[0]} {max(test_memory)}"
-    )
+    readings = ", ".join(f"{name} {kib[0]} {max(kib)}" for name, kib in memory.items())
+    print(f"\nRounds per worker {counts}; resident KiB warmed up and max: {readings}")
     assert min(counts) > 0, counts
-    assert max(engine_memory) - engine_memory[0] < MEMORY_GROWTH_KIB, engine_memory
-    assert max(test_memory) - test_memory[0] < TEST_MEMORY_GROWTH_KIB, test_memory
+    for name, kib in memory.items():
+        assert max(kib) - kib[0] < MEMORY_GROWTH_KIB, (name, kib)
     assert scope.identify().manufacturer == "OpenScope"

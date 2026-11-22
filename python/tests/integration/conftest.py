@@ -12,18 +12,18 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
-from engine_helpers import HISTORY, PATIENCE, resident_kib
+from engine_helpers import KEPT_EVENTS, PATIENCE
 
 from openscope_client import ErrorEntry, OpenScope, SocketStream
 from openscope_client.errors import parse_error_entry
 
 #: How many of the newest events a failure message shows; a sanitizer's report comes last.
-REPORTED = 100
+REPORTED_EVENTS = 100
 
 
 class Engine:
-    """A running `openscope-engine` and the events it has logged: its JSON log lines, and any
-    other line it writes to standard error (a sanitizer's report) as an `output` event."""
+    """A running `openscope-engine` and the newest events it has logged: its JSON log lines,
+    and any other line it writes to standard error (a sanitizer's report) as an `output` event."""
 
     def __init__(self, path: str, options: tuple[str, ...]) -> None:
         """Starts the engine; `listen()` waits until it accepts connections."""
@@ -33,10 +33,9 @@ class Engine:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
         )
-        self._events: deque[dict[str, Any]] = deque(maxlen=HISTORY)
-        #: How many events were logged, kept ones and dropped ones.
-        self._logged_count = 0
-        #: How many events `wait_for` has passed: it looks at the ones logged after them.
+        self._events: deque[dict[str, Any]] = deque(maxlen=KEPT_EVENTS)
+        #: Where in `_events` `wait_for` looks from, past the events it has passed; negative when
+        #: events it had not looked at were dropped.
         self._seen = 0
         self._raw_sessions: list[RawSession] = []
         self._logged = threading.Condition()
@@ -51,7 +50,7 @@ class Engine:
 
     @property
     def events(self) -> list[dict[str, Any]]:
-        """The newest HISTORY events, oldest first: a copy, safe to read while more are logged."""
+        """The newest KEPT_EVENTS events, oldest first: a copy, safe to read while more come."""
         with self._logged:
             return list(self._events)
 
@@ -63,8 +62,9 @@ class Engine:
             except ValueError:
                 event = {"event": "output", "text": line.decode(errors="replace")}
             with self._logged:
+                if len(self._events) == self._events.maxlen:  # The append drops the oldest.
+                    self._seen -= 1
                 self._events.append(event)
-                self._logged_count += 1
                 self._logged.notify_all()
         with self._logged:  # The engine has exited: wake waiters to see it.
             self._logged.notify_all()
@@ -76,16 +76,15 @@ class Engine:
         deadline = time.monotonic() + PATIENCE
         with self._logged:
             while True:
-                dropped = self._logged_count - len(self._events)
-                if self._seen < dropped:
+                if self._seen < 0:
                     raise AssertionError(
-                        f"{dropped - self._seen} events dropped before a wait for {event} looked "
-                        f"at them; the newest: {self.newest()}"
+                        f"{-self._seen} events dropped before a wait for {event} looked at them; "
+                        f"the newest: {self.newest()}"
                     )
-                for index in range(self._seen - dropped, len(self._events)):
+                for index in range(self._seen, len(self._events)):
                     logged = self._events[index]
                     if logged["event"] == event and fields.items() <= logged.items():
-                        self._seen = dropped + index + 1
+                        self._seen = index + 1
                         return logged
                 left = deadline - time.monotonic()
                 if left <= 0 or not self._reader.is_alive():
@@ -93,12 +92,13 @@ class Engine:
                 self._logged.wait(left)
 
     def newest(self) -> list[dict[str, Any]]:
-        """The newest REPORTED events, for a failure message."""
-        return self.events[-REPORTED:]
+        """The newest REPORTED_EVENTS events, for a failure message."""
+        return self.events[-REPORTED_EVENTS:]
 
-    def resident_kib(self) -> int:
-        """The engine's resident memory in KiB (Linux only)."""
-        return resident_kib(self._process.pid)
+    @property
+    def pid(self) -> int:
+        """The engine's process ID."""
+        return self._process.pid
 
     def raw_session(self) -> "RawSession":
         """A Session over a raw socket, closed when the engine stops."""
