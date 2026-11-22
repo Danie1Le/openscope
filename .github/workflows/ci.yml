@@ -88,6 +88,34 @@ jobs:
           name: pytest-${{ matrix.preset }}
           path: python/pytest-${{ matrix.preset }}.xml
 
+  coverage:
+    name: Coverage (gate)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CXX: clang++-18 # The coverage preset pins it; set here so the vcpkg cache key matches.
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/setup-vcpkg
+      - run: cmake --preset coverage
+      - run: cmake --build --preset coverage
+      - run: ctest --preset coverage
+      # Fails below the threshold in tools/coverage_gate.py, which also names the gated files.
+      # Explicit shell: bash adds -o pipefail, so the gate's exit status survives tee.
+      - name: Gate line coverage (trigger, measurement, SCPI parser)
+        shell: bash
+        run: |
+          status=0
+          python3 -I tools/coverage_gate.py | tee coverage.txt || status=$?
+          { echo "### Line coverage"; echo '```'; tail -n 1 coverage.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit $status
+      - name: Publish the llvm-cov report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: llvm-cov-report
+          path: build/coverage/coverage-report.txt
+
   fuzz:
     name: Fuzz smoke (60 s)
     runs-on: ubuntu-24.04
@@ -128,12 +156,21 @@ jobs:
       - uses: ./.github/actions/setup-vcpkg
       - run: cmake --preset benchmark
       - run: cmake --build --preset benchmark
-      - name: FFT against KissFFT, and SPSC ring buffer throughput
+      - name: Google Benchmarks (every *_benchmark target)
         # Explicit shell: bash adds -o pipefail, so a crashing benchmark fails the step instead of
         # leaving a truncated summary behind tee's exit status.
         shell: bash
         run: |
-          for benchmark in fft_benchmark ring_buffer_benchmark; do
-            build/benchmark/bench/$benchmark | tee $benchmark.txt
-            { echo "### $benchmark"; echo '```'; cat $benchmark.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          mkdir benchmark-results
+          for binary in build/benchmark/bench/*_benchmark; do
+            benchmark=$(basename "$binary")
+            "$binary" --benchmark_out="benchmark-results/$benchmark.json" --benchmark_out_format=json \
+              | tee "benchmark-results/$benchmark.txt"
+            { echo "### $benchmark"; echo '```'; cat "benchmark-results/$benchmark.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           done
+      - name: Publish benchmark results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: benchmark-results
+          path: benchmark-results/

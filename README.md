@@ -94,9 +94,18 @@ build/fuzz/fuzz/execute_line_fuzzer -max_total_time=600 -max_len=8192 -dict=fuzz
 
 New inputs go to `fuzz-corpus`, the first directory; `fuzz/corpus` holds the committed seeds. A crash leaves the input in a `crash-*` file; pass that file to the fuzzer to replay it.
 
+## Coverage
+
+CI fails when line coverage of the trigger, measurement and SCPI parser sources is under 85 % (NFR-11). The threshold and the files are in `tools/coverage_gate.py`; the llvm-cov report is the `llvm-cov-report` artifact of the CI run.
+
+```sh
+CXX=clang++-18 cmake --preset coverage && cmake --build --preset coverage && ctest --preset coverage
+python3 tools/coverage_gate.py   # needs llvm-cov-18 and llvm-profdata-18; writes build/coverage/coverage-report.txt
+```
+
 ## Benchmarks
 
-The `benchmark` preset (Release) installs the vcpkg `benchmarks` feature (Google Benchmark), fetches KissFFT as a reference only, and builds `fft_benchmark`, which times our FFT against KissFFT, compiled with the same compiler and flags, from 4K to 1M points, and `ring_buffer_benchmark`, which times the SPSC ring buffer between two threads. CI runs both on every pull request and reports the numbers without gating on them; a crash fails the step. `docs/benchmarks.md` records measured results.
+The `benchmark` preset (Release) installs the vcpkg `benchmarks` feature (Google Benchmark), fetches KissFFT as a reference only, and builds `fft_benchmark`, which times our FFT against KissFFT, compiled with the same compiler and flags, from 4K to 1M points, and `ring_buffer_benchmark`, which times the SPSC ring buffer between two threads. CI runs every `*_benchmark` on every pull request, reports the numbers and uploads them as JSON (the `benchmark-results` artifact) without gating on them; a crash fails the step. `docs/benchmarks.md` records measured results.
 
 ```sh
 CC=gcc-14 CXX=g++-14 cmake --preset benchmark && cmake --build --preset benchmark
