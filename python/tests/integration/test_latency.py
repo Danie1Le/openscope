@@ -67,8 +67,8 @@ def test_setter_latency(scope, record_testsuite_property):
 @pytest.fixture
 def measurements(engine, scope):
     """One query of each measurement of channel 1, each alone on its line with no error check
-    behind it (the client's pipelined check waits for a delayed acknowledgement until #58 is
-    fixed), on an engine Stopped after one capture of the longest record."""
+    behind it (the cost of the query itself, not of the client's check), on an engine Stopped after
+    one capture of the longest record."""
     scope.acquisition.record_length = LONGEST_RECORD
     scope.timeout = 60
     take_capture(scope)
@@ -100,9 +100,6 @@ def test_first_measurement_of_a_fresh_longest_record(
     assert latency.p95 < 2000
 
 
-@pytest.mark.xfail(
-    strict=True, raises=AssertionError, reason="#58: a pipelined reply waits for a delayed ACK"
-)
 def test_pipelined_replies_are_not_delayed(scope):
     # The client sends `SYST:ERR?` behind every query: two replies to one write.
     times = timed(itertools.repeat(scope.identify, 50))
