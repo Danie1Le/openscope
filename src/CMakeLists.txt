@@ -27,3 +27,12 @@ add_library(openscope_server
   openscope/server/scpi_server.cpp)
 target_link_libraries(openscope_server PUBLIC openscope Boost::asio nlohmann_json::nlohmann_json
   PRIVATE openscope_warnings)
+
+# The runnable engine: the live instrument behind the SCPI server. Option parsing is a library so
+# the tests can reach it; it reads addresses as the server does, with Boost.Asio.
+add_library(openscope_engine engine/engine_options.cpp)
+target_link_libraries(openscope_engine PUBLIC openscope PRIVATE Boost::asio openscope_warnings)
+add_executable(openscope_engine_main engine/main.cpp)
+set_target_properties(openscope_engine_main PROPERTIES OUTPUT_NAME openscope-engine)
+target_link_libraries(openscope_engine_main PRIVATE openscope_engine openscope_server
+  openscope_warnings)
