@@ -61,14 +61,16 @@ std::string describe(const tcp::endpoint& endpoint) {
 template <int Name>
 using TcpOption = asio::detail::socket_option::integer<IPPROTO_TCP, Name>;
 
-/// An acceptor listening as `options` say, with TCP keepalive on at ScpiServer's probe settings.
-/// They are set before it listens, and Linux gives every socket it accepts the same options.
+/// An acceptor listening as `options` say, with TCP keepalive on at ScpiServer's probe settings
+/// and Nagle's algorithm off (each reply goes out when written, not when the one before is ACKed:
+/// #58). They are set before it listens, and Linux gives every socket it accepts the same options.
 /// Throws boost::system::system_error when the address is not an IP address or cannot be bound.
 tcp::acceptor listening_acceptor(asio::io_context& io, const ServerOptions& options) {
   const tcp::endpoint endpoint(asio::ip::make_address(options.address), options.port);
   tcp::acceptor acceptor(io, endpoint.protocol());
   acceptor.set_option(tcp::acceptor::reuse_address(true));
   acceptor.set_option(tcp::acceptor::keep_alive(true));
+  acceptor.set_option(tcp::no_delay(true));
   acceptor.set_option(
       TcpOption<TCP_KEEPIDLE>(static_cast<int>(ScpiServer::kKeepAliveIdle.count())));
   acceptor.set_option(
