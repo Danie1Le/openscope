@@ -80,7 +80,7 @@ One triggered record: the samples of every enabled channel over the same record-
 _Avoid_: Acquisition, frame, record (alone), sweep
 
 **Latest capture**:
-The most recently completed capture. It is the only capture the instrument keeps; every measurement and waveform query reads it.
+The most recently completed capture. It is the only capture the instrument keeps; every waveform, FFT and `MEAS:<type>?` query reads it. Measurement statistics count every completed capture.
 _Avoid_: Current capture, history
 
 **Run state**:
@@ -138,7 +138,7 @@ The verdict that travels with every measured value: OK, No signal, Clipped or To
 _Avoid_: Error code, quality
 
 **Measurement statistics**:
-Current, mean, minimum, maximum and standard deviation of one measurement across captures since the last statistics reset. Any setting change resets them.
+Current result, mean, minimum, maximum, standard deviation and count of one measurement of one channel across every capture since the last statistics reset, untriggered captures included. Only results with a value (OK and Clipped) are counted. `MEAS:STAT:RES`, `*RST` and any change of an instrument-wide setting other than the timebase reset them.
 
 **Spectrum**:
 The magnitude of one channel of the latest capture at each frequency bin, in dBV RMS, computed by the FFT through a window.

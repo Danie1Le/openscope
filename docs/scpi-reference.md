@@ -107,8 +107,8 @@ The queue holds 20 entries. When it is full, the newest entry is replaced by `-3
 | `-221` | Settings conflict | A query reads a channel that is not in the latest capture (it was not enabled when the capture was taken), or `SOUR<n>:FAUL` finds its Generator already holding 64 faults |
 | `-222` | Data out of range | A number outside the command's range or beyond a double's range |
 | `-224` | Illegal parameter value | A keyword that is not one of the parameter's choices |
-| `-230` | Data corrupt or stale | A query reads capture data before the first capture has completed (or since `*RST`) |
-| `-231` | Data questionable;Clipped | A warning: a measurement replied its value, but a sample of the channel hit an input-range limit |
+| `-230` | Data corrupt or stale | A query reads capture data before the first capture has completed (or since `*RST`), or `MEAS:STAT?` finds no capture completed since the statistics were last reset |
+| `-231` | Data questionable;Clipped | A warning: a measurement replied its value, but a sample of the channel hit an input-range limit; or `MEAS:STAT?` replied statistics that count such a value |
 | `-350` | Queue overflow | The error queue was full |
 | `-363` | Input buffer overrun | The line is longer than 4096 bytes; nothing on it runs |
 
@@ -117,7 +117,7 @@ The queue holds 20 entries. When it is full, the newest entry is replaced by `-3
 | Command | Reply | Notes |
 |---|---|---|
 | `*IDN?` | `OpenScope,OS-4,<serial>,<version>` | |
-| `*RST` | none | Restores every instrument-wide setting to its `*RST` value below and the Running run state, restarts every Generator from phase zero at sample index 0 with no faults (see Generators), and drops the latest capture and the capture in progress; leaves the calling Session's error queue, `WAV` and `FFT` settings alone (ADR 0002) |
+| `*RST` | none | Restores every instrument-wide setting to its `*RST` value below and the Running run state, restarts every Generator from phase zero at sample index 0 with no faults (see Generators), and drops the latest capture, the capture in progress and the measurement statistics; leaves the calling Session's error queue, `WAV` and `FFT` settings alone (ADR 0002) |
 | `*CLS` | none | Empties the calling Session's error queue |
 | `*OPC?` | `1` | Replies once no operation is pending (see [Run control](#run-control)) |
 | `*WAI` | none | Holds the rest of the Session's commands until no operation is pending |
@@ -148,7 +148,9 @@ An armed Single is the pending operation that `*OPC?` and `*WAI` wait for. Nothi
 
 ### Consistency model
 
-Every query reads the latest capture at the moment it runs. In the Running run state, two queries, even on one line, may read two different captures. To query one capture several times, take it with `SINGle;*OPC?` and then send the queries: the instrument is Stopped, so the latest capture no longer changes until the next `RUN` or `SINGle` (or `*RST`, which drops it).
+Every query of capture data reads the latest capture at the moment it runs. In the Running run state, two queries, even on one line, may read two different captures. To query one capture several times, take it with `SINGle;*OPC?` and then send the queries: the instrument is Stopped, so the latest capture no longer changes until the next `RUN` or `SINGle` (or `*RST`, which drops it).
+
+`MEAS:STAT?` is the exception: it reads the [measurement statistics](#statistics), which count every capture since the last reset, not the latest capture alone. While Running they change with every capture, so two `MEAS:STAT?` queries may count different captures. After `SINGle;*OPC?` they hold still, but they still cover every capture since the reset, the Single's last; reset them first (`MEAS:STAT:RES;:SINGle;*OPC?`) for statistics of the Single's capture alone.
 
 ### Settings
 
@@ -215,7 +217,7 @@ A fault is placed by the sample index, so with the same seed and the same comman
 
 A channel's input range is its offset plus or minus four vertical divisions (four times its scale). A sample outside it is clipped: held at the nearer limit. The sample rate and record length alone define a capture: one record length of sample indexes, positioned by the trigger (below). Only the latest capture is kept.
 
-A capture takes its settings from its first sample and holds one signal, so changing a Generator setting (`SOUR<n>:FUNC`, `FREQ`, `AMPL`, `OFFS`, `NOIS`), a channel setting (`CHAN<n>:DISP`, `SCAL`, `OFFS`), an acquisition setting (`ACQ:SRAT`, `POIN`) or a trigger setting (`TRIG:...`) drops the capture in progress and restarts the trigger, and the next capture starts collecting samples at the next sample index. Any such change does this, from any Session and even one that sets the value already in place; an armed Single stays armed and takes its capture from the next sample index. The latest capture already completed stays as it was and stays readable. Timebase changes do not drop the capture in progress (the timebase is a display viewport, ADR 0004), nor do a Session's own `WAV:...` and `FFT:...` settings or a fault (`SOUR<n>:FAUL`), which is meant to be captured.
+A capture takes its settings from its first sample and holds one signal, so changing a Generator setting (`SOUR<n>:FUNC`, `FREQ`, `AMPL`, `OFFS`, `NOIS`), a channel setting (`CHAN<n>:DISP`, `SCAL`, `OFFS`), an acquisition setting (`ACQ:SRAT`, `POIN`) or a trigger setting (`TRIG:...`) drops the capture in progress, restarts the trigger and resets the [measurement statistics](#statistics), and the next capture starts collecting samples at the next sample index. Any such change does this, from any Session and even one that sets the value already in place; an armed Single stays armed and takes its capture from the next sample index. The latest capture already completed stays as it was and stays readable. Timebase changes do none of this (the timebase is a display viewport, ADR 0004), nor do a Session's own `WAV:...` and `FFT:...` settings or a fault (`SOUR<n>:FAUL`), which is meant to be captured.
 
 ### Trigger
 
@@ -301,6 +303,37 @@ A query reports its status every time it runs, to the calling Session only:
 | Too few cycles | `9.91E37` | `-200,"Execution error;Too few cycles"` |
 
 The entry does not stop the line: `MEAS:VPP? CHAN1;VRMS? CHAN1` on a clipped signal replies both values and queues two `-231` entries.
+
+#### Statistics
+
+| Command | Reply | Notes |
+|---|---|---|
+| `MEASure:STATistics? <type>,CHANnel<n>` | `<current>,<mean>,<minimum>,<maximum>,<standard deviation>,<count>` | `<type>` is a measurement's mnemonic from the table above (`VPP`, `VAVerage`, `FREQuency`, `RISetime`, ...); both parameters are required |
+| `MEASure:STATistics:RESet` | none | Resets the statistics of every measurement on every channel |
+
+Measurement statistics follow every measurement of every enabled channel across the captures since the last reset, so a script can check how stable a value is. Every capture that completes counts, untriggered captures included, even when several complete between two queries and only the last becomes the latest capture. They are instrument-wide: every Session reads the same statistics, and a reset from one Session resets them for all.
+
+The statistics reset on `MEAS:STAT:RES`, on `*RST` and on every setting command that shapes captures (`SOUR<n>:...`, `CHAN<n>:...`, `ACQ:...`, `TRIG:...`), from any Session and even one that sets the value already in place, so they never mix data from two settings. A capture interrupted by the change is dropped (see [Channels and captures](#channels-and-captures)), so the first capture counted after a reset starts after it. `MEAS:STAT:RES` changes no setting and keeps the capture in progress: it is counted when it completes, although some of its samples came before the reset. Other commands keep them: `TIM:SCAL` (the timebase only zooms the display and changes no captured data, ADR 0004), a Session's own `WAV:...` and `FFT:...` settings, faults (`SOUR<n>:FAUL`, which are meant to show in the statistics), run control (`RUN`, `STOP`, `SINGle`), queries, and a setter that is rejected.
+
+The fields:
+
+- **current**: the result of the latest capture.
+- **mean**, **minimum**, **maximum**: over the values counted.
+- **standard deviation**: the population standard deviation of the values counted (the root of their mean squared deviation from the mean), so one value has a standard deviation of 0.
+- **count**: how many values were counted.
+
+The values are written like measurement values: shortest form at float32 precision; the count is a whole number.
+
+Measurement status works as for a single measurement:
+
+- An OK or Clipped result has a value, and the value is counted. A No signal or Too few cycles result has no value (`MEAS:<type>?` replies `9.91E37`), and it is left out of every statistic, the count included: the count says how many captures gave a value.
+- The query reports the status of the current result as `MEAS:<type>?` does: `-200` with the status for No signal or Too few cycles, `-231` for Clipped. A field with no value replies `9.91E37`: the current value when the current result has none, and the mean, minimum, maximum and standard deviation while the count is 0.
+- When a Clipped value has been counted, the statistics may be wrong: the query reports one `-231,"Data questionable;Clipped"` even after the signal has come back into range, until the next reset.
+- None of these entries stops the line.
+
+Before a capture has completed since the last reset, `MEAS:STAT?` replies nothing and reports `-230,"Data corrupt or stale"`, even while the latest capture can still be read: there are no statistics yet. On a channel that is not in the latest capture, it replies nothing and reports `-221`. A capture is counted as it becomes the latest capture, so the current result is always the latest capture's.
+
+`MEAS:STAT:RES;:SINGle;*OPC?;:MEAS:STAT? VPP,CHAN1` replies `1;` and the statistics of one capture, the Single's: its value four times (current, mean, minimum and maximum), a standard deviation of `0` and a count of `1`.
 
 #### Top and base
 

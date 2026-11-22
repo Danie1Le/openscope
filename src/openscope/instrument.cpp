@@ -26,6 +26,8 @@
 #include "openscope/fft_window.hpp"
 #include "openscope/generator.hpp"
 #include "openscope/measurement.hpp"
+#include "openscope/measurement_statistics.hpp"
+#include "openscope/running_statistics.hpp"
 #include "openscope/sample_block.hpp"
 #include "openscope/sample_clock.hpp"
 #include "openscope/scpi/command_tree.hpp"
@@ -122,19 +124,29 @@ Value value_of(const Arguments& arguments, std::size_t index = 0) {
 /// A parameter naming a channel: `CHANnel<1-4>`.
 scpi::KeywordParameter channel_parameter() { return {.choices = {"CHANnel<1-4>"}}; }
 
-/// The error queue entry that reports a measurement's `status`, or nullopt for OK.
-std::optional<ScpiError> status_entry(MeasurementStatus status) {
+/// Pushes the error queue entry that reports a measurement's `status` onto `caller`'s queue; OK
+/// has none. The entry reports on a reply that was given, so unlike an execution error it does not
+/// stop the line.
+void report_status(Session& caller, MeasurementStatus status) {
   switch (status) {
     case MeasurementStatus::kOk:
       break;
     case MeasurementStatus::kNoSignal:
-      return kNoSignal;
+      caller.push_error(kNoSignal);
+      break;
     case MeasurementStatus::kClipped:
-      return kClipped;
+      caller.push_error(kClipped);
+      break;
     case MeasurementStatus::kTooFewCycles:
-      return kTooFewCycles;
+      caller.push_error(kTooFewCycles);
+      break;
   }
-  return std::nullopt;
+}
+
+/// A measured value as a query replies it: at float32 precision, the precision of the samples it
+/// comes from, or SCPI's not-a-number when there is no value.
+std::string value_reply(std::optional<double> value) {
+  return value ? scpi::format_real(static_cast<float>(*value)) : std::string(scpi::kNotANumber);
 }
 
 /// A count of samples sent as a number: a fraction rounds to the nearest whole number, half away
@@ -312,7 +324,8 @@ void Instrument::add_acquisition_commands() {
 }
 
 void Instrument::add_timebase_commands() {
-  // ADR 0004: the timebase only zooms the display, so it neither discards nor reshapes captures.
+  // ADR 0004: the timebase only zooms the display, so it neither discards nor reshapes captures,
+  // and the statistics over them stay.
   add_setting(
       "TIMebase:SCALe", NumericParameter{.min = 1e-9, .max = 100.0, .unit = "S"},
       [this](Session&, const Arguments& arguments) {
@@ -426,17 +439,55 @@ void Instrument::add_measurement_commands() {
                        // mutex this handler runs under, so none can land in between.
                        const MeasurementResult result =
                            measurements_.measure(latest_capture(), channel, measurement);
-                       // The status entry reports on a reply that was given, so unlike an execution
-                       // error it goes on the queue without stopping the line.
-                       if (std::optional<ScpiError> entry = status_entry(result.status)) {
-                         caller.push_error(std::move(*entry));
-                       }
-                       // Written as float32, the precision of the samples the value comes from.
-                       return result.value ? scpi::format_real(static_cast<float>(*result.value))
-                                           : std::string(scpi::kNotANumber);
+                       report_status(caller, result.status);
+                       return value_reply(result.value);
                      });
                    }});
   }
+  add_statistics_commands();
+}
+
+void Instrument::add_statistics_commands() {
+  std::vector<std::string_view> mnemonics;
+  for (const Measurement& measurement : measurements()) {
+    mnemonics.push_back(measurement.mnemonic);
+  }
+  commands_.add(
+      {.header = "MEASure:STATistics?",
+       .parameters = {scpi::KeywordParameter{.choices = std::move(mnemonics)}, channel_parameter()},
+       .handler = [this](Session& caller, const Arguments& arguments) -> scpi::HandlerResult {
+         if (statistics_.empty()) {
+           return kDataCorruptOrStale;  // No capture since the statistics were last reset.
+         }
+         const std::size_t measurement = value_of<scpi::Choice>(arguments, 0).index;
+         const std::size_t channel = value_of<scpi::Choice>(arguments, 1).suffix;
+         // Every capture is counted as it is published, under this handler's mutex, so the latest
+         // capture is the most recent one they hold and has the channels of every capture they
+         // hold (a channel change resets them).
+         return reply_with_source(channel, [&](const Capture&, const CapturedChannel&) {
+           const MeasurementSeries& series = statistics_.at(channel, measurement);
+           report_status(caller, series.current.status);
+           // A Clipped value counted earlier makes the statistics questionable too.
+           if (series.clipped && series.current.status != MeasurementStatus::kClipped) {
+             caller.push_error(kClipped);
+           }
+           const RunningStatistics& values = series.values;
+           // With nothing counted, the statistics have no value.
+           const auto statistic = [counted = values.count() > 0](double value) {
+             return value_reply(counted ? std::optional(value) : std::nullopt);
+           };
+           return std::format("{},{},{},{},{},{}", value_reply(series.current.value),
+                              statistic(values.mean()), statistic(values.minimum()),
+                              statistic(values.maximum()), statistic(values.standard_deviation()),
+                              values.count());
+         });
+       }});
+  commands_.add({.header = "MEASure:STATistics:RESet",
+                 .parameters = {},
+                 .handler = [this](Session&, const Arguments&) -> scpi::HandlerResult {
+                   statistics_.reset();
+                   return std::nullopt;
+                 }});
 }
 
 scpi::HandlerResult Instrument::reply_with_source(
@@ -571,13 +622,13 @@ void Instrument::change_generator(const Arguments& arguments,
   GeneratorSettings settings = generator.settings();
   change(settings);
   generator.configure(settings, acquisition_.sample_rate, clock_.now());
-  discard_capture();
+  capture_setting_changed();
 }
 
 void Instrument::change_channel(const Arguments& arguments,
                                 const std::function<void(ChannelSettings&)>& change) {
   change(channels_.at(channel_of(arguments)));
-  discard_capture();
+  capture_setting_changed();
 }
 
 void Instrument::change_acquisition(const std::function<void(AcquisitionSettings&)>& change) {
@@ -585,12 +636,17 @@ void Instrument::change_acquisition(const std::function<void(AcquisitionSettings
   for (Generator& generator : generators_) {
     generator.configure(generator.settings(), acquisition_.sample_rate, clock_.now());
   }
-  discard_capture();
+  capture_setting_changed();
 }
 
 void Instrument::change_trigger(const std::function<void(TriggerSettings&)>& change) {
   change(trigger_);
+  capture_setting_changed();
+}
+
+void Instrument::capture_setting_changed() {
   discard_capture();
+  statistics_.reset();
 }
 
 void Instrument::reset() {
@@ -601,7 +657,7 @@ void Instrument::reset() {
   // Fresh Generators rather than reconfigured ones: phase continuity would carry the phase built
   // up by earlier settings past *RST, so the output would depend on the commands sent before it.
   generators_ = make_generators(seed_, acquisition_.sample_rate);
-  discard_capture();
+  capture_setting_changed();
   latest_.store(nullptr);
   run_state_ = RunState::kRunning;
 }
@@ -670,18 +726,22 @@ void Instrument::advance(std::size_t samples) {
   while (samples > 0) {
     std::size_t count = std::min(samples, kMaxBlockLength);
     const std::optional<AcquiredBlock> block = sample(count);
-    Pushed pushed;
+    std::optional<std::size_t> single_end;
     if (block) {
-      pushed = assemble(*block);
+      // Every capture counts, not only the last of the block, so the statistics do not depend on
+      // how `advance` is chunked; and before held lines resume, so they see the Single's capture.
+      single_end = assemble(*block, [&](const std::shared_ptr<const Capture>& capture) {
+        publish(*block, capture, measure_all(*capture));
+      });
       // The Single's capture ends the operation at its last sample: the lines it resumes run with
       // the clock there, and the next block starts there under whatever they changed, so how
       // `advance` is chunked never changes a capture or a reply (ADR 0003).
-      count = pushed.end.value_or(count);
+      count = single_end.value_or(count);
     }
     clock_.take(count);
     samples -= count;
-    if (block) {
-      conclude(*block, pushed);
+    if (block && single_end) {
+      conclude(*block);
     }
   }
 }
@@ -708,14 +768,32 @@ std::optional<AcquiredBlock> Instrument::acquire(std::size_t count) {
 }
 
 void Instrument::process(const AcquiredBlock& block) {
-  const Pushed pushed = assemble(block);
-  if (pushed.capture == nullptr && !pushed.end) {
+  // Each capture is measured as it completes, without the mutex, and published under it.
+  const CaptureSink publish_measured = [this,
+                                        &block](const std::shared_ptr<const Capture>& capture) {
+    const CaptureResults results = measure_all(*capture);
+    const std::scoped_lock lock(mutex_);
+    publish(block, capture, results);
+  };
+  // A Single's capture, the only one its block completes, is kept measured until the Single ends,
+  // and published in the same hold of the mutex: no command falls between the two, so a command
+  // that has seen the capture finds the instrument Stopped.
+  std::shared_ptr<const Capture> single_capture;
+  CaptureResults single_results;
+  const CaptureSink keep_measured = [&](const std::shared_ptr<const Capture>& capture) {
+    single_results = measure_all(*capture);
+    single_capture = capture;
+  };
+  const std::optional<std::size_t> single_end = assemble(
+      block, capture_limit(block) == CaptureLimit::kFirst ? keep_measured : publish_measured);
+  if (!single_end) {
     return;
   }
   bool rest_runs = false;
   {
     const std::scoped_lock lock(mutex_);
-    rest_runs = conclude(block, pushed);
+    publish(block, single_capture, single_results);
+    rest_runs = conclude(block);
   }
   // RUN came after the block was acquired for a Single. The Single still ends at its capture, and
   // the trigger restarts there as after any Single, but the instrument runs on: the samples after
@@ -723,13 +801,9 @@ void Instrument::process(const AcquiredBlock& block) {
   if (rest_runs) {
     run_generation_ = block.generation;
   }
-  if (rest_runs && *pushed.end < block.samples.count) {
-    const Pushed rest = captures_.push(samples_from(block.samples, *pushed.end), block.acquisition,
-                                       block.channels, block.trigger);
-    if (rest.capture != nullptr) {
-      const std::scoped_lock lock(mutex_);
-      conclude(block, rest);
-    }
+  if (rest_runs && *single_end < block.samples.count) {
+    captures_.push(samples_from(block.samples, *single_end), block.acquisition, block.channels,
+                   block.trigger, CaptureLimit::kEvery, publish_measured);
   }
 }
 
@@ -762,7 +836,8 @@ std::optional<AcquiredBlock> Instrument::snapshot() {
                        .sequence = next_sequence_++};
 }
 
-Pushed Instrument::assemble(const AcquiredBlock& block) {
+std::optional<std::size_t> Instrument::assemble(const AcquiredBlock& block,
+                                                const CaptureSink& on_completed) {
   const bool follows_drop = block.sequence != expected_sequence_;
   expected_sequence_ = block.sequence + 1;
   const bool new_generation = block.generation != assembled_generation_;
@@ -776,23 +851,30 @@ Pushed Instrument::assemble(const AcquiredBlock& block) {
     }
   }
   assembled_generation_ = block.generation;
-  // Once RUN has ended this generation's Single, its other Armed-single blocks are captured as
-  // Running, as if they had been acquired after RUN.
-  const CaptureLimit limit =
-      block.generation == run_generation_ ? CaptureLimit::kEvery : block.limit;
-  return captures_.push(block.samples, block.acquisition, block.channels, block.trigger, limit);
+  return captures_.push(block.samples, block.acquisition, block.channels, block.trigger,
+                        capture_limit(block), on_completed);
 }
 
-bool Instrument::conclude(const AcquiredBlock& block, const Pushed& pushed) {
+CaptureLimit Instrument::capture_limit(const AcquiredBlock& block) const {
+  // Once RUN has ended this generation's Single, its other Armed-single blocks are captured as
+  // Running, as if they had been acquired after RUN.
+  return block.generation == run_generation_ ? CaptureLimit::kEvery : block.limit;
+}
+
+void Instrument::publish(const AcquiredBlock& block, const std::shared_ptr<const Capture>& capture,
+                         const CaptureResults& results) {
   // A command since the block was acquired has discarded what it belongs to: its capture would
-  // show settings older than that command, and the Single it would end was restarted or ended.
+  // show settings older than that command. Counting and publishing in one hold of the mutex keeps
+  // the statistics' current result the latest capture's.
+  if (block.generation == generation_) {
+    statistics_.add(results);
+    latest_.store(capture);
+  }
+}
+
+bool Instrument::conclude(const AcquiredBlock& block) {
+  // A command since the block was acquired has restarted or ended the Single it would end.
   if (block.generation != generation_) {
-    return false;
-  }
-  if (pushed.capture != nullptr) {
-    latest_.store(pushed.capture);
-  }
-  if (!pushed.end) {
     return false;
   }
   if (pending()) {
