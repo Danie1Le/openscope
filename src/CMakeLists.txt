@@ -8,6 +8,7 @@ add_library(openscope
   openscope/instrument.cpp
   openscope/live_pipeline.cpp
   openscope/measurement.cpp
+  openscope/measurement_statistics.cpp
   openscope/pacer.cpp
   openscope/sample_block.cpp
   openscope/scpi/command_tree.cpp
