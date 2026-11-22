@@ -87,6 +87,7 @@ class EngineProcess {
     return true;
   }
 
+  /// Sends `signal` to the engine.
   // NOLINTNEXTLINE(misc-include-cleaner): <csignal> declares kill, through <signal.h>.
   void signal(int signal) const { ::kill(pid_, signal); }
 
