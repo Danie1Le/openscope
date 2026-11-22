@@ -71,11 +71,12 @@ with OpenScope.connect(port=5025) as scope:  # or OpenScope.open_visa("TCPIP0::l
     print(scope.measure(Measurement.FREQUENCY, channel=1))
 ```
 
-Its tools and test dependencies are pinned in `python/requirements-dev.txt`:
+Its tools and test dependencies are pinned in `python/requirements-dev.txt`. `python/tests/unit` tests the client against a scripted stand-in; `python/tests/integration` is the TCP suite: each test starts the engine named by `OPENSCOPE_ENGINE_PATH` on a free port, drives it over both transports, and checks it exits cleanly. CI runs both against the release and ASan + UBSan engines and publishes the results as JUnit XML.
 
 ```sh
 python3 -m venv .venv && .venv/bin/pip install -r python/requirements-dev.txt -e python
-cd python && ../.venv/bin/ruff check . && ../.venv/bin/ruff format --check . && ../.venv/bin/pytest
+cd python && ../.venv/bin/ruff check . && ../.venv/bin/ruff format --check .
+OPENSCOPE_ENGINE_PATH=$PWD/../build/release/src/openscope-engine ../.venv/bin/pytest
 ```
 
 ## Fuzzing

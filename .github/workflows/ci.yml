@@ -25,6 +25,12 @@ jobs:
         run: |
           files=$(git ls-files '*.cpp' '*.hpp')
           if [ -n "$files" ]; then clang-format-18 --dry-run --Werror $files; fi
+      - name: ruff
+        working-directory: python
+        run: |
+          ruff="pipx run --spec $(grep '^ruff==' requirements-dev.txt) ruff"  # The pinned version.
+          $ruff check --output-format=github .
+          $ruff format --check --diff .
 
   build-test:
     name: ${{ matrix.name }}
@@ -34,14 +40,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # pytest: also run the Python suite against the engine the job built.
           - { name: GCC debug, preset: debug, cxx: g++-14 }
-          - { name: GCC release, preset: release, cxx: g++-14 }
+          - { name: GCC release, preset: release, cxx: g++-14, pytest: true }
           # clang-tidy runs on every translation unit as it compiles; .clang-tidy makes findings errors.
           - name: Clang debug + clang-tidy
             preset: debug
             cxx: clang++-18
             configure-args: -DCMAKE_CXX_CLANG_TIDY=clang-tidy-18
-          - { name: ASan + UBSan, preset: asan, cxx: clang++-18 }
+          - { name: ASan + UBSan, preset: asan, cxx: clang++-18, pytest: true }
           - { name: TSan, preset: tsan, cxx: clang++-18 }
     env:
       CXX: ${{ matrix.cxx }}
@@ -54,6 +61,32 @@ jobs:
       - run: cmake --preset ${{ matrix.preset }} ${{ matrix.configure-args }}
       - run: cmake --build --preset ${{ matrix.preset }}
       - run: ctest --preset ${{ matrix.preset }}
+      # The client's tests and the TCP suite (spec seam 2): every test starts the engine built
+      # above on a free port and checks it exits cleanly, so the ASan job also checks the server.
+      # pytest's summary (failures first) goes on the run's page.
+      - name: pytest
+        if: matrix.pytest
+        working-directory: python
+        env:
+          OPENSCOPE_ENGINE_PATH: ${{ github.workspace }}/build/${{ matrix.preset }}/src/openscope-engine
+        # Explicit shell: bash adds -o pipefail, so failing tests are caught through tee.
+        shell: bash
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet -r requirements-dev.txt -e .
+          status=0
+          "$RUNNER_TEMP/venv/bin/pytest" -ra --junitxml=pytest-${{ matrix.preset }}.xml \
+            | tee pytest.txt || status=$?
+          { echo "### pytest (${{ matrix.preset }})"; echo '```'
+            sed -n '/short test summary info/,$p' pytest.txt | grep . || tail -n 1 pytest.txt
+            echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit $status
+      - name: Publish pytest results (JUnit XML)
+        if: matrix.pytest && !cancelled()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pytest-${{ matrix.preset }}
+          path: python/pytest-${{ matrix.preset }}.xml
 
   fuzz:
     name: Fuzz smoke (60 s)
