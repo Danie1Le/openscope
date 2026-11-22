@@ -5,9 +5,9 @@ import os
 import time
 
 import pytest
-from fake_instrument import Hangup, Trickle, block_reply, scripted
+from fake_instrument import FakeInstrument, Hangup, Trickle, block_reply, scripted
 
-from openscope_client import ProtocolError, transport
+from openscope_client import OpenScope, ProtocolError, SocketStream, transport
 
 
 def test_query_returns_the_reply_without_its_newline_and_checks_the_error_queue(connect):
@@ -233,6 +233,36 @@ def test_a_response_longer_than_the_limit_is_a_protocol_error_that_closes_the_cl
             connected.scope.query("X?")
         with pytest.raises(ConnectionError, match="closed"):
             connected.scope.query("Y?")
+
+
+class _InterruptibleSocketStream(SocketStream):
+    """A raw-socket Stream whose next read, once `armed`, raises KeyboardInterrupt before it
+    reads anything, as Ctrl-C does while the client waits for a reply."""
+
+    armed = False
+
+    def _receive(self, timeout: float | None) -> bytes:
+        if self.armed:
+            self.armed = False
+            raise KeyboardInterrupt
+        return super()._receive(timeout)
+
+
+def test_an_interrupted_wait_closes_the_client_so_its_late_reply_is_never_read():
+    fake = FakeInstrument(scripted({"*OPC?": b"1\n", "SOUR1:FREQ?": b"1000\n"}))
+    stream = _InterruptibleSocketStream("127.0.0.1", fake.port, 2.0)
+    try:
+        scope = OpenScope(stream)
+        stream.armed = True
+
+        with pytest.raises(KeyboardInterrupt):
+            scope.wait_complete()
+        # The `*OPC?` reply is still on the wire: an open client would read it as the frequency.
+        with pytest.raises(ConnectionError, match="closed"):
+            _ = scope.generator(1).frequency
+    finally:
+        stream.close()
+        fake.close()
 
 
 def test_a_closed_client_refuses_every_call(connect):

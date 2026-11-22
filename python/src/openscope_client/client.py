@@ -15,6 +15,7 @@ from openscope_client.errors import (
     ProtocolError,
     ScpiError,
     parse_error_entry,
+    parsed_reply,
 )
 from openscope_client.transport import SocketStream, Stream, block_payload
 
@@ -141,20 +142,12 @@ class WaveformData:
         return tuple((index - position) / rate for index in range(len(self.samples)))
 
 
-def _parsed[T](parse: Callable[[str], T], text: str) -> T:
-    """`parse(text)`, with a malformed reply raised as ProtocolError."""
-    try:
-        return parse(text)
-    except ValueError as error:
-        raise ProtocolError(f"unexpected reply {text!r}") from error
-
-
 def _number(text: str) -> float:
-    return _parsed(float, text)
+    return parsed_reply(float, text)
 
 
 def _whole(text: str) -> int:
-    return _parsed(int, text)
+    return parsed_reply(int, text)
 
 
 def _flag(text: str) -> bool:
@@ -208,7 +201,7 @@ _CHANNEL = _Codec(_channel, lambda channel: f"CHAN{channel}")
 
 def _keyword[T](choices: type[T]) -> _Codec[T]:
     """The codec of a keyword setting whose choices are the StrEnum `choices`."""
-    return _Codec(lambda text: _parsed(choices, text), str)
+    return _Codec(lambda text: parsed_reply(choices, text), str)
 
 
 class _Subsystem:
@@ -361,10 +354,11 @@ class OpenScope:
     the instrument rejects sends no reply, so this check is also how the client knows not to
     wait for one.
 
-    Lines run one at a time, each after the reply to the one before. A transport error
-    (TimeoutError, ConnectionError) or a malformed response closes the client, since a late or
-    unread reply would be read as the answer to the next line. Each response must arrive whole
-    within `timeout` and hold at most `transport.MAX_RESPONSE_BYTES` bytes.
+    Lines run one at a time, each after the reply to the one before. Any exception while a line
+    and its error check are on the wire closes the client: a transport error (TimeoutError,
+    ConnectionError), a malformed response, a KeyboardInterrupt. A late or unread reply would
+    otherwise be read as the answer to the next line. Each response must arrive whole within
+    `timeout` and hold at most `transport.MAX_RESPONSE_BYTES` bytes.
     """
 
     def __init__(self, stream: Stream) -> None:
@@ -526,8 +520,9 @@ class OpenScope:
             raise ValueError("a line cannot hold a newline; send each line on its own")
         if _ERROR_QUERY.search(line):
             raise ValueError("read the error queue with next_error()")
+        sent = f"{line}\n".encode("ascii") + _NEXT_ERROR
         with self._transport() as stream:
-            stream.write(f"{line}\n".encode("ascii") + _NEXT_ERROR)
+            stream.write(sent)
             # A line that fails sends no reply, so the first response may be the check's.
             response = stream.read_response()
             entry = parse_error_entry(response)
@@ -551,11 +546,12 @@ class OpenScope:
 
     @contextmanager
     def _transport(self) -> Iterator[Stream]:
-        """The stream, closed when an exchange on it fails part way."""
+        """The stream, closed when an exchange on it ends part way, for whatever reason
+        (KeyboardInterrupt included): its replies may still be on the wire."""
         stream = self._open_stream()
         try:
             yield stream
-        except (OSError, ProtocolError):
+        except BaseException:
             self.close()
             raise
 

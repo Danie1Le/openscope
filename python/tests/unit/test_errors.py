@@ -3,7 +3,7 @@
 import pytest
 from fake_instrument import scripted
 
-from openscope_client import NO_ERROR, ErrorEntry, ProtocolError, ScpiError
+from openscope_client import NO_ERROR, ErrorEntry, OpenScope, ProtocolError, ScpiError
 
 
 def test_a_rejected_command_raises_its_code_and_message(connect):
@@ -127,6 +127,27 @@ def test_more_entries_than_the_queue_holds_is_a_protocol_error_that_closes_the_c
     assert connected.fake.lines == ["X"] + ["SYST:ERR?"] * 21
     with pytest.raises(ConnectionError, match="closed"):
         connected.scope.next_error()
+
+
+@pytest.mark.parametrize(
+    "send", [lambda scope: scope.write("X"), OpenScope.next_error], ids=["write", "next_error"]
+)
+def test_an_error_code_too_long_for_int_is_a_protocol_error_that_closes_the_client(connect, send):
+    connected = connect(scripted(errors=["-" + "9" * 5000 + ',"x"']))
+
+    with pytest.raises(ProtocolError, match="unexpected reply"):
+        send(connected.scope)
+    with pytest.raises(ConnectionError, match="closed"):
+        connected.scope.next_error()
+
+
+def test_a_line_that_is_not_ascii_is_refused_before_anything_is_sent(connect):
+    connected = connect(scripted({"X?": b"2\n"}))
+
+    with pytest.raises(UnicodeEncodeError):
+        connected.scope.write("SOUR1:FREQ 1000µ")
+    assert connected.scope.query("X?") == "2"
+    assert connected.fake.lines == ["X?", "SYST:ERR?"]
 
 
 def test_a_query_whose_error_check_gets_no_entry_is_a_protocol_error_that_closes_the_client(
