@@ -6,7 +6,6 @@
 #include <array>
 #include <cstddef>
 #include <memory>
-#include <optional>
 #include <stdexcept>
 #include <vector>
 
