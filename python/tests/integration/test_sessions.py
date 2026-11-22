@@ -4,6 +4,7 @@ settings (ADR 0002), while instrument settings are shared."""
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from engine_helpers import take_capture
 from server_limits import MAX_CLIENTS
 
 from openscope_client import NO_ERROR, ErrorEntry, Function, ScpiError, WaveformFormat
@@ -43,8 +44,7 @@ def test_waveform_settings_belong_to_each_session(engine, open_client):
         first.channel(channel).enabled = True
         first.generator(channel).function = Function.DC
         first.generator(channel).offset = level
-    first.single()
-    first.wait_complete()
+    take_capture(first)
 
     first.waveform.source = 2
     assert first.waveform.read().samples[:3] == (-0.75,) * 3  # Sets the format to REAL.

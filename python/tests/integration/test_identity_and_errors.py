@@ -4,6 +4,7 @@ instrument queues (docs/scpi-reference.md, Error codes)."""
 import re
 
 import pytest
+from engine_helpers import REJECTED_LINES, take_capture
 
 from openscope_client import NO_ERROR, ErrorEntry, Function, Measurement, ScpiError, TriggerMode
 
@@ -17,23 +18,13 @@ def test_identify_names_the_instrument(scope):
 
 
 @pytest.mark.parametrize(
-    ("line", "code", "message"),
-    [
-        ("SYST:BOGUS", -113, "Undefined header"),
-        ("CHAN5:SCAL 1", -114, "Header suffix out of range"),
-        ("SOUR1:FREQ 2E9", -222, "Data out of range"),
-        ("TRIG:MODE SING", -224, "Illegal parameter value"),
-        ("SOUR1:FREQ", -109, "Missing parameter"),
-        ("RUN 1", -108, "Parameter not allowed"),
-        ("SOUR1:FREQ 1,", -102, "Syntax error"),
-        ("SOUR1:FREQ 1 V", -131, "Invalid suffix"),
-    ],
+    ("line", "error"), REJECTED_LINES, ids=[str(e.code) for _, e in REJECTED_LINES]
 )
-def test_a_rejected_command_raises_its_code_and_message(scope, line, code, message):
+def test_a_rejected_command_raises_its_code_and_message(scope, line, error):
     with pytest.raises(ScpiError) as raised:
         scope.write(line)
 
-    assert raised.value.errors == (ErrorEntry(code, message),)
+    assert raised.value.errors == (error,)
     assert scope.next_error() == NO_ERROR
 
 
@@ -60,8 +51,7 @@ def test_a_query_before_any_capture_raises_instead_of_waiting_for_a_reply(scope)
 
 
 def test_a_query_of_a_channel_not_in_the_capture_raises_settings_conflict(scope):
-    scope.single()
-    scope.wait_complete()
+    take_capture(scope)
     scope.waveform.source = 2  # Channel 2 is off at *RST.
 
     with pytest.raises(ScpiError, match="Settings conflict") as raised:
@@ -72,8 +62,7 @@ def test_a_query_of_a_channel_not_in_the_capture_raises_settings_conflict(scope)
 
 def test_a_measurement_with_no_signal_raises_its_status_and_carries_not_a_number(scope):
     scope.generator(1).function = Function.DC
-    scope.single()
-    scope.wait_complete()
+    take_capture(scope)
 
     with pytest.raises(ScpiError) as raised:
         scope.measure(Measurement.FREQUENCY, 1)
@@ -85,8 +74,7 @@ def test_a_measurement_with_no_signal_raises_its_status_and_carries_not_a_number
 
 def test_every_error_of_a_line_is_raised_with_the_replies(scope):
     scope.channel(1).scale = 0.001  # A 2 Vpp sine clips at +/- 4 mV.
-    scope.single()
-    scope.wait_complete()
+    take_capture(scope)
 
     with pytest.raises(ScpiError) as raised:
         scope.query("MEAS:VPP? CHAN1;VRMS? CHAN1")

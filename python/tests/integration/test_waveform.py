@@ -5,6 +5,7 @@ import array
 
 import pytest
 import pyvisa
+from engine_helpers import take_capture
 
 from openscope_client import Function, Preamble, WaveformFormat
 
@@ -18,8 +19,7 @@ def take_square_wave(scope):
     """Takes one capture of Generator 1's 1 kHz square wave (1000 samples per cycle at the
     `*RST` 1 MS/s), triggered on its rising edge at 0 V."""
     scope.generator(1).function = Function.SQUARE
-    scope.single()
-    scope.wait_complete()
+    take_capture(scope)
 
 
 def test_read_decodes_the_block_and_places_it_with_the_preamble(scope):
@@ -42,8 +42,7 @@ def test_read_decodes_the_block_and_places_it_with_the_preamble(scope):
 def test_a_dc_level_reads_back_exactly(scope):
     scope.generator(1).function = Function.DC
     scope.generator(1).offset = 0.375
-    scope.single()
-    scope.wait_complete()
+    take_capture(scope)
 
     waveform = scope.waveform.read()
 
@@ -53,8 +52,7 @@ def test_a_dc_level_reads_back_exactly(scope):
 
 def test_the_ascii_form_holds_the_same_samples(scope):
     scope.generator(1).noise = 0.1  # Values that float32 rounds.
-    scope.single()
-    scope.wait_complete()
+    take_capture(scope)
     real = scope.waveform.read().samples
 
     scope.waveform.format = WaveformFormat.ASCII
@@ -65,8 +63,7 @@ def test_the_ascii_form_holds_the_same_samples(scope):
 
 def test_pyvisa_query_binary_values_reads_the_block_with_its_defaults(engine, scope):
     scope.generator(1).noise = 0.1
-    scope.single()
-    scope.wait_complete()
+    take_capture(scope)
     expected = scope.waveform.read().samples
 
     # The manager stays open: pyvisa may share it with the client's own resource.
@@ -86,8 +83,7 @@ def test_a_large_record_transfers_whole(scope):
     scope.acquisition.record_length = 1048576  # The longest record: a 4 MB block.
     scope.generator(1).noise = 0.1
     scope.timeout = 30
-    scope.single()
-    scope.wait_complete()
+    take_capture(scope)
 
     waveform = scope.waveform.read()
 
@@ -100,8 +96,7 @@ def test_each_channel_reads_its_own_generator(scope, channel):
     scope.channel(channel).enabled = True
     scope.generator(channel).function = Function.DC
     scope.generator(channel).offset = -0.5 * channel
-    scope.single()
-    scope.wait_complete()
+    take_capture(scope)
 
     scope.waveform.source = channel
     waveform = scope.waveform.read()
