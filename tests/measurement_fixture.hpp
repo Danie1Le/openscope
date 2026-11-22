@@ -4,7 +4,6 @@
 #include <vector>
 
 #include "instrument_fixture.hpp"
-#include "reply_numbers.hpp"
 
 namespace openscope::test {
 
