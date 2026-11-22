@@ -26,6 +26,10 @@ REJECTED_LINES = (
 NOT_A_NUMBER = 9.91e37
 NO_SIGNAL = ErrorEntry(-200, "Execution error;No signal")
 TOO_FEW_CYCLES = ErrorEntry(-200, "Execution error;Too few cycles")
+#: The warning a Clipped value queues, and what a query of capture data queues before any capture
+#: (or `MEAS:STAT?` before any since the last reset).
+CLIPPED = ErrorEntry(-231, "Data questionable;Clipped")
+STALE = ErrorEntry(-230, "Data corrupt or stale")
 
 #: The `*RST` record length, and the longest (`ACQ:POIN`).
 RECORD_LENGTH = 10000
