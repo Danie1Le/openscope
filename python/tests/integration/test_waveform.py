@@ -5,7 +5,7 @@ import array
 
 import pytest
 import pyvisa
-from engine_helpers import take_capture
+from engine_helpers import LONGEST_RECORD, take_capture
 
 from openscope_client import Function, Preamble, WaveformFormat
 
@@ -80,14 +80,14 @@ def test_pyvisa_query_binary_values_reads_the_block_with_its_defaults(engine, sc
 
 
 def test_a_large_record_transfers_whole(scope):
-    scope.acquisition.record_length = 1048576  # The longest record: a 4 MB block.
+    scope.acquisition.record_length = LONGEST_RECORD  # A 4 MB block.
     scope.generator(1).noise = 0.1
     scope.timeout = 30
     take_capture(scope)
 
     waveform = scope.waveform.read()
 
-    assert waveform.preamble.record_length == len(waveform.samples) == 1048576
+    assert waveform.preamble.record_length == len(waveform.samples) == LONGEST_RECORD
     assert len(set(waveform.samples)) > 1000
 
 
