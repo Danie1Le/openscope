@@ -70,7 +70,7 @@ cd python && OPENSCOPE_ENGINE_PATH=../build/release/src/openscope-engine pytest 
 
 - **Setter**: 10 000 × `SOUR1:FREQ 1000` through `openscope-client`, which sends `SYST:ERR?` behind each line and reads its reply: one round trip per setter, as a script sees it. Each one drops the capture in progress, as every setting does.
 - **Measurement on a 1M-sample record**: one capture of 1 048 576 samples taken with `SINGle;*OPC?` (so it stays the latest capture), then 10 000 queries cycling through the ten `MEAS:<type>? CHAN1`, each alone on its line with no error check behind it (see the client note below). Results are cached per capture, and an untimed first round of the ten computes them, so all 10 000 timed queries read the cache.
-- **First measurement of a fresh 1M-sample record**: the first query of each of the ten measurements on three fresh captures, 30 queries, each one computing its result. The first of the ten also finds top and base, which the others reuse. Thirty samples make a rough p95: it is the second-slowest of them.
+- **First measurement of a fresh 1M-sample record**: the first query of each of the ten measurements on three fresh captures, 30 queries, each one computing its result. The first of the ten also finds top and base, which the others reuse. Thirty samples make a rough p95: `statistics.quantiles(n=100, method="inclusive")` puts it 0.55 of the way from the third-slowest to the second-slowest.
 
 Measured 2026-11-22 on the Intel Core i7-9700F machine above (`openscope-dev:24.04` on Docker Desktop, WSL2 kernel 6.18.58.1, 8 CPUs), release engine (g++-14 `-O3 -DNDEBUG`), Python 3.12 client, with the machine otherwise idle (load average under 1). Three runs:
 
@@ -86,13 +86,13 @@ What the table shows: both NFR-4 targets held, by a wide margin. A setter's p95 
 
 ## Long-running stability (soak test)
 
-`python/tests/integration/test_soak.py` runs the engine live while four clients use it at once: one takes Singles and checks each one's statistics and channel 1's frequency against its Generator (NFR-6), one reads waveforms, spectra and measurements of the latest capture, one changes settings and injects faults, and one connects, makes a mistake and disconnects over and over. It fails if any check fails, if the engine's resident memory grows by 32 MiB or more after the clients have warmed up (its first reading, 5 s in), or if the engine does not exit cleanly. It is not part of the pull-request run (`pytest` deselects the `soak` marker); run it on a release engine (ASan holds freed memory in quarantine, which the memory check would count) with:
+`python/tests/integration/test_soak.py` runs the engine live while four clients use it at once: one takes Singles and checks each one's statistics and channel 1's frequency against its Generator (NFR-6), one reads waveforms, spectra and measurements of the latest capture, one changes settings and injects faults, and one connects, makes a mistake and disconnects over and over. It fails if any check fails (the first failure stops every client within a round and is reported at once), if the engine's resident memory grows by 32 MiB or more after the clients have warmed up (its first reading, 5 s in), or if the engine does not exit cleanly. It is not part of the pull-request run: `pytest` deselects it unless given `--soak`, whatever `-m` selects. Run it on a release engine (ASan holds freed memory in quarantine, which the memory check would count) with:
 
 ```sh
-cd python && OPENSCOPE_ENGINE_PATH=../build/release/src/openscope-engine OPENSCOPE_SOAK_SECONDS=3600 pytest -m soak -s
+cd python && OPENSCOPE_ENGINE_PATH=../build/release/src/openscope-engine OPENSCOPE_SOAK_SECONDS=3600 pytest --soak -m soak -s
 ```
 
-or from the Actions tab with the **Soak** workflow (`workflow_dispatch`, length in seconds, 3600 by default).
+or from the Actions tab with the **Soak** workflow (`workflow_dispatch`, length in whole seconds from 1 to 18000, 3600 by default; the run is stopped 600 s past that length and its JUnit report uploaded either way).
 
 One run of the default 600 s, on 2026-11-22 on the machine above (release engine), passed: 3 967 Singles, 4 471 reader rounds, 11 819 setting changes and 1 534 933 connections, with the engine's resident memory between 5.0 and 5.6 MiB throughout. That is ten minutes, not the hour the workflow defaults to; no hour-long run has been recorded yet.
 
