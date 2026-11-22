@@ -1,8 +1,12 @@
 #include "openscope/server/scpi_server.hpp"
 
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+
 #include <algorithm>
 #include <array>
 #include <boost/asio/buffer.hpp>
+#include <boost/asio/detail/socket_option.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/address.hpp>
@@ -19,6 +23,7 @@
 #include <nlohmann/json.hpp>  // IWYU pragma: keep (the definition of ordered_json)
 #include <nlohmann/json_fwd.hpp>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -45,9 +50,31 @@ constexpr std::size_t kKeptLineLength = Instrument::kMaxLineLength + 2;
 /// What ends every reply.
 constexpr std::string_view kNewline = "\n";
 
-/// `host:port` of `endpoint`, as logs name a client.
+/// `host:port` of `endpoint`, as logs name a client; an IPv6 host is in brackets (`[::1]:5025`),
+/// so the port can be split off.
 std::string describe(const tcp::endpoint& endpoint) {
-  return std::format("{}:{}", endpoint.address().to_string(), endpoint.port());
+  std::ostringstream text;
+  text << endpoint;
+  return text.str();
+}
+
+/// A TCP socket option that is an int.
+template <int Name>
+using TcpOption = asio::detail::socket_option::integer<IPPROTO_TCP, Name>;
+
+/// Turns on TCP keepalive with ScpiServer's probe settings.
+error_code enable_keepalive(tcp::socket& socket) {
+  error_code error;
+  const auto set = [&](const auto& option) {
+    if (!error) {
+      std::ignore = socket.set_option(option, error);
+    }
+  };
+  set(tcp::socket::keep_alive(true));
+  set(TcpOption<TCP_KEEPIDLE>(static_cast<int>(ScpiServer::kKeepAliveIdle.count())));
+  set(TcpOption<TCP_KEEPINTVL>(static_cast<int>(ScpiServer::kKeepAliveInterval.count())));
+  set(TcpOption<TCP_KEEPCNT>(ScpiServer::kKeepAliveProbes));
+  return error;
 }
 
 }  // namespace
@@ -295,6 +322,12 @@ void ScpiServer::admit(tcp::socket socket) {
   std::string peer = describe(endpoint);
   if (connections_.size() >= kMaxClients) {
     log_->write("refuse", {{"peer", peer}, {"reason", "too many clients"}});
+    std::ignore = socket.close(error);
+    return;
+  }
+  // Without keepalive a vanished client could hold its slot for good.
+  if (const error_code keepalive_error = enable_keepalive(socket)) {
+    log_->write("refuse", {{"peer", peer}, {"reason", keepalive_error.message()}});
     std::ignore = socket.close(error);
     return;
   }
