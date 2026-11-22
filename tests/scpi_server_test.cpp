@@ -502,6 +502,20 @@ TEST_F(ScpiServerTest, ProbesAClientThatWaitsOnOpcWithTcpKeepalive) {
   EXPECT_EQ(socket_option(socket, IPPROTO_TCP, TCP_KEEPCNT), ScpiServer::kKeepAliveProbes);
 }
 
+// A client that sends two lines which both reply (a query and the `SYST:ERR?` behind it) reads the
+// second reply only after the first one's ACK when Nagle's algorithm holds it, which with the
+// client's delayed ACK takes about 40 ms (#58). Timing that is too noisy for a unit test, so this
+// checks the option on the server's end of the connection; test_latency.py times the effect.
+TEST_F(ScpiServerTest, SendsEachReplyWithoutWaitingForAnAckWithTcpNoDelay) {
+  Client client(port());
+  ASSERT_THAT(client.query("*IDN?"), idn_reply());  // Admitted.
+
+  const int socket = server_socket(port(), client.local_port());
+
+  ASSERT_NE(socket, -1);
+  EXPECT_EQ(socket_option(socket, IPPROTO_TCP, TCP_NODELAY), 1);
+}
+
 TEST_F(ScpiServerTest, StoppingTheServerEndsItsSessionsEvenWhileOneWaits) {
   Client waiting(port());
   waiting.send("SING;*OPC?\n");
