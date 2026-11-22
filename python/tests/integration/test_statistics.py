@@ -10,9 +10,11 @@ from engine_helpers import (
     CLOCK_CHANNEL,
     NO_SIGNAL,
     NOT_A_NUMBER,
+    PATIENCE,
     RECORD_LENGTH,
     STALE,
     eventually,
+    read_channel,
     scpi_error,
     take_capture,
     take_fault_capture,
@@ -24,6 +26,7 @@ from openscope_client import (
     FaultKind,
     Function,
     Measurement,
+    OpenScope,
     ScpiError,
     Statistics,
 )
@@ -72,18 +75,44 @@ def test_each_statistic_matches_the_values_of_the_captures_counted(scope):
     assert statistics.pstdev(values) > 0  # Distinct values, so each statistic is distinct.
 
 
-#: A ramp on Generator 4 so slow (1000 s a cycle) that its mean over a capture places the capture
-#: on the sample clock. It starts at the phase Generator 4 had, so about one run in a few thousand
-#: wraps it; the test then fails on its first check.
+#: A ramp on Generator 4 so slow (1000 s a cycle, 2 mV a second) that its mean over a capture
+#: places the capture on the sample clock.
 SLOW_CLOCK = Signal(Function.RAMP, 1e-3)
+#: The longest a test may run on SLOW_CLOCK, in seconds: its wait for captures (at most PATIENCE)
+#: and as long again for the commands around it.
+LONGEST_CLOCKED_TEST = 2 * PATIENCE
+#: The highest SLOW_CLOCK may start from: LONGEST_CLOCKED_TEST short of its wrap from +1 V to -1 V.
+LATEST_CLOCK_START = SLOW_CLOCK.offset + SLOW_CLOCK.amplitude * (
+    0.5 - SLOW_CLOCK.frequency * LONGEST_CLOCKED_TEST
+)
+#: Restarts allowed to find a start before LATEST_CLOCK_START; each one is a fresh draw.
+CLOCK_STARTS = 10
+
+
+def start_slow_clock(scope: OpenScope) -> None:
+    """Takes a Single with SLOW_CLOCK on channel 4 under a flat channel 1 and no pre-trigger
+    samples, its ramp far enough from its wrap that no test sees it wrap. Its phase carries over
+    from the `*RST` 1 kHz sine at the sample index the setting lands at, which the client cannot
+    pick, so a start too close to the wrap is drawn again after a `*RST`."""
+    for _ in range(CLOCK_STARTS):
+        scope.write("*RST")
+        SLOW_CLOCK.apply(scope, CLOCK_CHANNEL)
+        scope.write(f"CHAN{CLOCK_CHANNEL}:DISP ON;:SOUR1:FUNC DC;:TRIG:POS 0")
+        take_capture(scope)
+        clock = read_channel(scope, CLOCK_CHANNEL)
+        if clock.samples[clock.preamble.time_zero] < LATEST_CLOCK_START:
+            return
+    pytest.fail(
+        f"the clock started within {LONGEST_CLOCKED_TEST} s of its wrap {CLOCK_STARTS} times"
+    )
 
 
 def test_while_running_every_capture_is_counted(scope):
-    # A flat channel 1 and no pre-trigger samples: untriggered captures follow each other, one
-    # record length apart, so the clock's mean rises by one step per capture, and the captures
-    # counted are the steps from the first (the minimum) to the last (the maximum), plus one.
-    SLOW_CLOCK.apply(scope, CLOCK_CHANNEL)
-    scope.write(f"CHAN{CLOCK_CHANNEL}:DISP ON;:SOUR1:FUNC DC;:TRIG:POS 0;:STOP;:MEAS:STAT:RES;:RUN")
+    # Untriggered captures follow each other, one record length apart, so the clock's mean rises
+    # by one step per capture, and the captures counted are the steps from the first (the
+    # minimum) to the last (the maximum), plus one.
+    start_slow_clock(scope)
+    scope.write("MEAS:STAT:RES;:RUN")
 
     def counted_several() -> bool:
         try:
