@@ -17,24 +17,29 @@ from ground_truth import Signal, assert_measures
 
 from openscope_client import FaultKind, Function, Measurement
 
+#: The longest fault, in samples: over a second at the `*RST` sample rate.
+LONGEST_FAULT = 1048576
+
 
 def test_a_glitch_is_a_trigger_event_and_a_dropout_is_not(scope):
-    # -0.5 V never reaches the 0.5 V level; a default dropout (0 V for 100 samples) does not
-    # either, and a default glitch (+2 V for 1 sample) does. With the trigger position at 0 the
-    # capture starts at the event that placed it.
-    Signal(Function.DC, offset=-0.5).apply(scope)
-    scope.write("TRIG:MODE NORM;LEV 0.5;POS 0")
+    # The dropout replaces 0.25 V by 0.375 V, under the 0.5 V level and its band (added like a
+    # glitch, it would reach 0.625 V), and lasts through the whole capture; the default glitch
+    # (+2 V for 1 sample) adds to it. Had the dropout triggered, time zero would be its start,
+    # with 0.25 V before it.
+    Signal(Function.DC, offset=0.25).apply(scope)
+    scope.write("TRIG:MODE NORM;LEV 0.5")
     scope.single()
-    time.sleep(SETTLE)  # The restarted trigger has seen -0.5 V, past its band: it is armed.
+    time.sleep(SETTLE)  # The restarted trigger has seen 0.25 V, past its band: it is armed.
     generator = scope.generator(1)
-    generator.inject_fault(FaultKind.DROPOUT)
-    time.sleep(SETTLE)  # The dropout is over, untriggered, before the glitch.
+    generator.inject_fault(FaultKind.DROPOUT, 0.375, LONGEST_FAULT)
+    time.sleep(SETTLE)  # Every pre-trigger sample falls in the dropout.
     generator.inject_fault(FaultKind.GLITCH)
     scope.wait_complete()
 
     waveform = scope.waveform.read()
+    zero = waveform.preamble.time_zero
     assert not waveform.preamble.untriggered
-    assert waveform.samples == (1.5,) + (-0.5,) * (RECORD_LENGTH - 1)
+    assert waveform.samples == (0.375,) * zero + (2.375,) + (0.375,) * (RECORD_LENGTH - zero - 1)
 
 
 def test_a_glitch_shows_its_magnitude_and_duration_after_the_pre_trigger_samples(scope):

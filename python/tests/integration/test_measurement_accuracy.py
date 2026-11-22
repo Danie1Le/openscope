@@ -2,6 +2,8 @@
 (clean signals) and NFR-6 (noise at 1% of the amplitude) tolerances (docs/scpi-reference.md,
 Measurements)."""
 
+import math
+
 import pytest
 from engine_helpers import (
     LONGEST_RECORD,
@@ -60,6 +62,36 @@ def test_a_sine_at_ten_samples_per_cycle_has_its_frequency_rms_and_mean(scope):
         Measurement.AVERAGE,
     ):
         assert_measures(scope, signal, measurement)
+
+
+#: NFR-5's corner: a record of 10 cycles at 10 samples per cycle (100 kHz at 1 MS/s).
+CORNER_RECORD = 100
+CORNER = Signal(Function.SINE, 100e3, 1.0, -1.0)
+
+
+def test_ten_cycles_at_ten_samples_per_cycle_keep_their_frequency(scope):
+    scope.acquisition.record_length = CORNER_RECORD
+    CORNER.apply(scope)
+    take_capture(scope)
+
+    assert_measures(scope, CORNER, Measurement.FREQUENCY)
+    assert_measures(scope, CORNER, Measurement.PERIOD)
+    # Extreme samples fall at most half a sample period (pi/10 of the cycle) from each peak, so
+    # this bound holds wherever the samples fall.
+    expected = CORNER.expected(Measurement.PEAK_TO_PEAK)
+    peak_to_peak = scope.measure(Measurement.PEAK_TO_PEAK, 1)
+    assert math.cos(math.pi / 10) * expected <= peak_to_peak <= expected, peak_to_peak
+
+
+def test_ten_cycles_at_ten_samples_per_cycle_with_noise_keep_their_frequency(scope):
+    signal = CORNER.with_noise()
+    scope.acquisition.record_length = CORNER_RECORD
+    signal.apply(scope)
+
+    for _ in range(NOISY_CAPTURES):
+        take_capture(scope)
+        assert_measures(scope, signal, Measurement.FREQUENCY)
+        assert_measures(scope, signal, Measurement.PERIOD)
 
 
 #: Sines whose record ends part-way through a cycle (12.345 and 33.5 cycles): NFR-5 still holds for
