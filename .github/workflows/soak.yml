@@ -1,0 +1,43 @@
+name: Soak
+
+# The long stability test (python/tests/integration/test_soak.py), on demand only: it runs for
+# as long as asked, too long for every pull request.
+on:
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: How long the engine runs under load, in seconds
+        default: "3600"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  soak:
+    name: Soak (${{ inputs.seconds }} s)
+    runs-on: ubuntu-24.04
+    # The longest a hosted job may run; the input sets the soak's own length.
+    timeout-minutes: 360
+    env:
+      CXX: g++-14
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/setup-vcpkg
+      - run: cmake --preset release
+      - run: cmake --build --preset release
+      - name: pytest -m soak
+        working-directory: python
+        env:
+          OPENSCOPE_ENGINE_PATH: ${{ github.workspace }}/build/release/src/openscope-engine
+          OPENSCOPE_SOAK_SECONDS: ${{ inputs.seconds }}
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet -r requirements-dev.txt -e .
+          "$RUNNER_TEMP/venv/bin/pytest" -m soak -s -ra --junitxml=pytest-soak.xml
+      - name: Publish soak results (JUnit XML)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pytest-soak
+          path: python/pytest-soak.xml

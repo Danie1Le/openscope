@@ -17,7 +17,12 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["--strict-markers"]
+# The soak test runs only when asked for: `pytest -m soak` (a later -m replaces this one).
+addopts = ["--strict-markers", "-m", "not soak"]
+markers = [
+  "latency: times 10,000 SCPI commands (NFR-4); `pytest -m latency -s` prints the numbers",
+  "soak: the long stability test, run on demand only (OPENSCOPE_SOAK_SECONDS, default 600)",
+]
 xfail_strict = true
 filterwarnings = ["error"]
 

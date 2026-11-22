@@ -60,6 +60,42 @@ Not measured, so only hypotheses: that KissFFT's radix-4 butterflies need fewer 
 
 The whole `FFT:DATA?` spectrum on a 1M-sample capture took 126 ms (median of 10 repetitions; no p95 was measured), well above the 20 ms p95 target NFR-4 sets for measurement queries. KissFFT's transform alone took 98 ms at that size, so swapping the transform would not reach the target. What would bring it closer has not been measured: ideas are a real-input FFT (half the work), twiddles and window cached per record length, and less memory traffic. Nobody has tried them yet.
 
+## SCPI latency (NFR-4)
+
+`python/tests/integration/test_latency.py` starts the engine and times SCPI commands over a raw TCP socket on loopback, each from just before it is sent to when its reply has arrived. NFR-4 asks for a setter p95 under 5 ms and a measurement query on a 1M-sample record p95 under 20 ms. In CI the same tests run on every pull request (release and ASan engines) but assert only ceilings of 50 ms, 100 ms and 2 s, so a shared runner cannot fail them; the numbers here are from the machine below.
+
+```sh
+cd python && OPENSCOPE_ENGINE_PATH=../build/release/src/openscope-engine pytest -m latency -s
+```
+
+- **Setter**: 10 000 × `SOUR1:FREQ 1000` through `openscope-client`, which sends `SYST:ERR?` behind each line and reads its reply: one round trip per setter, as a script sees it. Each one drops the capture in progress, as every setting does.
+- **Measurement on a 1M-sample record**: one capture of 1 048 576 samples taken with `SINGle;*OPC?` (so it stays the latest capture), then 10 000 queries cycling through the ten `MEAS:<type>? CHAN1`, each alone on its line with no error check behind it (see the client note below). Results are cached per capture, and an untimed first round of the ten computes them, so all 10 000 timed queries read the cache.
+- **First measurement of a fresh 1M-sample record**: the first query of each of the ten measurements on three fresh captures, 30 queries, each one computing its result. The first of the ten also finds top and base, which the others reuse. Thirty samples make a rough p95: it is the second-slowest of them.
+
+Measured 2026-11-22 on the Intel Core i7-9700F machine above (`openscope-dev:24.04` on Docker Desktop, WSL2 kernel 6.18.58.1, 8 CPUs), release engine (g++-14 `-O3 -DNDEBUG`), Python 3.12 client, with the machine otherwise idle (load average under 1). Three runs:
+
+| | Count | Median | p95 | p99 | Worst |
+|---|---|---|---|---|---|
+| Setter | 10 000 | 0.085 to 0.088 ms | 0.113 to 0.120 ms | 0.131 to 0.151 ms | 0.58 to 0.73 ms |
+| Measurement on a 1M-sample record (cached) | 10 000 | 0.076 ms | 0.110 to 0.114 ms | 0.130 to 0.139 ms | 0.31 to 0.40 ms |
+| First measurement of a fresh 1M-sample record | 30 | 1.86 to 1.97 ms | 8.06 to 8.69 ms | 8.41 to 8.88 ms | 8.47 to 8.92 ms |
+
+What the table shows: both NFR-4 targets held, by a wide margin. A setter's p95 was about 0.12 ms against 5 ms. A measurement query's p95 on a 1M-sample record was 0.11 ms from the cache and under 9 ms when it computes the result (the first measurement of a capture, which also finds top and base, takes about 8 ms; the other nine about 2 ms). These are loopback times on one machine with nothing else running; a network adds its round trip to each.
+
+**Through `openscope-client`, a query takes about 44 ms** (`*IDN?` included): the client sends `SYST:ERR?` behind every line, and the server's second reply waits for the client's delayed acknowledgement of the first (Nagle's algorithm, no `TCP_NODELAY` on the server). That is bug #58; `test_pipelined_replies_are_not_delayed` is marked as an expected failure until it is fixed. Setters are not affected (their only reply is the check's), nor is a query sent alone, as timed above.
+
+## Long-running stability (soak test)
+
+`python/tests/integration/test_soak.py` runs the engine live while four clients use it at once: one takes Singles and checks each one's statistics and channel 1's frequency against its Generator (NFR-6), one reads waveforms, spectra and measurements of the latest capture, one changes settings and injects faults, and one connects, makes a mistake and disconnects over and over. It fails if any check fails, if the engine's resident memory grows by 32 MiB or more after the clients have warmed up (its first reading, 5 s in), or if the engine does not exit cleanly. It is not part of the pull-request run (`pytest` deselects the `soak` marker); run it on a release engine (ASan holds freed memory in quarantine, which the memory check would count) with:
+
+```sh
+cd python && OPENSCOPE_ENGINE_PATH=../build/release/src/openscope-engine OPENSCOPE_SOAK_SECONDS=3600 pytest -m soak -s
+```
+
+or from the Actions tab with the **Soak** workflow (`workflow_dispatch`, length in seconds, 3600 by default).
+
+One run of the default 600 s, on 2026-11-22 on the machine above (release engine), passed: 3 967 Singles, 4 471 reader rounds, 11 819 setting changes and 1 534 933 connections, with the engine's resident memory between 5.0 and 5.6 MiB throughout. That is ten minutes, not the hour the workflow defaults to; no hour-long run has been recorded yet.
+
 ## SPSC ring buffer throughput
 
 `bench/ring_buffer_benchmark.cpp` passes `std::uint64_t` items from a producer thread to a consumer thread through the ring buffer the live pipeline uses (`openscope::SpscRingBuffer`), with queues of 16, 256 and 4096 slots. The producer tries again whenever it finds the queue full, so the rate is the sustained hand-over rate between two cores; `full_per_item` is how many of those retries there were per item.

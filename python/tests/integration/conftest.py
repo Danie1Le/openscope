@@ -71,6 +71,14 @@ class Engine:
                     raise AssertionError(f"no {event} event with {fields} in {self.events}")
                 self._logged.wait(left)
 
+    def resident_kib(self) -> int:
+        """The engine's resident memory in KiB, from /proc (Linux only)."""
+        with open(f"/proc/{self._process.pid}/status") as status:
+            for line in status:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1])
+        raise AssertionError("no VmRSS line in /proc/<pid>/status")
+
     def raw_session(self) -> "RawSession":
         """A Session over a raw socket, closed when the engine stops."""
         session = RawSession(self.port)

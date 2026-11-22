@@ -79,6 +79,8 @@ cd python && ../.venv/bin/ruff check . && ../.venv/bin/ruff format --check .
 OPENSCOPE_ENGINE_PATH=$PWD/../build/release/src/openscope-engine ../.venv/bin/pytest
 ```
 
+The TCP suite checks every measurement against the Generator's ground truth within the spec's NFR-5 and NFR-6 tolerances, the trigger, faults, run control, statistics and the FFT. `pytest -m latency -s` prints the SCPI latency numbers (NFR-4); the long stability test runs only when asked for, with `OPENSCOPE_SOAK_SECONDS=3600 pytest -m soak` or the Soak workflow. See `docs/benchmarks.md` for both.
+
 ## Fuzzing
 
 The `fuzz` preset (always Clang) builds a libFuzzer target that feeds raw bytes, split into lines, to the instrument's execute-line entry point under ASan and UBSan. Each line goes to one of two Sessions, picked by the low bit of its first byte, so cross-Session paths are fuzzed too. CI runs it for 60 seconds on every pull request; run it longer locally:
