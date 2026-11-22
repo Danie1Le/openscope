@@ -297,6 +297,18 @@ TEST(FewSamplingPhasesTest, ClustersAreNoLevels) {
   EXPECT_TRUE(is_right_or_flagged(11, cycles_of("TRI", 10.0, 1000.0, 0.02), kOnePercentNoise));
 }
 
+/// Whether `signal`, measured on Instruments seeded 1 to `seeds`, never reads No signal.
+testing::AssertionResult is_never_no_signal(const NoisySignal& signal, std::uint64_t seeds) {
+  for (std::uint64_t seed = 1; seed <= seeds; ++seed) {
+    if (measure_noisy(seed, signal, "MEAS:FREQ?").second == kNoSignalReply) {
+      return testing::AssertionFailure()
+             << std::format("{} at {} Hz, {} samples, seed {}: No signal", signal.function,
+                            signal.frequency, signal.record_length, seed);
+    }
+  }
+  return testing::AssertionSuccess();
+}
+
 class NoSignalSweepTest : public testing::TestWithParam<double> {};
 
 /// The longest record NoSignalSweepTest takes, so that the sweep stays quick under the sanitizers.
@@ -312,13 +324,8 @@ TEST_P(NoSignalSweepTest, ASignalIsNeverNoSignal) {
     for (const double samples_per_cycle : {10.0, 11.1, 20.0, 30.0, 100.0, 1000.0, 3000.0}) {
       for (const double cycles : {10.0, 30.0, 100.0, 1000.0}) {
         const NoisySignal signal = cycles_of(shape, samples_per_cycle, cycles, noise);
-        if (signal.record_length > kLongestSweptRecord) {
-          continue;
-        }
-        for (std::uint64_t seed = 1; seed <= seeds; ++seed) {
-          EXPECT_NE(measure_noisy(seed, signal, "MEAS:FREQ?").second, kNoSignalReply)
-              << std::format("{} at {} samples per cycle, {} cycles, seed {}", shape,
-                             samples_per_cycle, cycles, seed);
+        if (signal.record_length <= kLongestSweptRecord) {
+          EXPECT_TRUE(is_never_no_signal(signal, seeds));
         }
       }
     }
