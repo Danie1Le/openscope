@@ -72,17 +72,27 @@ cd python && OPENSCOPE_ENGINE_PATH=../build/release/src/openscope-engine pytest 
 - **Measurement on a 1M-sample record**: one capture of 1 048 576 samples taken with `SINGle;*OPC?` (so it stays the latest capture), then 10 000 queries cycling through the ten `MEAS:<type>? CHAN1`, each alone on its line with no error check behind it (see the client note below). Results are cached per capture, and an untimed first round of the ten computes them, so all 10 000 timed queries read the cache.
 - **First measurement of a fresh 1M-sample record**: the first query of each of the ten measurements on three fresh captures, 30 queries, each one computing its result. The first of the ten also finds top and base, which the others reuse. Thirty samples make a rough p95: `statistics.quantiles(n=100, method="inclusive")` puts it 0.55 of the way from the third-slowest to the second-slowest.
 
-Measured 2026-11-22 on the Intel Core i7-9700F machine above (`openscope-dev:24.04` on Docker Desktop, WSL2 kernel 6.18.58.1, 8 CPUs), release engine (g++-14 `-O3 -DNDEBUG`), Python 3.12 client, with the machine otherwise idle (load average under 1). Three runs:
+Measured 2026-11-22 on the Intel Core i7-9700F machine above (`openscope-dev:24.04` on Docker Desktop, WSL2 kernel 6.18.58.1, 8 CPUs), release engine (g++-14 `-O3 -DNDEBUG`), Python 3.12 client, with the machine otherwise idle (load average about 1.1). Three runs:
 
 | | Count | Median | p95 | p99 | Worst |
 |---|---|---|---|---|---|
-| Setter | 10 000 | 0.085 to 0.088 ms | 0.113 to 0.120 ms | 0.131 to 0.151 ms | 0.58 to 0.73 ms |
-| Measurement on a 1M-sample record (cached) | 10 000 | 0.076 ms | 0.110 to 0.114 ms | 0.130 to 0.139 ms | 0.31 to 0.40 ms |
-| First measurement of a fresh 1M-sample record | 30 | 1.86 to 1.97 ms | 8.06 to 8.69 ms | 8.41 to 8.88 ms | 8.47 to 8.92 ms |
+| Setter | 10 000 | 0.085 to 0.096 ms | 0.119 to 0.144 ms | 0.143 to 0.200 ms | 0.58 to 8.97 ms |
+| Measurement on a 1M-sample record (cached) | 10 000 | 0.076 ms | 0.112 to 0.114 ms | 0.129 to 0.136 ms | 0.46 to 0.54 ms |
+| First measurement of a fresh 1M-sample record | 30 | 1.94 to 2.07 ms | 7.99 to 8.17 ms | 8.12 to 8.66 ms | 8.15 to 8.75 ms |
 
-What the table shows: both NFR-4 targets held, by a wide margin. A setter's p95 was about 0.12 ms against 5 ms. A measurement query's p95 on a 1M-sample record was 0.11 ms from the cache and under 9 ms when it computes the result (the first measurement of a capture, which also finds top and base, takes about 8 ms; the other nine about 2 ms). These are loopback times on one machine with nothing else running; a network adds its round trip to each.
+What the table shows: both NFR-4 targets held, by a wide margin. A setter's p95 was about 0.13 ms against 5 ms. A measurement query's p95 on a 1M-sample record was 0.11 ms from the cache and under 9 ms when it computes the result (the first measurement of a capture, which also finds top and base, takes about 8 ms; the other nine about 2 ms). These are loopback times on one machine with nothing else running; a network adds its round trip to each.
 
-**Through `openscope-client`, a query takes about 44 ms** (`*IDN?` included): the client sends `SYST:ERR?` behind every line, and the server's second reply waits for the client's delayed acknowledgement of the first (Nagle's algorithm, no `TCP_NODELAY` on the server). That is bug #58; `test_pipelined_replies_are_not_delayed` is marked as an expected failure until it is fixed. Setters are not affected (their only reply is the check's), nor is a query sent alone, as timed above.
+**Through `openscope-client`, a query takes about 0.1 ms.** The client sends `SYST:ERR?` behind every line, so a query's two replies leave the server back to back. Until bug #58 was fixed they took about 44 ms: the server did not set `TCP_NODELAY`, so Nagle's algorithm held the second reply until the client's delayed acknowledgement of the first arrived (setting `TCP_NODELAY` on the client's socket changed nothing). The server now sets `TCP_NODELAY` on the acceptor before it listens, and accepted sockets inherit it, as they do the keepalive options. `test_pipelined_replies_are_not_delayed` asserts the fix (median of 50 `*IDN?` through the client under 20 ms).
+
+`*IDN?` through the client, 2 000 queries per run, three runs on the machine above (release engine, load average about 1):
+
+| Path | Median | p95 | p99 | Worst |
+|---|---|---|---|---|
+| Raw socket (`OpenScope.connect`), before the fix | about 44 ms | not measured | not measured | not measured |
+| Raw socket (`OpenScope.connect`) | 0.096 to 0.097 ms | 0.134 to 0.140 ms | 0.153 to 0.166 ms | 0.92 to 1.57 ms |
+| PyVISA (`OpenScope.open_visa`, pyvisa-py) | 0.104 to 0.203 ms | 0.198 to 0.248 ms | 0.238 to 0.356 ms | 0.87 to 2.10 ms |
+
+With the issue's reproducer (raw socket, median of 20): `*IDN?` then `SYST:ERR?` in one write took 44.06 ms before and 0.10 ms after; `*IDN?` alone 0.07 and 0.09 ms; a setter then `SYST:ERR?` 0.10 and 0.08 ms.
 
 ## Long-running stability (soak test)
 
