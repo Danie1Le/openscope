@@ -67,6 +67,8 @@ def test_a_sine_at_ten_samples_per_cycle_has_its_frequency_rms_and_mean(scope):
 #: NFR-5's corner: a record of 10 cycles at 10 samples per cycle (100 kHz at 1 MS/s).
 CORNER_RECORD = 100
 CORNER = Signal(Function.SINE, 100e3, 1.0, -1.0)
+#: The gap between 1 and the next float32.
+FLOAT32_EPSILON = 2.0**-23
 
 
 def test_ten_cycles_at_ten_samples_per_cycle_keep_their_frequency(scope):
@@ -77,10 +79,13 @@ def test_ten_cycles_at_ten_samples_per_cycle_keep_their_frequency(scope):
     assert_measures(scope, CORNER, Measurement.FREQUENCY)
     assert_measures(scope, CORNER, Measurement.PERIOD)
     # Extreme samples fall at most half a sample period (pi/10 of the cycle) from each peak, so
-    # this bound holds wherever the samples fall.
+    # this bound holds wherever the samples fall. With two samples either side of each peak the
+    # reading is the bound itself, less the float32 rounding of the samples and the reply (under
+    # 2 float32 epsilons of the amplitude).
     expected = CORNER.expected(Measurement.PEAK_TO_PEAK)
+    lowest = (math.cos(math.pi / 10) - 2 * FLOAT32_EPSILON) * expected
     peak_to_peak = scope.measure(Measurement.PEAK_TO_PEAK, 1)
-    assert math.cos(math.pi / 10) * expected <= peak_to_peak <= expected, peak_to_peak
+    assert lowest <= peak_to_peak <= expected, peak_to_peak
 
 
 def test_ten_cycles_at_ten_samples_per_cycle_with_noise_keep_their_frequency(scope):
