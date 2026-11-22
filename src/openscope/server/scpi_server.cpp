@@ -319,15 +319,17 @@ void ScpiServer::admit(tcp::socket socket) {
     return;
   }
   std::string peer = describe(endpoint);
-  if (connections_.size() >= kMaxClients) {
-    log_->write("refuse", {{"peer", peer}, {"reason", "too many clients"}});
+  const auto refuse = [&](std::string_view reason) {
+    log_->write("refuse", {{"peer", peer}, {"reason", reason}});
     std::ignore = socket.close(error);
+  };
+  if (connections_.size() >= kMaxClients) {
+    refuse("too many clients");
     return;
   }
   // Without keepalive a vanished client could hold its slot for good.
   if (const error_code keepalive_error = enable_keepalive(socket)) {
-    log_->write("refuse", {{"peer", peer}, {"reason", keepalive_error.message()}});
-    std::ignore = socket.close(error);
+    refuse(keepalive_error.message());
     return;
   }
   auto connection = std::make_shared<Connection>(*this, std::move(socket), std::move(peer));

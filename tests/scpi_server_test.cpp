@@ -482,7 +482,7 @@ TEST_F(ScpiServerTest, DisconnectWhileWaitingOnOpcEndsTheSessionAndFreesItsSlot)
 
 // A client host that loses power or network sends no FIN or RST, and while its line waits on
 // `*OPC?` the idle timeout is off, so only TCP keepalive notices it: its probes go unanswered, the
-// pending read fails and the connection closes as on the disconnect above, freeing the slot. On
+// pending read fails and the connection closes as on a disconnect, freeing the slot. On
 // loopback the client's kernel answers every probe, and making a peer go silent needs privileges
 // tests do not have (a firewall rule or TCP_REPAIR), so this checks the probe settings on the
 // server's end of a connection that waits.
@@ -501,11 +501,12 @@ TEST_F(ScpiServerTest, ProbesAClientThatWaitsOnOpcWithTcpKeepalive) {
   EXPECT_EQ(socket_option(socket, IPPROTO_TCP, TCP_KEEPINTVL),
             ScpiServer::kKeepAliveInterval.count());
   EXPECT_EQ(socket_option(socket, IPPROTO_TCP, TCP_KEEPCNT), ScpiServer::kKeepAliveProbes);
-  // A vanished client is noticed within a minute of its last traffic.
-  EXPECT_LE(
-      ScpiServer::kKeepAliveIdle + ScpiServer::kKeepAliveProbes * ScpiServer::kKeepAliveInterval,
-      std::chrono::minutes(1));
 }
+
+// A vanished client is noticed within a minute of its last traffic.
+static_assert(ScpiServer::kKeepAliveIdle +
+                  ScpiServer::kKeepAliveProbes * ScpiServer::kKeepAliveInterval <=
+              std::chrono::minutes(1));
 
 TEST_F(ScpiServerTest, StoppingTheServerEndsItsSessionsEvenWhileOneWaits) {
   Client waiting(port());

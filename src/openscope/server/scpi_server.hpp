@@ -29,9 +29,10 @@ namespace openscope {
 /// waiting; so does one whose host vanishes (loses power or network, sending no FIN or RST), once
 /// TCP keepalive gives up on it. Connects, refusals, disconnects and errors go to the JsonLog.
 ///
-/// shortcut: kMaxClients connections that each wait on a Single that never ends (Normal mode, no
-/// trigger) block every new connection, including the one that would send `STOP`, until one of
-/// them disconnects or the engine restarts, as on a bench instrument with a client limit.
+/// shortcut: clients can hold all kMaxClients slots on purpose (connections that keep sending
+/// commands, or that wait on a Single that never ends: Normal mode, no trigger); new connections,
+/// including one that would send `STOP`, are then refused until one of them disconnects or the
+/// engine restarts, as on a bench instrument with a client limit.
 ///
 /// All of its work runs on the io_context's thread, which must be one thread, so connections need
 /// no locking. Replies that end on another thread (inside `Instrument::process` or `advance`) are
@@ -44,7 +45,9 @@ class ScpiServer {
   /// TCP keepalive on every connection: after kKeepAliveIdle without traffic, kKeepAliveProbes
   /// probes kKeepAliveInterval apart. A peer that answers none fails the pending read and its
   /// connection closes. The idle timeout is off while a line is held, so this is what frees the
-  /// slot of a client whose host vanished while it waited on `*OPC?` (spec #1, stories 35 and 83).
+  /// slot of a client whose host vanished while it waited on `*OPC?` (spec #1, stories 35 and 83),
+  /// unless it had sent a chunk's worth (4 KB) behind the held line: then no read is pending, and
+  /// the connection closes when the line ends (see Connection::read).
   static constexpr std::chrono::seconds kKeepAliveIdle{30};
   /// See kKeepAliveIdle.
   static constexpr std::chrono::seconds kKeepAliveInterval{5};
