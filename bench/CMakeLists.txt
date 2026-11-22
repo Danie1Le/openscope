@@ -20,6 +20,8 @@ add_library(kissfft_reference STATIC ${kissfft_SOURCE_DIR}/kiss_fft.c)
 target_include_directories(kissfft_reference SYSTEM PUBLIC ${kissfft_SOURCE_DIR})
 target_compile_definitions(kissfft_reference PUBLIC kiss_fft_scalar=double)
 
+# Every Google Benchmark target is named `*_benchmark`: CI runs each one it finds, and it must also
+# be in the `benchmark` build preset's targets. docs/benchmarks.md lists them all.
 add_executable(fft_benchmark fft_benchmark.cpp)
 target_link_libraries(fft_benchmark PRIVATE openscope openscope_warnings benchmark::benchmark_main
   kissfft_reference)
