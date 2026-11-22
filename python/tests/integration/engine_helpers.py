@@ -38,6 +38,10 @@ LONGEST_RECORD = 1048576
 #: Seconds to wait for the engine to start, stop, log an event or reach a state.
 PATIENCE = 20.0
 
+#: How many of its newest log events the `engine` fixture keeps: far more than a test reads or
+#: waits on, and bounded however long the engine runs (the soak logs two per connection, #65).
+KEPT_EVENTS = 1000
+
 #: Runs a test over the raw socket only, where the other transport adds nothing to what it
 #: checks and would only slow it.
 SOCKET_ONLY = pytest.mark.parametrize("transport", ["socket"], indirect=True)
@@ -60,6 +64,15 @@ def eventually(check: Callable[[], bool]) -> None:
     while not check():
         assert time.monotonic() < deadline, "not within the patience"
         time.sleep(0.01)
+
+
+def resident_kib(pid: int) -> int:
+    """The resident memory of process `pid` in KiB, from /proc (Linux only)."""
+    with open(f"/proc/{pid}/status") as status:
+        for line in status:
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1])
+    raise AssertionError(f"no VmRSS line in /proc/{pid}/status")
 
 
 def take_capture(scope: OpenScope) -> None:

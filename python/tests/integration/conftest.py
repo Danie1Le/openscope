@@ -7,19 +7,23 @@ import signal
 import subprocess
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
-from engine_helpers import PATIENCE
+from engine_helpers import KEPT_EVENTS, PATIENCE
 
 from openscope_client import ErrorEntry, OpenScope, SocketStream
 from openscope_client.errors import parse_error_entry
 
+#: How many of the newest events a failure message shows; a sanitizer's report comes last.
+REPORTED_EVENTS = 100
+
 
 class Engine:
-    """A running `openscope-engine` and the events it has logged: its JSON log lines, and any
-    other line it writes to standard error (a sanitizer's report) as an `output` event."""
+    """A running `openscope-engine` and the newest events it has logged: its JSON log lines,
+    and any other line it writes to standard error (a sanitizer's report) as an `output` event."""
 
     def __init__(self, path: str, options: tuple[str, ...]) -> None:
         """Starts the engine; `listen()` waits until it accepts connections."""
@@ -29,7 +33,9 @@ class Engine:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
         )
-        self.events: list[dict[str, Any]] = []
+        self._events: deque[dict[str, Any]] = deque(maxlen=KEPT_EVENTS)
+        #: Where in `_events` `wait_for` looks from, past the events it has passed; negative when
+        #: events it had not looked at were dropped.
         self._seen = 0
         self._raw_sessions: list[RawSession] = []
         self._logged = threading.Condition()
@@ -42,6 +48,12 @@ class Engine:
         """Waits for the `listening` event, which names the port."""
         self.port = self.wait_for("listening")["port"]
 
+    @property
+    def events(self) -> list[dict[str, Any]]:
+        """The newest KEPT_EVENTS events, oldest first: a copy, safe to read while more come."""
+        with self._logged:
+            return list(self._events)
+
     def _read_log(self) -> None:
         assert self._process.stderr is not None
         for line in self._process.stderr:
@@ -50,34 +62,43 @@ class Engine:
             except ValueError:
                 event = {"event": "output", "text": line.decode(errors="replace")}
             with self._logged:
-                self.events.append(event)
+                if len(self._events) == self._events.maxlen:  # The append drops the oldest.
+                    self._seen -= 1
+                self._events.append(event)
                 self._logged.notify_all()
         with self._logged:  # The engine has exited: wake waiters to see it.
             self._logged.notify_all()
 
     def wait_for(self, event: str, **fields: Any) -> dict[str, Any]:
         """The next event named `event` with `fields` among those logged after the one the last
-        call returned, waiting for it to be logged."""
+        call returned, waiting for it to be logged. Fails if events it had not looked at have
+        been dropped from the history: the one it waits for could be among them."""
         deadline = time.monotonic() + PATIENCE
         with self._logged:
             while True:
-                for index in range(self._seen, len(self.events)):
-                    logged = self.events[index]
+                if self._seen < 0:
+                    raise AssertionError(
+                        f"{-self._seen} events dropped before a wait for {event} looked at them; "
+                        f"the newest: {self.newest()}"
+                    )
+                for index in range(self._seen, len(self._events)):
+                    logged = self._events[index]
                     if logged["event"] == event and fields.items() <= logged.items():
                         self._seen = index + 1
                         return logged
                 left = deadline - time.monotonic()
                 if left <= 0 or not self._reader.is_alive():
-                    raise AssertionError(f"no {event} event with {fields} in {self.events}")
+                    raise AssertionError(f"no {event} event with {fields} in {self.newest()}")
                 self._logged.wait(left)
 
-    def resident_kib(self) -> int:
-        """The engine's resident memory in KiB, from /proc (Linux only)."""
-        with open(f"/proc/{self._process.pid}/status") as status:
-            for line in status:
-                if line.startswith("VmRSS:"):
-                    return int(line.split()[1])
-        raise AssertionError("no VmRSS line in /proc/<pid>/status")
+    def newest(self) -> list[dict[str, Any]]:
+        """The newest REPORTED_EVENTS events, for a failure message."""
+        return self.events[-REPORTED_EVENTS:]
+
+    @property
+    def pid(self) -> int:
+        """The engine's process ID."""
+        return self._process.pid
 
     def raw_session(self) -> "RawSession":
         """A Session over a raw socket, closed when the engine stops."""
@@ -138,7 +159,7 @@ def start_engine() -> Iterator[Callable[..., Engine]]:
 
     yield start
     statuses = [engine.stop() for engine in engines]
-    assert statuses == [0] * len(engines), [engine.events for engine in engines]
+    assert statuses == [0] * len(engines), [engine.newest() for engine in engines]
 
 
 @pytest.fixture

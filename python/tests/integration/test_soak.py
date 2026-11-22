@@ -1,7 +1,7 @@
 """The long stability test (spec story 79): the engine runs live for OPENSCOPE_SOAK_SECONDS
 (default 600) while several clients use every part of it at once, and must keep measuring right,
-keep its memory flat and exit cleanly. It runs only on demand: `pytest --soak -m soak`, or the
-Soak workflow (workflow_dispatch) in CI."""
+keep its memory flat and exit cleanly; the test's own memory must stay flat too. It runs only on
+demand: `pytest --soak -m soak`, or the Soak workflow (workflow_dispatch) in CI."""
 
 import functools
 import os
@@ -11,7 +11,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from engine_helpers import RECORD_LENGTH, SOCKET_ONLY, take_capture
+from engine_helpers import RECORD_LENGTH, SOCKET_ONLY, resident_kib, take_capture
 from ground_truth import Signal, assert_measures
 
 from openscope_client import FaultKind, Function, Measurement, OpenScope, ScpiError
@@ -22,9 +22,14 @@ SECONDS = float(os.environ.get("OPENSCOPE_SOAK_SECONDS", "600"))
 #: Seconds between two memory readings; the first, after the clients have warmed up, is the
 #: baseline.
 MEMORY_INTERVAL = 5.0
-#: How much the engine's resident memory may grow after the baseline. A release engine stays
-#: near 5 MiB under this load, so this much more is growth, not noise.
+#: How much the resident memory of the engine, and of the test itself, may grow after the
+#: baseline. A release engine stays near 5 MiB under this load, and the test keeps a bounded
+#: engine log (#65), so this much more is growth, not noise.
 MEMORY_GROWTH_KIB = 32 * 1024
+#: Seconds the churn worker pauses after each round: at most 100 connections a second, so the
+#: sockets each leaves in TIME_WAIT for a minute hold a few thousand ephemeral ports, well short
+#: of the ~14,000 that connect() picks from (#65).
+CHURN_PAUSE = 0.01
 #: The levels `FFT:DATA?` replies for the `*RST` record, whose first 8192 samples it takes.
 SPECTRUM_LENGTH = 8192 // 2 + 1
 
@@ -79,11 +84,12 @@ def change_settings(scope: OpenScope, round_number: int) -> None:
 
 
 def churn(port: int, _: int) -> None:
-    """Connects, makes a mistake, reads it, and disconnects."""
+    """Connects, makes a mistake, reads it, disconnects, and pauses."""
     with OpenScope.connect("127.0.0.1", port, 10.0) as scope:
         assert scope.identify().manufacturer == "OpenScope"
         with pytest.raises(ScpiError, match="Undefined header"):
             scope.write("SYST:BOGUS")
+    time.sleep(CHURN_PAUSE)
 
 
 def test_the_engine_holds_up_under_load(engine, open_client):
@@ -104,19 +110,23 @@ def test_the_engine_holds_up_under_load(engine, open_client):
 
     until = time.monotonic() + SECONDS
     stop = threading.Event()
-    memory: list[int] = []
+    processes = {"engine": engine.pid, "test": os.getpid()}
+    memory: dict[str, list[int]] = {name: [] for name in processes}
     with ThreadPoolExecutor(len(steps)) as pool:
         running = [pool.submit(rounds, step, until, stop) for step in steps]
         try:
             while not all(work.done() for work in running):
                 if stop.wait(MEMORY_INTERVAL if time.monotonic() < until else 0.1):
                     break  # A worker failed; the others stop within a round.
-                memory.append(engine.resident_kib())
+                for name, pid in processes.items():
+                    memory[name].append(resident_kib(pid))
         finally:
             stop.set()  # Also when interrupted (the Soak workflow's timeout sends SIGINT).
         counts = [work.result() for work in running]  # Raises what a worker raised.
 
-    print(f"\nRounds per worker {counts}; resident KiB {memory[0]} warmed up, {max(memory)} max")
+    readings = ", ".join(f"{name} {kib[0]} {max(kib)}" for name, kib in memory.items())
+    print(f"\nRounds per worker {counts}; resident KiB warmed up and max: {readings}")
     assert min(counts) > 0, counts
-    assert max(memory) - memory[0] < MEMORY_GROWTH_KIB, memory
+    for name, kib in memory.items():
+        assert max(kib) - kib[0] < MEMORY_GROWTH_KIB, (name, kib)
     assert scope.identify().manufacturer == "OpenScope"
