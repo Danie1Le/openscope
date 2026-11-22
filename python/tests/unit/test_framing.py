@@ -5,9 +5,9 @@ import os
 import time
 
 import pytest
-from fake_instrument import Hangup, block_reply, scripted
+from fake_instrument import Hangup, Trickle, block_reply, scripted
 
-from openscope_client import ProtocolError
+from openscope_client import ProtocolError, transport
 
 
 def test_query_returns_the_reply_without_its_newline_and_checks_the_error_queue(connect):
@@ -172,6 +172,67 @@ def test_a_connection_closed_mid_reply_is_an_error_that_closes_the_client(connec
         connected.scope.query("X?")
     with pytest.raises(ConnectionError, match="closed"):
         connected.scope.query("X?")
+
+
+def test_a_reply_that_trickles_in_past_the_timeout_times_out_and_closes_the_client(connect):
+    # Each byte comes well within the timeout; the whole reply does not. (The raw socket raises
+    # at the timeout; pyvisa-py's read runs on to the `\n` first, see VisaStream._receive.)
+    connected = connect(scripted({"X?": Trickle(b"123456789\n", 0.1)}))
+    connected.scope.timeout = 0.5
+
+    with pytest.raises(TimeoutError):
+        connected.scope.query("X?")
+    with pytest.raises(ConnectionError, match="closed"):
+        connected.scope.query("X?")
+
+
+def test_the_longest_reply_the_instrument_sends_is_read(connect):
+    # `WAV:DATA?` in ASCII at the longest record, every value as long as a float32 gets.
+    reply = b",".join([b"-1.23456789E-38"] * 1048576)
+    connected = connect(scripted({"WAV:DATA?": reply + b"\n"}))
+
+    assert connected.scope.query("WAV:DATA?").encode() == reply
+
+
+def test_a_block_header_claiming_more_than_the_limit_is_refused_before_its_data(connect):
+    connected = connect(scripted({"WAV:DATA?": b"#9999999999\n"}))
+    started = time.monotonic()
+
+    with pytest.raises(ProtocolError, match="longer than"):
+        connected.scope.query("WAV:DATA?")
+    assert time.monotonic() - started < 1  # It did not wait for the data.
+    with pytest.raises(ConnectionError, match="closed"):
+        connected.scope.query("X?")
+
+
+@pytest.mark.parametrize(
+    ("reply", "fits"),
+    [
+        (b"1" * 12 + b"\n", True),
+        (b"1" * 13 + b"\n", False),
+        (b"1" * 13, False),  # No newline comes at all.
+        (b"#19" + b"\n" * 9 + b"\n", True),
+        (b"1#19" + b"\n" * 9 + b"\n", False),
+        (b"1;#13\n\n\n;234\n", True),
+        (b"1;#13\n\n\n;2345\n", False),  # The line after a block counts too.
+    ],
+    ids=["line", "long-line", "endless-line", "block", "long-block", "mixed", "long-mixed"],
+)
+def test_a_response_longer_than_the_limit_is_a_protocol_error_that_closes_the_client(
+    connect, monkeypatch, reply, fits
+):
+    # 12 bytes: the error check's `0,"No error"` fits.
+    monkeypatch.setattr(transport, "MAX_RESPONSE_BYTES", 12)
+    connected = connect(scripted({"X?": reply, "Y?": b"2\n"}))
+
+    if fits:
+        assert connected.scope.query("X?").encode() == reply[:-1]
+        assert connected.scope.query("Y?") == "2"
+    else:
+        with pytest.raises(ProtocolError, match="longer than 12 bytes"):
+            connected.scope.query("X?")
+        with pytest.raises(ConnectionError, match="closed"):
+            connected.scope.query("Y?")
 
 
 def test_a_closed_client_refuses_every_call(connect):

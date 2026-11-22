@@ -16,7 +16,7 @@ from openscope_client.errors import (
     ScpiError,
     parse_error_entry,
 )
-from openscope_client.transport import SocketStream, Stream, block_payload, read_response
+from openscope_client.transport import SocketStream, Stream, block_payload
 
 #: The line that reads the next entry of a Session's error queue.
 _NEXT_ERROR = b"SYST:ERR?\n"
@@ -363,7 +363,8 @@ class OpenScope:
 
     Lines run one at a time, each after the reply to the one before. A transport error
     (TimeoutError, ConnectionError) or a malformed response closes the client, since a late or
-    unread reply would be read as the answer to the next line.
+    unread reply would be read as the answer to the next line. Each response must arrive whole
+    within `timeout` and hold at most `transport.MAX_RESPONSE_BYTES` bytes.
     """
 
     def __init__(self, stream: Stream) -> None:
@@ -401,7 +402,7 @@ class OpenScope:
 
     @property
     def timeout(self) -> float | None:
-        """Seconds to wait for each reply, such as `*OPC?` waiting for a Single."""
+        """Seconds each reply may take to arrive whole, such as `*OPC?` waiting for a Single."""
         return self._open_stream().timeout
 
     @timeout.setter
@@ -528,11 +529,11 @@ class OpenScope:
         with self._transport() as stream:
             stream.write(f"{line}\n".encode("ascii") + _NEXT_ERROR)
             # A line that fails sends no reply, so the first response may be the check's.
-            response = read_response(stream)
+            response = stream.read_response()
             entry = parse_error_entry(response)
             reply = None if entry is not None else response
             if entry is None:
-                entry = _error_entry(read_response(stream))
+                entry = _error_entry(stream.read_response())
             errors: list[ErrorEntry] = []
             while entry.code != NO_ERROR.code:
                 if len(errors) == _QUEUE_DEPTH:
@@ -562,7 +563,7 @@ class OpenScope:
 def _next_error(stream: Stream) -> ErrorEntry:
     """Removes and returns the oldest entry of the Session's error queue."""
     stream.write(_NEXT_ERROR)
-    return _error_entry(read_response(stream))
+    return _error_entry(stream.read_response())
 
 
 def _error_entry(response: bytes) -> ErrorEntry:

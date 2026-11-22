@@ -3,6 +3,7 @@
 import contextlib
 import socket
 import threading
+import time
 from collections import deque
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -17,9 +18,17 @@ class Hangup:
     data: bytes = b""
 
 
-#: What a fake instrument does with one line: bytes to send back, None to send nothing, or
-#: a Hangup.
-Response = bytes | None | Hangup
+@dataclass(frozen=True)
+class Trickle:
+    """A response that sends `data` one byte every `interval` seconds."""
+
+    data: bytes
+    interval: float
+
+
+#: What a fake instrument does with one line: bytes to send back, None to send nothing, a
+#: Hangup, or a Trickle.
+Response = bytes | None | Hangup | Trickle
 
 
 def block_reply(data: bytes) -> bytes:
@@ -74,7 +83,11 @@ class FakeInstrument:
                     if isinstance(response, Hangup):
                         connection.sendall(response.data)
                         return
-                    if response is not None:
+                    if isinstance(response, Trickle):
+                        for byte in response.data:
+                            time.sleep(response.interval)
+                            connection.sendall(bytes([byte]))
+                    elif response is not None:
                         connection.sendall(response)
 
     def close(self) -> None:
