@@ -145,9 +145,13 @@ def test_auto_mode_takes_an_untriggered_capture_every_auto_timeout(scope):
 
 # The square wave rises every 1000 samples. The next capture collects its 50000 pre-trigger
 # samples after the previous one ends, 50000 after its trigger event, so with no holdoff the next
-# event that places a capture is 100000 samples on; a holdoff of 300.2 ms holds it off to 301000.
+# event that places a capture is 100000 samples on. A holdoff takes the first edge at or after its
+# end: 3 samples short of the edge 300000 samples on, it takes that edge; 3 samples past, the next.
 @SOCKET_ONLY
-@pytest.mark.parametrize(("holdoff", "spacing"), [(0.0, 100_000), (0.3002, 301_000)])
+@pytest.mark.parametrize(
+    ("holdoff", "spacing"),
+    [(0.0, 100_000), (0.299997, 300_000), (0.300003, 301_000), (0.3002, 301_000)],
+)
 def test_the_holdoff_spaces_the_trigger_events_of_captures(scope, holdoff, spacing):
     start_index_clock(scope)
     Signal(Function.SQUARE).apply(scope)
