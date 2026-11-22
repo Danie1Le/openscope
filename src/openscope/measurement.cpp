@@ -43,11 +43,19 @@ constexpr double kFewestLevelSamples = 24.0;
 /// of the signal's span spreads a level over about this many bins of 256.
 constexpr std::size_t kLevelBins = 4;
 
-/// The counts and sums of samples in kHistogramBins equal bins from `low` volts up.
+/// The share of a level's samples that must be dwelling (see Histogram). Noise leaves a settled
+/// level well above this (noise alone on a flat signal: about 1/8), while a signal that only
+/// passes through a cluster of samples has almost none dwelling. A share, not a count: a narrow
+/// pulse's level holds just over a settled level's samples, and noise takes some of them out.
+constexpr double kLeastDwellingShare = 1.0 / 16.0;
+
+/// The counts and sums of samples in kHistogramBins equal bins from `low` volts up, and how many of
+/// each bin's samples are dwelling: within kLevelBins bins of the sample before or after them.
 struct Histogram {
   double low;
   double bins_per_volt;
   std::array<std::size_t, kHistogramBins> counts{};
+  std::array<std::size_t, kHistogramBins> dwelling{};
   std::array<double, kHistogramBins> sums{};
 };
 
@@ -65,11 +73,20 @@ Histogram make_histogram(std::span<const float> samples, float low, float high) 
   Histogram histogram{
       .low = low,
       .bins_per_volt = static_cast<double>(kHistogramBins) / (static_cast<double>(high) - low)};
-  for (const float sample : samples) {
+  const double dwelling_volts = static_cast<double>(kLevelBins) / histogram.bins_per_volt;
+  const auto close_to = [&](float sample, std::size_t other) {
+    return std::abs(static_cast<double>(sample) - samples[other]) <= dwelling_volts;
+  };
+  for (std::size_t index = 0; index < samples.size(); ++index) {
+    const float sample = samples[index];
     if (sample >= low && sample <= high) {
       const std::size_t bin = bin_of(histogram, sample);
       ++histogram.counts.at(bin);
       histogram.sums.at(bin) += sample;
+      if ((index > 0 && close_to(sample, index - 1)) ||
+          (index + 1 < samples.size() && close_to(sample, index + 1))) {
+        ++histogram.dwelling.at(bin);
+      }
     }
   }
   return histogram;
@@ -95,25 +112,41 @@ std::size_t outlier_bins(const std::ranges::input_range auto& counts, double set
   return outliers;
 }
 
-/// The mean of the samples in the fullest of `counts`' bins, whose sample sums are `sums`, when
-/// that bin is a settled level; otherwise `fallback`. Ties go to the first bin. Noise spreads a
-/// level over a few bins, so the level is judged by the bins within kLevelBins of the fullest one:
-/// they must hold at least `settled_samples` samples (and kFewestLevelSamples), and
-/// kSettledLevelRatio times what as many bins hold on average. Without the last test, a signal that
-/// sweeps evenly but whose samples land in every second or third bin (a short triangle) would have
-/// a level wherever its bins happen to be fuller.
-double settled_level(std::span<const std::size_t> counts, std::span<const double> sums,
-                     double settled_samples, double fallback) {
+/// Half of kHistogramBins: base is looked for in the lower half of the bins, top in the upper.
+constexpr std::size_t kHalf = kHistogramBins / 2;
+
+/// The mean of the samples in the fullest of the kHalf bins of `histogram` from `begin` when that
+/// bin is a settled level; otherwise `fallback`. Ties go to the first bin. Noise spreads a level
+/// over a few bins, so the level is judged by the bins within kLevelBins of the fullest one: they
+/// must hold at least `settled_samples` samples (and kFewestLevelSamples), and kSettledLevelRatio
+/// times what as many bins hold on average. Without that test, a signal that sweeps evenly but
+/// whose samples land in every second or third bin (a short triangle) would have a level wherever
+/// its bins happen to be fuller. And at least kLeastDwellingShare of those bins' samples must be
+/// dwelling, so that the signal stays at the level: one sampled at the same few phases of every
+/// cycle (a triangle at 30 samples per cycle, a sine at 10) piles its samples into narrow clusters
+/// with nothing between them, each far fuller than the average, but only passes through them (#52).
+/// With fewer than 4 samples per period a level may have no sample next to another at its own
+/// level, so none dwells and top and base are the extremes, a spike included: such a signal is
+/// undersampled and outside the measurement range.
+double settled_level(const Histogram& histogram, std::size_t begin, double settled_samples,
+                     double fallback) {
+  const auto counts = std::span(histogram.counts).subspan(begin, kHalf);
+  const auto dwelling = std::span(histogram.dwelling).subspan(begin, kHalf);
+  const auto sums = std::span(histogram.sums).subspan(begin, kHalf);
   const auto fullest = static_cast<std::size_t>(std::ranges::max_element(counts) - counts.begin());
   const std::size_t first = fullest - std::min(fullest, kLevelBins);
   const std::size_t last = std::min(fullest + kLevelBins, counts.size() - 1);
   const std::span<const std::size_t> around = counts.subspan(first, last - first + 1);
+  const std::span<const std::size_t> dwelling_around = dwelling.subspan(first, around.size());
   const auto level = static_cast<double>(std::reduce(around.begin(), around.end()));
   const auto all = static_cast<double>(std::reduce(counts.begin(), counts.end()));
   const double as_many_on_average =
       all * static_cast<double>(around.size()) / static_cast<double>(counts.size());
+  const auto level_dwelling =
+      static_cast<double>(std::reduce(dwelling_around.begin(), dwelling_around.end()));
   if (level < std::max(settled_samples, kFewestLevelSamples) ||
-      level < kSettledLevelRatio * as_many_on_average) {
+      level < kSettledLevelRatio * as_many_on_average ||
+      level_dwelling < kLeastDwellingShare * level) {
     return fallback;
   }
   return sums[fullest] / static_cast<double>(counts[fullest]);
@@ -159,11 +192,8 @@ SignalLevels find_levels(std::span<const float> samples) {
   }
   // The kept samples get a histogram of their own, so a far outlier costs the levels no resolution.
   const Histogram kept = make_histogram(samples, low, high);
-  constexpr std::size_t kHalf = kHistogramBins / 2;
-  levels.base = settled_level(std::span(kept.counts).first<kHalf>(),
-                              std::span(kept.sums).first<kHalf>(), settled_samples, low);
-  levels.top = settled_level(std::span(kept.counts).last<kHalf>(),
-                             std::span(kept.sums).last<kHalf>(), settled_samples, high);
+  levels.base = settled_level(kept, 0, settled_samples, low);
+  levels.top = settled_level(kept, kHalf, settled_samples, high);
   return levels;
 }
 
