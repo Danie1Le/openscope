@@ -775,13 +775,24 @@ void Instrument::process(const AcquiredBlock& block) {
     const std::scoped_lock lock(mutex_);
     publish(block, capture, results);
   };
-  const std::optional<std::size_t> single_end = assemble(block, publish_measured);
+  // A Single's capture, the only one its block completes, is kept measured until the Single ends,
+  // and published in the same hold of the mutex: no command falls between the two, so a command
+  // that has seen the capture finds the instrument Stopped.
+  std::shared_ptr<const Capture> single_capture;
+  CaptureResults single_results;
+  const CaptureSink keep_measured = [&](const std::shared_ptr<const Capture>& capture) {
+    single_results = measure_all(*capture);
+    single_capture = capture;
+  };
+  const std::optional<std::size_t> single_end = assemble(
+      block, capture_limit(block) == CaptureLimit::kFirst ? keep_measured : publish_measured);
   if (!single_end) {
     return;
   }
   bool rest_runs = false;
   {
     const std::scoped_lock lock(mutex_);
+    publish(block, single_capture, single_results);
     rest_runs = conclude(block);
   }
   // RUN came after the block was acquired for a Single. The Single still ends at its capture, and
@@ -840,12 +851,14 @@ std::optional<std::size_t> Instrument::assemble(const AcquiredBlock& block,
     }
   }
   assembled_generation_ = block.generation;
+  return captures_.push(block.samples, block.acquisition, block.channels, block.trigger,
+                        capture_limit(block), on_completed);
+}
+
+CaptureLimit Instrument::capture_limit(const AcquiredBlock& block) const {
   // Once RUN has ended this generation's Single, its other Armed-single blocks are captured as
   // Running, as if they had been acquired after RUN.
-  const CaptureLimit limit =
-      block.generation == run_generation_ ? CaptureLimit::kEvery : block.limit;
-  return captures_.push(block.samples, block.acquisition, block.channels, block.trigger, limit,
-                        on_completed);
+  return block.generation == run_generation_ ? CaptureLimit::kEvery : block.limit;
 }
 
 void Instrument::publish(const AcquiredBlock& block, const std::shared_ptr<const Capture>& capture,

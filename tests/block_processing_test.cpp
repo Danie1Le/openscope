@@ -346,5 +346,40 @@ TEST_F(BlockProcessingTest, AcquiringOnAnotherThreadWhileCommandsChangeTheGenera
   EXPECT_EQ(session.next_error(), test::kNoErrorReply);
 }
 
+/// Runs one Single on a fresh instrument while another thread acquires and processes 50-sample
+/// blocks, and sends a setting change the moment the Single's capture is visible. Returns true
+/// when that capture stayed the latest: the Single had ended, so nothing was captured after it.
+bool single_capture_stays_latest() {
+  Instrument instrument(7);
+  ScpiSession session(instrument);
+  session.send("TRIG:POS 0;LEV 100;:ACQ:POIN 100");
+  session.send("SINGle");
+  std::thread processing([&] {
+    for (std::optional<AcquiredBlock> block = instrument.acquire(50); block;
+         block = instrument.acquire(50)) {
+      instrument.process(*block);
+    }
+  });
+  std::shared_ptr<const Capture> single;
+  while (single == nullptr) {  // The Single always completes: Auto takes an untriggered capture.
+    single = instrument.latest_capture();
+  }
+  session.send("CHAN1:OFFS 0");
+  processing.join();
+  return instrument.latest_capture() == single;
+}
+
+// The processing thread publishes a Single's capture and ends the Single in one hold of the
+// mutex. With a gap between the two, a command that has already seen the capture could land in
+// it and leave the Single armed for a second capture (about 1 trial in 400 without the fix).
+TEST(BlockProcessingRaceTest, CommandAfterASinglesCaptureFindsTheSingleEnded) {
+  constexpr int kTrials = 3000;
+  int second_captures = 0;
+  for (int trial = 0; trial < kTrials; ++trial) {
+    second_captures += single_capture_stays_latest() ? 0 : 1;
+  }
+  EXPECT_EQ(second_captures, 0);
+}
+
 }  // namespace
 }  // namespace openscope
