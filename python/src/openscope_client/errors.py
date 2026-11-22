@@ -1,6 +1,7 @@
 """What the client raises, and the error-queue entries the instrument reports."""
 
 import re
+from collections.abc import Callable
 from typing import NamedTuple
 
 
@@ -41,6 +42,15 @@ class ProtocolError(Exception):
     connection, because it no longer knows where the next reply starts."""
 
 
+def parsed_reply[T](parse: Callable[[str], T], text: str) -> T:
+    """`parse(text)`, with a ValueError (a malformed reply, or a number too long for `int`)
+    raised as ProtocolError."""
+    try:
+        return parse(text)
+    except ValueError as error:
+        raise ProtocolError(f"unexpected reply {text[:40]!r}") from error
+
+
 _ERROR_ENTRY = re.compile(rb'([+-]?[0-9]+),"((?:[^"]|"")*)"')
 
 
@@ -50,4 +60,4 @@ def parse_error_entry(response: bytes) -> ErrorEntry | None:
     if match is None:
         return None
     message = match[2].replace(b'""', b'"').decode("utf-8", "replace")
-    return ErrorEntry(int(match[1]), message)
+    return ErrorEntry(parsed_reply(int, match[1].decode("ascii")), message)

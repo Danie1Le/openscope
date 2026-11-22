@@ -15,11 +15,15 @@ from openscope_client.errors import (
     ProtocolError,
     ScpiError,
     parse_error_entry,
+    parsed_reply,
 )
-from openscope_client.transport import SocketStream, Stream, block_payload, read_response
+from openscope_client.transport import SocketStream, Stream, block_payload
 
 #: The line that reads the next entry of a Session's error queue.
 _NEXT_ERROR = b"SYST:ERR?\n"
+#: The most entries a Session's error queue holds (docs/scpi-reference.md, Error queue): a peer
+#: that reports more for one line is not following the protocol.
+_QUEUE_DEPTH = 20
 #: A query of the error queue, in any of its forms: the client reads the queue itself after
 #: every line, so a line that replied an entry could not be told from that check. Compound
 #: lines are refused too: `*CLS;SYST:ERR?` replies an entry alone.
@@ -138,20 +142,12 @@ class WaveformData:
         return tuple((index - position) / rate for index in range(len(self.samples)))
 
 
-def _parsed[T](parse: Callable[[str], T], text: str) -> T:
-    """`parse(text)`, with a malformed reply raised as ProtocolError."""
-    try:
-        return parse(text)
-    except ValueError as error:
-        raise ProtocolError(f"unexpected reply {text!r}") from error
-
-
 def _number(text: str) -> float:
-    return _parsed(float, text)
+    return parsed_reply(float, text)
 
 
 def _whole(text: str) -> int:
-    return _parsed(int, text)
+    return parsed_reply(int, text)
 
 
 def _flag(text: str) -> bool:
@@ -205,7 +201,7 @@ _CHANNEL = _Codec(_channel, lambda channel: f"CHAN{channel}")
 
 def _keyword[T](choices: type[T]) -> _Codec[T]:
     """The codec of a keyword setting whose choices are the StrEnum `choices`."""
-    return _Codec(lambda text: _parsed(choices, text), str)
+    return _Codec(lambda text: parsed_reply(choices, text), str)
 
 
 class _Subsystem:
@@ -358,9 +354,11 @@ class OpenScope:
     the instrument rejects sends no reply, so this check is also how the client knows not to
     wait for one.
 
-    Lines run one at a time, each after the reply to the one before. A transport error
-    (TimeoutError, ConnectionError) or a malformed response closes the client, since a late or
-    unread reply would be read as the answer to the next line.
+    Lines run one at a time, each after the reply to the one before. Any exception while a line
+    and its error check are on the wire closes the client: a transport error (TimeoutError,
+    ConnectionError), a malformed response, a KeyboardInterrupt. A late or unread reply would
+    otherwise be read as the answer to the next line. Each response must arrive whole within
+    `timeout` and hold at most `transport.MAX_RESPONSE_BYTES` bytes.
     """
 
     def __init__(self, stream: Stream) -> None:
@@ -398,7 +396,7 @@ class OpenScope:
 
     @property
     def timeout(self) -> float | None:
-        """Seconds to wait for each reply, such as `*OPC?` waiting for a Single."""
+        """Seconds each reply may take to arrive whole, such as `*OPC?` waiting for a Single."""
         return self._open_stream().timeout
 
     @timeout.setter
@@ -522,16 +520,19 @@ class OpenScope:
             raise ValueError("a line cannot hold a newline; send each line on its own")
         if _ERROR_QUERY.search(line):
             raise ValueError("read the error queue with next_error()")
+        sent = f"{line}\n".encode("ascii") + _NEXT_ERROR
         with self._transport() as stream:
-            stream.write(f"{line}\n".encode("ascii") + _NEXT_ERROR)
+            stream.write(sent)
             # A line that fails sends no reply, so the first response may be the check's.
-            response = read_response(stream)
+            response = stream.read_response()
             entry = parse_error_entry(response)
             reply = None if entry is not None else response
             if entry is None:
-                entry = _error_entry(read_response(stream))
+                entry = _error_entry(stream.read_response())
             errors: list[ErrorEntry] = []
             while entry.code != NO_ERROR.code:
+                if len(errors) == _QUEUE_DEPTH:
+                    raise ProtocolError(f"more than {_QUEUE_DEPTH} error-queue entries")
                 errors.append(entry)
                 entry = _next_error(stream)
         if errors:
@@ -545,11 +546,12 @@ class OpenScope:
 
     @contextmanager
     def _transport(self) -> Iterator[Stream]:
-        """The stream, closed when an exchange on it fails part way."""
+        """The stream, closed when an exchange on it ends part way, for whatever reason
+        (KeyboardInterrupt included): its replies may still be on the wire."""
         stream = self._open_stream()
         try:
             yield stream
-        except (OSError, ProtocolError):
+        except BaseException:
             self.close()
             raise
 
@@ -557,7 +559,7 @@ class OpenScope:
 def _next_error(stream: Stream) -> ErrorEntry:
     """Removes and returns the oldest entry of the Session's error queue."""
     stream.write(_NEXT_ERROR)
-    return _error_entry(read_response(stream))
+    return _error_entry(stream.read_response())
 
 
 def _error_entry(response: bytes) -> ErrorEntry:

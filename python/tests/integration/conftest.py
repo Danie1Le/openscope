@@ -14,7 +14,6 @@ import pytest
 
 from openscope_client import ErrorEntry, OpenScope, SocketStream
 from openscope_client.errors import parse_error_entry
-from openscope_client.transport import read_response
 
 #: Seconds to wait for the engine to start, stop or log an event.
 PATIENCE = 20.0
@@ -107,7 +106,7 @@ class RawSession:
     def query(self, line: str) -> str:
         """Sends `line` and returns its reply."""
         self._stream.write(f"{line}\n".encode())
-        return read_response(self._stream).decode()
+        return self._stream.read_response().decode()
 
     def next_error(self) -> ErrorEntry | None:
         """The oldest entry of the Session's error queue (None if the reply is not one)."""

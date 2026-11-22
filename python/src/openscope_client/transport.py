@@ -2,9 +2,20 @@
 
 import re
 import socket
-from typing import Protocol
+import time
+from abc import ABC, abstractmethod
 
 from openscope_client.errors import ProtocolError
+
+#: The most bytes one response message may hold, its `\n` aside; a longer one raises
+#: ProtocolError before it is read. The longest reply OpenScope sends is `WAV:DATA?` in ASCII
+#: at the longest record: 1048576 points (`ACQuire:POINts` in docs/scpi-reference.md,
+#: `Capture::kMaxRecordLength` in src/openscope/capture.hpp), each at most 16 bytes with its
+#: comma (the shortest float32 form is at most 9 digits, a sign, a point and `E-38`): 16 MiB.
+#: REAL blocks take 4 bytes per point (4 MiB), `FFT:DATA?` 4 bytes per bin, at most half a
+#: record plus one (2 MiB). Four times the longest leaves room; a line of several such queries
+#: can exceed it.
+MAX_RESPONSE_BYTES = 64 * 2**20
 
 _NEWLINE = ord("\n")
 _HASH = ord("#")
@@ -15,69 +26,120 @@ _MARK = re.compile(rb"[\n\"'#]")
 _STRING_END = {quote: re.compile(b"[\n" + bytes([quote]) + b"]") for quote in _QUOTES}
 
 
-class Stream(Protocol):
-    """A connection to the instrument as a byte stream. Each transport (raw socket, PyVISA)
-    provides one, so the client has one API over both.
+class _Deadline:
+    """When the response being read must have arrived whole: `timeout` seconds from now."""
 
-    Reads raise TimeoutError when nothing arrives within `timeout` seconds (None waits for ever)
-    and ConnectionError when the connection is lost.
+    def __init__(self, timeout: float | None) -> None:
+        self._end = None if timeout is None else time.monotonic() + timeout
+
+    def remaining(self) -> float | None:
+        """Seconds left, or None for no deadline. Raises TimeoutError when none are left."""
+        if self._end is None:
+            return None
+        left = self._end - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("the response did not arrive whole within the timeout")
+        return left
+
+
+def _too_long() -> ProtocolError:
+    return ProtocolError(f"a response longer than {MAX_RESPONSE_BYTES} bytes")
+
+
+class Stream(ABC):
+    """A connection to the instrument as a byte stream. Each transport (raw socket, PyVISA) is
+    one, supplying how bytes are written and received; reading response messages is shared, so
+    the client has one API and one set of limits over both.
+
+    Reads raise TimeoutError when a response has not arrived whole within `timeout` seconds of
+    the read starting (None waits for ever) and ConnectionError when the connection is lost.
     """
 
-    timeout: float | None
-
-    def write(self, data: bytes) -> None:
-        """Sends all of `data`."""
-
-    def read_line(self) -> bytes:
-        """Reads up to and including the next `\\n`."""
-
-    def read_exact(self, count: int) -> bytes:
-        """Reads exactly `count` bytes, whatever their values."""
-
-    def close(self) -> None:
-        """Closes the connection."""
-
-
-class SocketStream:
-    """A Stream over a TCP socket: the raw-socket transport. Its members do what Stream says."""
-
-    _CHUNK = 65536
-
-    def __init__(self, host: str, port: int, timeout: float | None) -> None:
-        """Connects to `host`:`port`, waiting up to `timeout` seconds for it and for each read."""
-        self._socket = socket.create_connection((host, port), timeout)
+    def __init__(self) -> None:
         self._received = bytearray()
 
     @property
+    @abstractmethod
     def timeout(self) -> float | None:
-        return self._socket.gettimeout()
+        """Seconds a whole response may take to arrive; None waits for ever."""
 
     @timeout.setter
-    def timeout(self, seconds: float | None) -> None:
-        self._socket.settimeout(seconds)
+    @abstractmethod
+    def timeout(self, seconds: float | None) -> None: ...
 
+    @abstractmethod
     def write(self, data: bytes) -> None:
-        self._socket.sendall(data)
+        """Sends all of `data`."""
 
-    def read_line(self) -> bytes:
+    @abstractmethod
+    def close(self) -> None:
+        """Closes the connection."""
+
+    @abstractmethod
+    def _receive(self, timeout: float | None) -> bytes:
+        """The bytes that have arrived, waiting up to `timeout` seconds (None: for ever) for
+        some. Raises TimeoutError when none arrive in time, ConnectionError when the connection
+        is lost."""
+
+    def read_response(self) -> bytes:
+        """Reads one response message and returns it without its `\\n`.
+
+        A `\\n` ends the message only outside definite-length blocks (`#<n><length><bytes>`),
+        whose bytes may take any value, `\\n` included, and outside quoted strings (IEEE 488.2).
+        Raises ProtocolError for a malformed block header, a string that the line ends inside,
+        or a message longer than MAX_RESPONSE_BYTES.
+        """
+        deadline = _Deadline(self.timeout)
+        message = bytearray(self._read_line(MAX_RESPONSE_BYTES, deadline))
+        position = 0
+        quote: int | None = None
+        while True:
+            if position == len(message):  # A block ended the bytes read so far.
+                message += self._read_line(MAX_RESPONSE_BYTES - len(message), deadline)
+            # Skip to the next byte that can end the message, or a string or block (a long ASCII
+            # waveform is megabytes of digits and commas).
+            mark = (_MARK if quote is None else _STRING_END[quote]).search(message, position)
+            assert mark is not None, "every line read ends with a newline"
+            position = mark.start()
+            byte = message[position]
+            if byte == _NEWLINE:
+                if quote is not None:
+                    raise ProtocolError(f"response ends inside a string: {bytes(message)!r}")
+                return bytes(message[:position])
+            if quote is not None:  # The closing quote.
+                quote = None
+            elif byte in _QUOTES:
+                quote = byte
+            elif byte == _HASH:
+                _, end = _block_extent(message, position)
+                if end > MAX_RESPONSE_BYTES:
+                    raise _too_long()
+                if end > len(message):
+                    message += self._read_exact(end - len(message), deadline)
+                position = end
+                continue
+            position += 1
+
+    def _read_line(self, limit: int, deadline: _Deadline) -> bytes:
+        """Reads up to and including the next `\\n`, which must come within `limit` bytes."""
         searched = 0
-        while (newline := self._received.find(b"\n", searched)) < 0:
+        while (newline := self._received.find(b"\n", searched, limit + 1)) < 0:
+            if len(self._received) > limit:
+                raise _too_long()
             searched = len(self._received)
-            self._receive()
+            self._receive_by(deadline)
         return self._take(newline + 1)
 
-    def read_exact(self, count: int) -> bytes:
+    def _read_exact(self, count: int, deadline: _Deadline) -> bytes:
+        """Reads exactly `count` bytes, whatever their values."""
         while len(self._received) < count:
-            self._receive()
+            self._receive_by(deadline)
         return self._take(count)
 
-    def close(self) -> None:
-        self._socket.close()
-
-    def _receive(self) -> None:
-        chunk = self._socket.recv(self._CHUNK)
-        if not chunk:
-            raise ConnectionError("the instrument closed the connection")
+    def _receive_by(self, deadline: _Deadline) -> None:
+        """Adds what arrives to the bytes received, raising TimeoutError past `deadline`."""
+        chunk = self._receive(deadline.remaining())
+        deadline.remaining()  # A transport's read may run past its timeout (VisaStream).
         self._received += chunk
 
     def _take(self, count: int) -> bytes:
@@ -86,40 +148,39 @@ class SocketStream:
         return taken
 
 
-def read_response(stream: Stream) -> bytes:
-    """Reads one response message and returns it without its `\\n`.
+class SocketStream(Stream):
+    """A Stream over a TCP socket: the raw-socket transport. Its members do what Stream says."""
 
-    A `\\n` ends the message only outside definite-length blocks (`#<n><length><bytes>`), whose
-    bytes may take any value, `\\n` included, and outside quoted strings (IEEE 488.2). Raises
-    ProtocolError for a malformed block header or a string that the line ends inside.
-    """
-    message = bytearray(stream.read_line())
-    position = 0
-    quote: int | None = None
-    while True:
-        if position == len(message):  # A block ended the bytes read so far.
-            message += stream.read_line()
-        # Skip to the next byte that can end the message, or a string or block (a long ASCII
-        # waveform is megabytes of digits and commas).
-        mark = (_MARK if quote is None else _STRING_END[quote]).search(message, position)
-        assert mark is not None, "every line read ends with a newline"
-        position = mark.start()
-        byte = message[position]
-        if byte == _NEWLINE:
-            if quote is not None:
-                raise ProtocolError(f"response ends inside a string: {bytes(message)!r}")
-            return bytes(message[:position])
-        if quote is not None:  # The closing quote.
-            quote = None
-        elif byte in _QUOTES:
-            quote = byte
-        elif byte == _HASH:
-            _, end = _block_extent(message, position)
-            if end > len(message):
-                message += stream.read_exact(end - len(message))
-            position = end
-            continue
-        position += 1
+    _CHUNK = 65536
+
+    def __init__(self, host: str, port: int, timeout: float | None) -> None:
+        """Connects to `host`:`port`, waiting up to `timeout` seconds for it and for each
+        response."""
+        super().__init__()
+        self._socket = socket.create_connection((host, port), timeout)
+        self._timeout = timeout
+
+    @property
+    def timeout(self) -> float | None:
+        return self._timeout
+
+    @timeout.setter
+    def timeout(self, seconds: float | None) -> None:
+        self._timeout = seconds
+
+    def write(self, data: bytes) -> None:
+        self._socket.settimeout(self._timeout)
+        self._socket.sendall(data)
+
+    def close(self) -> None:
+        self._socket.close()
+
+    def _receive(self, timeout: float | None) -> bytes:
+        self._socket.settimeout(timeout)
+        chunk = self._socket.recv(self._CHUNK)
+        if not chunk:
+            raise ConnectionError("the instrument closed the connection")
+        return chunk
 
 
 def block_payload(response: bytes) -> bytes:
