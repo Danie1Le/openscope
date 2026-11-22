@@ -79,7 +79,7 @@ cd python && ../.venv/bin/ruff check . && ../.venv/bin/ruff format --check .
 OPENSCOPE_ENGINE_PATH=$PWD/../build/release/src/openscope-engine ../.venv/bin/pytest
 ```
 
-The TCP suite checks every measurement against the Generator's ground truth within the spec's NFR-5 and NFR-6 tolerances, the trigger, faults, run control, statistics and the FFT. `pytest -m latency -s` prints the SCPI latency numbers (NFR-4); the long stability test runs only when asked for, with `OPENSCOPE_SOAK_SECONDS=3600 pytest -m soak` or the Soak workflow. See `docs/benchmarks.md` for both.
+The TCP suite checks every measurement against the Generator's ground truth within the spec's NFR-5 and NFR-6 tolerances, the trigger, faults, run control, statistics and the FFT. `pytest -m latency -s` prints the SCPI latency numbers (NFR-4); the long stability test runs only when asked for, with `OPENSCOPE_SOAK_SECONDS=3600 pytest --soak -m soak` or the Soak workflow. See `docs/benchmarks.md` for both.
 
 ## Fuzzing
 

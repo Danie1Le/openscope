@@ -1,7 +1,7 @@
 """The long stability test (spec story 79): the engine runs live for OPENSCOPE_SOAK_SECONDS
 (default 600) while several clients use every part of it at once, and must keep measuring right,
-keep its memory flat and exit cleanly. It runs only on demand: `pytest -m soak`, or the Soak
-workflow (workflow_dispatch) in CI."""
+keep its memory flat and exit cleanly. It runs only on demand: `pytest --soak -m soak`, or the
+Soak workflow (workflow_dispatch) in CI."""
 
 import functools
 import os
