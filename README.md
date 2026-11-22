@@ -96,7 +96,7 @@ New inputs go to `fuzz-corpus`, the first directory; `fuzz/corpus` holds the com
 
 ## Coverage
 
-CI fails when line coverage of the trigger, measurement and SCPI parser sources is under 85 % (NFR-11). The threshold and the files are in `tools/coverage_gate.py`; the llvm-cov report is the `llvm-cov-report` artifact of the CI run.
+CI fails when line coverage of any of the trigger, measurement and SCPI parser areas is under 85 % (NFR-11); each area is gated on its own, not on the sum. The threshold, the areas and their files are in `tools/coverage_gate.py`; the llvm-cov report is the `llvm-cov-report` artifact of the CI run.
 
 ```sh
 CXX=clang++-18 cmake --preset coverage && cmake --build --preset coverage && ctest --preset coverage
