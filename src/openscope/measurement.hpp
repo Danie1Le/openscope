@@ -69,7 +69,7 @@ struct Edge {
 };
 
 /// The whole cycles of a signal, each from one edge's 50% crossing to the next crossing in the same
-/// direction, counted with edges across the 30% and 70% reference levels.
+/// direction, counted with edges across 30% and 70%.
 struct WholeCycles {
   /// The edges from the first one to the last that ends a whole cycle.
   std::vector<Edge> edges;
@@ -95,8 +95,8 @@ class MeasuredSignal {
   [[nodiscard]] const SignalLevels& levels() const { return levels_; }
   /// Samples per second the capture was taken at, which turns sample counts into seconds.
   [[nodiscard]] double sample_rate() const { return sample_rate_; }
-  /// The whole cycles, or nullopt when there is not one or they are not known: the signal crossed
-  /// the 40% and 60% levels and back between two of their edges for long enough to be a cycle
+  /// The whole cycles, or nullopt when there is not one or they are not known: between two edges
+  /// across 30% and 70%, the signal crossed 40% and 60% and back for long enough to be a cycle
   /// (GLOSSARY: Doubtful cycle).
   [[nodiscard]] const std::optional<WholeCycles>& whole_cycles() const;
   /// The edges across the 10% and 90% reference levels, in order: what rise and fall time average.
