@@ -1,11 +1,13 @@
 // The shared test helpers that are not tested where they are used: eventually, padded, send_live,
-// advance_in_steps and float32_reply.
+// advance_in_steps, float32_reply and measurement_index.
 
 #include <gtest/gtest-spi.h>
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cstddef>
 #include <optional>
+#include <span>
 #include <string>
 #include <thread>
 #include <vector>
@@ -13,6 +15,8 @@
 #include "binary_block.hpp"
 #include "eventually.hpp"
 #include "instrument_fixture.hpp"
+#include "measurement_fixture.hpp"
+#include "openscope/measurement.hpp"
 #include "scpi_session.hpp"
 
 namespace openscope::test {
@@ -85,6 +89,20 @@ TEST_F(UntriggeredDcFixture, SendLiveFailsALineThatNeverEnds) {
                           "has not ended");
   EXPECT_EQ(reply, std::nullopt);
   session.close();  // Drops the held line.
+}
+
+TEST(MeasurementIndexTest, IsThePositionOfTheMnemonicInMeasurements) {
+  const std::span<const Measurement> all = measurements();
+
+  EXPECT_EQ(all[measurement_index("VPP")].mnemonic, "VPP");
+  EXPECT_EQ(all[measurement_index("FALLtime")].mnemonic, "FALLtime");
+}
+
+TEST(MeasurementIndexTest, FailsTheTestForAnUnknownMnemonic) {
+  std::size_t index = 0;
+
+  EXPECT_NONFATAL_FAILURE(index = measurement_index("FREQ"), "no measurement FREQ");
+  EXPECT_EQ(index, measurements().size());
 }
 
 }  // namespace

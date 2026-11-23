@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <format>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -513,14 +514,11 @@ TEST(TimingSteppingTest, RepliesDoNotDependOnHowTheClockIsStepped) {
 /// (1 V/div, so a 1 V swing is a signal), taken at one sample per second so that times read in
 /// samples.
 MeasurementResult measure(std::string_view mnemonic, std::span<const float> samples) {
-  const std::span<const Measurement> all = measurements();
-  const auto row = std::ranges::find(all, mnemonic, &Measurement::mnemonic);
-  if (row == all.end()) {
-    ADD_FAILURE() << "no measurement " << mnemonic;
+  const std::size_t index = test::measurement_index(mnemonic);
+  if (index == measurements().size()) {
     return {.status = MeasurementStatus::kOk, .value = std::nullopt};
   }
-  return evaluate(*row, ChannelSettings{},
-                  {.samples = samples, .levels = find_levels(samples), .sample_rate = 1.0});
+  return evaluate(measurements()[index], ChannelSettings{}, MeasuredSignal(samples));
 }
 
 /// A pulse train's high samples per 100-sample period and where its first period starts.
@@ -614,6 +612,81 @@ TEST(LowDutyPulsesTest, UnderOneSampleIn128IsNoSignal) {
   EXPECT_EQ(measure("FREQuency", pulse_train(10'000, 1000, 7)).status,
             MeasurementStatus::kNoSignal);
   EXPECT_EQ(measure("FREQuency", pulse_train(10'000, 1000, 8)).value, 0.001);
+}
+
+TEST(MeasuredSignalTest, ViewsItsSamplesAndFindsTheirLevels) {
+  const std::vector<float> samples = pulse_train(300, 100, 50);
+  const MeasuredSignal signal(samples, 1000.0);
+
+  EXPECT_EQ(signal.samples().data(), samples.data());
+  EXPECT_EQ(signal.samples().size(), samples.size());
+  EXPECT_EQ(signal.sample_rate(), 1000.0);
+  EXPECT_EQ(signal.levels().top, 1.0);
+  EXPECT_EQ(signal.levels().base, 0.0);
+}
+
+// Low for 50 samples, then high for 50: 50% crossings at 49.5, 99.5, ... 299.5. Six edges bound
+// two whole cycles from the first rising edge; the falling edge at 299.5 ends no whole cycle.
+TEST(MeasuredSignalTest, WholeCyclesRunFromTheFirstEdgeToTheLastThatEndsOne) {
+  const std::vector<float> samples = pulse_train(350, 100, 50);
+  const MeasuredSignal signal(samples);
+
+  const std::optional<WholeCycles>& cycles = signal.whole_cycles();
+  ASSERT_TRUE(cycles.has_value());
+  EXPECT_EQ(cycles->count, 2U);
+  EXPECT_EQ(cycles->length, 200.0);
+  ASSERT_EQ(cycles->edges.size(), 5U);
+  EXPECT_EQ(cycles->edges.front().direction, Edge::Direction::kRising);
+  EXPECT_EQ(cycles->edges.front().middle, 49.5);
+  EXPECT_EQ(cycles->edges.back().middle, 249.5);
+}
+
+TEST(MeasuredSignalTest, UnderOneWholeCycleHasNone) {
+  const std::vector<float> samples = pulse_train(150, 100, 50);
+
+  EXPECT_EQ(MeasuredSignal(samples).whole_cycles(), std::nullopt);
+}
+
+// Each step edge takes 0.8 sample periods from 10% to 90%, and the edges alternate.
+TEST(MeasuredSignalTest, RiseFallEdgesAreEveryCompleteEdgeInOrder) {
+  const std::vector<float> samples = pulse_train(350, 100, 50);
+  const MeasuredSignal signal(samples);
+
+  const std::span<const Edge> edges = signal.rise_fall_edges();
+  ASSERT_EQ(edges.size(), 6U);
+  for (std::size_t index = 0; index < edges.size(); ++index) {
+    EXPECT_EQ(edges[index].direction,
+              index % 2 == 0 ? Edge::Direction::kRising : Edge::Direction::kFalling);
+    EXPECT_DOUBLE_EQ(edges[index].middle, 49.5 + (50.0 * static_cast<double>(index)));
+    EXPECT_NEAR(edges[index].duration, 0.8, 1e-9);
+  }
+}
+
+TEST(MeasuredSignalTest, FindsTheEdgesOnceForEveryMeasurement) {
+  const std::vector<float> samples = pulse_train(350, 100, 50);
+  const MeasuredSignal signal(samples);
+
+  EXPECT_EQ(&signal.whole_cycles(), &signal.whole_cycles());
+  EXPECT_EQ(signal.rise_fall_edges().data(), signal.rise_fall_edges().data());
+}
+
+// Measurements that share one signal's edges reply exactly what each replies on a signal of its
+// own, whichever measurement finds the edges first.
+TEST(MeasuredSignalTest, SharedEdgesGiveEachMeasurementItsOwnResult) {
+  std::vector<float> rises(50, 0.0F);
+  append_rise(rises, 8);
+  append_rise(rises, 16);
+  for (const std::vector<float>& samples :
+       {pulse_train(1000, 100, 30, 10), rises, pulse_train(150, 100, 50)}) {
+    const MeasuredSignal shared(samples, 1000.0);
+    for (const Measurement& measurement : std::views::reverse(measurements())) {
+      const MeasurementResult alone =
+          evaluate(measurement, ChannelSettings{}, MeasuredSignal(samples, 1000.0));
+      const MeasurementResult result = evaluate(measurement, ChannelSettings{}, shared);
+      EXPECT_EQ(result.status, alone.status) << measurement.mnemonic;
+      EXPECT_EQ(result.value, alone.value) << measurement.mnemonic;
+    }
+  }
 }
 
 }  // namespace

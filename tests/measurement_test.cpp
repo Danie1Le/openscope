@@ -1,7 +1,7 @@
 // Amplitude measurements (MEAS:VPP?, VMIN?, VMAX?, VAV?, VRMS?), the measurement status each
 // result carries (OK, Clipped, or No signal for a measurement that needs edges or cycles; the
-// timing measurements and Too few cycles are in timing_measurement_test.cpp) and the top and base
-// levels the statuses start from.
+// timing measurements and Too few cycles are in timing_measurement_test.cpp), the top and base
+// levels the statuses start from, and measure_all.
 
 #include "openscope/measurement.hpp"
 
@@ -43,6 +43,7 @@ using test::kParameterNotAllowedReply;
 using test::kResetRecordLength;
 using test::kSettingsConflictReply;
 using test::kUntriggeredCaptures;
+using test::measurement_index;
 using test::MeasurementTest;
 using test::number;
 using test::ScpiSession;
@@ -656,6 +657,60 @@ TEST_F(MeasurementTest, SignalWithoutSettledLevelsFallsBackToItsExtremes) {
   const SignalLevels levels = find_levels(samples);
   EXPECT_DOUBLE_EQ(levels.top, highest);
   EXPECT_DOUBLE_EQ(levels.base, lowest);
+}
+
+/// The result in `results` of the measurement queried as `mnemonic` on channel `channel` (1 to 4).
+/// Fails the test and returns an empty result when the channel has no results.
+MeasurementResult result_of(const CaptureResults& results, std::size_t channel,
+                            std::string_view mnemonic) {
+  const std::vector<MeasurementResult> channel_results =
+      results.at(channel - 1).value_or(std::vector<MeasurementResult>{});
+  if (channel_results.size() != measurements().size()) {
+    ADD_FAILURE() << "CH" << channel << " has " << channel_results.size() << " results";
+    return {};
+  }
+  return channel_results.at(measurement_index(mnemonic));
+}
+
+TEST(MeasureAllTest, MeasuresEveryMeasurementOfEveryCapturedChannelOnly) {
+  Capture capture;
+  capture.channels.at(0).emplace(
+      CapturedChannel{.settings = {.enabled = true}, .samples = {0.0F, 1.0F, 2.0F, 3.0F}});
+  capture.channels.at(2).emplace(
+      CapturedChannel{.settings = {.enabled = true}, .samples = {-1.0F, -1.0F}});
+
+  const CaptureResults results = measure_all(capture);
+
+  EXPECT_EQ(result_of(results, 1, "VPP").value, 3.0);
+  EXPECT_EQ(result_of(results, 1, "VAVerage").value, 1.5);
+  EXPECT_FALSE(results.at(1).has_value());
+  EXPECT_EQ(result_of(results, 3, "VMAX").value, -1.0);
+  EXPECT_FALSE(results.at(3).has_value());
+}
+
+TEST(MeasureAllTest, ResultsCarryTheirStatus) {
+  Capture capture;
+  // -4 V is the lower limit of the input range at 1 V/div.
+  capture.channels.at(0).emplace(
+      CapturedChannel{.settings = {.enabled = true}, .samples = {-4.0F, 1.0F}});
+
+  const CaptureResults results = measure_all(capture);
+
+  EXPECT_EQ(result_of(results, 1, "VPP").status, MeasurementStatus::kClipped);
+  EXPECT_EQ(result_of(results, 1, "VPP").value, 5.0);
+}
+
+// Timing measurements turn sample counts into seconds with the capture's sample rate.
+TEST(MeasureAllTest, TimingMeasurementsUseTheCapturesSampleRate) {
+  Capture capture;
+  capture.sample_rate = 1000.0;
+  capture.channels.at(0).emplace(
+      CapturedChannel{.settings = {.enabled = true}, .samples = test::pulse_train(100, 10, 5)});
+
+  const CaptureResults results = measure_all(capture);
+
+  EXPECT_EQ(result_of(results, 1, "FREQuency").status, MeasurementStatus::kOk);
+  EXPECT_DOUBLE_EQ(result_of(results, 1, "FREQuency").value.value_or(0.0), 100.0);
 }
 
 }  // namespace

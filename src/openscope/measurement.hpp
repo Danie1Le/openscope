@@ -56,14 +56,58 @@ struct SignalLevels {
 /// so samples that stray from the rest briefly (a spike, a short glitch) do not move them.
 SignalLevels find_levels(std::span<const float> samples);
 
-/// What a measurement reads: one channel's samples from a capture and their levels.
-struct MeasuredSignal {
-  /// The channel's samples in volts, at least one.
-  std::span<const float> samples;
+/// One move of the signal from beyond one level of a hysteresis band to beyond the other (GLOSSARY:
+/// Edge). Its times are in sample periods.
+struct Edge {
+  enum class Direction : std::uint8_t { kRising, kFalling };
+  Direction direction = Direction::kRising;
+  /// When the edge last crossed the 50% level, from the first sample.
+  double middle = 0.0;
+  /// How long the edge took from last leaving the band level it started from (the lower one when
+  /// rising, the upper one when falling) to reaching the other one.
+  double duration = 0.0;
+};
+
+/// The whole cycles of a signal, each from one edge's 50% crossing to the next crossing in the same
+/// direction, counted with edges across the 30% and 70% reference levels.
+struct WholeCycles {
+  /// The edges from the first one to the last that ends a whole cycle.
+  std::vector<Edge> edges;
+  /// How many whole cycles they bound.
+  std::size_t count = 0;
+  /// Sample periods from the first edge's 50% crossing to the last one's.
+  double length = 0.0;
+};
+
+/// What a measurement reads: one channel's samples from a capture, their levels, and the edges the
+/// timing measurements share. The levels are found when it is made; the whole cycles and the
+/// rise/fall edges on first use, once however many measurements read them (FREQ, PER and DUTY share
+/// one search for whole cycles, RIS and FALL one for edges). Any thread may read it.
+class MeasuredSignal {
+ public:
+  /// The signal of `samples` (at least one, in volts), taken at `sample_rate` samples per second.
+  /// It views `samples`, which must outlive it.
+  explicit MeasuredSignal(std::span<const float> samples, double sample_rate = 1.0);
+
+  /// The channel's samples in volts.
+  [[nodiscard]] std::span<const float> samples() const { return samples_; }
   /// The levels of those samples.
-  SignalLevels levels;
+  [[nodiscard]] const SignalLevels& levels() const { return levels_; }
   /// Samples per second the capture was taken at, which turns sample counts into seconds.
-  double sample_rate = 1.0;
+  [[nodiscard]] double sample_rate() const { return sample_rate_; }
+  /// The whole cycles, or nullopt when there is not one or they are not known: the signal crossed
+  /// the 40% and 60% levels and back between two of their edges for long enough to be a cycle
+  /// (GLOSSARY: Doubtful cycle).
+  [[nodiscard]] const std::optional<WholeCycles>& whole_cycles() const;
+  /// The edges across the 10% and 90% reference levels, in order: what rise and fall time average.
+  [[nodiscard]] std::span<const Edge> rise_fall_edges() const;
+
+ private:
+  std::span<const float> samples_;
+  SignalLevels levels_;
+  double sample_rate_;
+  mutable ComputedOnce<std::optional<WholeCycles>> whole_cycles_;
+  mutable ComputedOnce<std::vector<Edge>> rise_fall_edges_;
 };
 
 /// One automatic measurement: the SCPI mnemonic it is queried by and how it is computed. The
@@ -92,6 +136,14 @@ inline constexpr double kNoSignalDivisions = 0.2;
 MeasurementResult evaluate(const Measurement& measurement, const ChannelSettings& settings,
                            const MeasuredSignal& signal);
 
+/// Every measurement of every channel of one capture: indexed by channel number - 1, then by
+/// position in measurements(); nullopt for a channel that is not in the capture.
+using CaptureResults = std::array<std::optional<std::vector<MeasurementResult>>, kChannelCount>;
+
+/// Every measurement of every channel in `capture`. It reads nothing but `capture` and keeps no
+/// state, so any thread may call it without a lock.
+CaptureResults measure_all(const Capture& capture);
+
 /// The measurement engine: measures channels of a capture on demand and caches each result for as
 /// long as that capture is the one asked about, so repeated queries of the latest capture cost
 /// nothing after the first. Any thread may use it: Sessions measure at the same time, and two
@@ -106,9 +158,11 @@ class MeasurementEngine {
                             std::size_t measurement);
 
  private:
-  /// One channel's levels and its results, by measurement position.
+  /// One channel's signal and its results, by measurement position. The signal views the
+  /// capture's samples: the cache drops it when another capture is asked about, and only callers
+  /// holding its capture still read it.
   struct ChannelResults {
-    ComputedOnce<SignalLevels> levels;
+    ComputedOnce<std::unique_ptr<const MeasuredSignal>> signal;
     std::vector<ComputedOnce<MeasurementResult>> results =
         std::vector<ComputedOnce<MeasurementResult>>(measurements().size());
   };
