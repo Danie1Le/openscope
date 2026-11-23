@@ -146,10 +146,10 @@ class Instrument {
   /// there is none, through `publish_measured` here. A Single's capture is measured here, also
   /// without the mutex, and published with the Single's end in one hold of it, so a long one holds
   /// up processing while it is measured (the blocks acquired meanwhile follow the Single's capture
-  /// and are of no use unless `RUN` came first). A capture is
-  /// counted, and becomes the latest capture in the same hold of the mutex, only when no command
-  /// has discarded the capture in progress since the block was acquired, so neither ever holds
-  /// settings older than a command that has already returned. A Single's capture stops the
+  /// and are of no use unless `RUN` came first). A capture is counted, and becomes the latest
+  /// capture in the same hold of the mutex, only when no command has discarded the capture in
+  /// progress since the block was acquired, so neither ever holds settings older than a command
+  /// that has already returned. A Single's capture stops the
   /// instrument and hands each line held on it to its Session's Resumer; this thread runs none of
   /// them, so the ring buffer keeps draining. When `RUN` has ended the Single since the block was
   /// acquired, the rest of the block, and every later block acquired while the Single was armed,

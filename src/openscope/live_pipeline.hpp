@@ -34,8 +34,8 @@ struct LiveCounters {
 /// A measuring thread measures and publishes the Running captures processing completes, so
 /// measuring a long capture, which takes longer than the ring buffer holds blocks, never holds up
 /// processing (#71); a Single's capture is still measured by processing (Instrument::process).
-/// When processing falls behind and the buffer is full, the block is dropped and
-/// counted; when acquisition falls behind the wall clock, the samples it skips are counted too.
+/// When processing falls behind and the buffer is full, the block is dropped and counted; when
+/// acquisition falls behind the wall clock, the samples it skips are counted too.
 /// When measuring falls behind, processing waits for it, so its captures are never lost unseen:
 /// the blocks that then overflow the ring buffer are counted as dropped. The threads start when
 /// the pipeline is built and stop when it is destroyed; blocks still in the buffer are dropped
