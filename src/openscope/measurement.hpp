@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "openscope/capture.hpp"
+#include "openscope/capture_cache.hpp"
 #include "openscope/channel.hpp"
 
 namespace openscope {

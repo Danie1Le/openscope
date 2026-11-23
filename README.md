@@ -145,7 +145,7 @@ Longer runs are recorded in [`docs/incidents.md`](docs/incidents.md). It also ho
 
 CI fails when line coverage of the trigger, measurement or SCPI parser area is under 85 % (NFR-11). Each area is gated on its own, not on the sum.
 
-The trigger area holds edge detection (`trigger.cpp`), capture assembly (`capture.cpp`: pre-trigger samples, holdoff, the Auto timeout and where time zero lands) and block assembly (`block_assembler.cpp`: discarding the capture in progress at a settings change or a dropped block). `tools/coverage_gate.py` sets the threshold, the areas and their files. The llvm-cov report is the `llvm-cov-report` artifact of the CI run.
+The trigger area holds edge detection (`trigger.cpp`), capture assembly (`capture_assembler.cpp`: pre-trigger samples, holdoff, the Auto timeout and where time zero lands) and block assembly (`block_assembler.cpp`: discarding the capture in progress at a settings change or a dropped block). `tools/coverage_gate.py` sets the threshold, the areas and their files. The llvm-cov report is the `llvm-cov-report` artifact of the CI run.
 
 ```sh
 CXX=clang++-18 cmake --preset coverage && cmake --build --preset coverage && ctest --preset coverage

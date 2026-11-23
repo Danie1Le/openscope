@@ -24,7 +24,7 @@ AREAS = {
     # at a settings change or a dropped block (spec #1: Acquisition).
     "trigger": [
         "src/openscope/trigger.cpp",
-        "src/openscope/capture.cpp",
+        "src/openscope/capture_assembler.cpp",
         "src/openscope/block_assembler.cpp",
     ],
     "measurement": [

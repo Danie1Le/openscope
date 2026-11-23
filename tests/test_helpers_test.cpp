@@ -21,6 +21,7 @@
 #include "instrument_fixture.hpp"
 #include "measurement_fixture.hpp"
 #include "openscope/capture.hpp"
+#include "openscope/capture_assembler.hpp"
 #include "openscope/measurement.hpp"
 #include "openscope/sample_block.hpp"
 #include "openscope/sample_clock.hpp"

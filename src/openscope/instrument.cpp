@@ -16,6 +16,7 @@
 
 #include "openscope/acquired_block.hpp"
 #include "openscope/capture.hpp"
+#include "openscope/capture_assembler.hpp"
 #include "openscope/channel.hpp"
 #include "openscope/completed_capture.hpp"
 #include "openscope/generator.hpp"
@@ -293,8 +294,7 @@ std::optional<AcquiredBlock> Instrument::acquire(std::size_t count) {
     throw std::invalid_argument("sample block longer than kMaxBlockLength");
   }
   std::unique_lock lock(mutex_);
-  const SampleIndex first = clock_.now();
-  clock_.take(count);
+  const SampleIndex first = clock_.take(count);
   std::optional<AcquiredBlock> block = snapshot();
   if (!block) {
     return std::nullopt;
