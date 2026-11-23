@@ -53,6 +53,13 @@ class CommandTreeTest : public testing::Test {
             NumericParameter{.min = 0.0, .max = 10.0, .unit = "V"},
             NumericParameter{.min = 0.0, .max = 1.0, .unit = "S"}},
            std::nullopt, 2);
+    // Replies as many bytes as its parameter asks for, as a bulk query such as WAV:DATA? does.
+    tree.add({.header = "TEST:BULK?",
+              .parameters = {NumericParameter{.min = 0.0, .max = 1e9, .unit = ""}},
+              .handler = [](Session&, const Arguments& arguments) -> HandlerResult {
+                return std::string(static_cast<std::size_t>(std::get<double>(arguments.values[0])),
+                                   'x');
+              }});
   }
 
   /// Adds `header`, whose handler records its call and returns `result`.
@@ -501,6 +508,49 @@ TEST_F(CommandTreeTest, RepliesBeforeAnErrorAreKept) {
   EXPECT_EQ(next_error_code(), kUndefinedHeader.code);
 }
 
+/// `:TEST:BULK? <bytes>`, for the reply-limit tests: absolute, so it may follow any command.
+std::string bulk(std::size_t bytes) { return ":TEST:BULK? " + std::to_string(bytes); }
+
+// The Python client reads at most this much (transport.MAX_RESPONSE_BYTES): the two must agree.
+TEST(ReplyLimitTest, IsSixtyFourMebibytes) { EXPECT_EQ(kMaxReplyLength, 64U * 1024U * 1024U); }
+
+TEST_F(CommandTreeTest, RepliesUpToTheLimitAreReplied) {
+  const std::size_t first = kMaxReplyLength / 2;
+  const std::size_t second = kMaxReplyLength - first - 1;  // The joining ';' takes the last byte.
+
+  const std::optional<std::string> reply = send(bulk(first) + ";" + bulk(second));
+
+  EXPECT_EQ(reply.value_or("").size(), kMaxReplyLength);
+  EXPECT_EQ(next_error_code(), 0);
+}
+
+TEST_F(CommandTreeTest, ReplyOneByteOverTheLimitQueuesTooMuchDataAndDiscardsTheRestOfTheLine) {
+  const std::size_t first = kMaxReplyLength / 2;
+  const std::size_t second = kMaxReplyLength - first;
+
+  const std::optional<std::string> reply =
+      send(bulk(first) + ";" + bulk(second) + ";*TST?;:TRIG:MODE AUTO");
+
+  EXPECT_EQ(reply.value_or("").size(), first);  // The replies that fit are kept.
+  EXPECT_EQ(next_error_code(), kTooMuchData.code);
+  EXPECT_EQ(next_error_code(), 0);
+  EXPECT_TRUE(calls.empty());  // Neither *TST? nor TRIG:MODE ran.
+}
+
+TEST_F(CommandTreeTest, SingleReplyOverTheLimitIsNotReplied) {
+  EXPECT_EQ(send(bulk(kMaxReplyLength + 1)), std::nullopt);
+  EXPECT_EQ(next_error_code(), kTooMuchData.code);
+
+  EXPECT_EQ(send(bulk(kMaxReplyLength)).value_or("").size(), kMaxReplyLength);
+  EXPECT_EQ(next_error_code(), 0);
+}
+
+// Its joining ';' alone would pass the limit.
+TEST_F(CommandTreeTest, EmptyReplyAfterAFullOneIsTooMuchData) {
+  EXPECT_EQ(send(bulk(kMaxReplyLength) + ";" + bulk(0)).value_or("").size(), kMaxReplyLength);
+  EXPECT_EQ(next_error_code(), kTooMuchData.code);
+}
+
 TEST_F(CommandTreeTest, EmptyOrBlankLineDoesNothing) {
   for (const char* line : {"", " ", "\t \t"}) {
     calls.clear();
@@ -586,6 +636,19 @@ TEST_F(HeldLineTest, ErrorAfterTheResumeDiscardsTheRestOfTheLine) {
   EXPECT_FALSE(execution.held());
   EXPECT_EQ(execution.reply(), "0;done");
   EXPECT_EQ(next_error_code(), kUndefinedHeader.code);
+  EXPECT_EQ(next_error_code(), 0);
+}
+
+TEST_F(HeldLineTest, HoldReplyOverTheLimitQueuesTooMuchData) {
+  // `done` and its ';' take five bytes: one more than is left.
+  Execution execution = tree.execute(session, bulk(kMaxReplyLength - 4) + ";*HOLD?;*TST?");
+
+  tree.resume(session, execution);
+
+  EXPECT_FALSE(execution.held());
+  EXPECT_EQ(execution.reply().value_or("").size(), kMaxReplyLength - 4);
+  EXPECT_THAT(headers(), ElementsAre("*HOLD?"));  // *TST? never ran.
+  EXPECT_EQ(next_error_code(), kTooMuchData.code);
   EXPECT_EQ(next_error_code(), 0);
 }
 

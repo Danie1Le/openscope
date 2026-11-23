@@ -4,14 +4,19 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cstddef>
+#include <format>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "binary_block.hpp"
 #include "instrument_fixture.hpp"
 #include "openscope/capture.hpp"
+#include "openscope/instrument.hpp"
+#include "openscope/scpi/command_tree.hpp"
 #include "reply_numbers.hpp"
 #include "scpi_session.hpp"
 
@@ -28,6 +33,7 @@ using test::kNoErrorReply;
 using test::kParameterNotAllowedReply;
 using test::kResetRecordLength;
 using test::kSettingsConflictReply;
+using test::kTooMuchDataReply;
 using test::ScpiSession;
 using testing::Optional;
 using testing::StartsWith;
@@ -216,6 +222,52 @@ TEST_F(WaveformTest, RealDataOfTheLongestRecordFitsOneBlock) {
 
   EXPECT_THAT(reply, StartsWith("#74194304"));
   EXPECT_EQ(decode_float32_block(reply), captured(instrument, 1).samples);
+}
+
+/// The bytes of a `WAV:DATA?` reply in REAL at `points` points: `#`, the digit count, the byte
+/// count, then 4 bytes a point.
+std::size_t real_block_bytes(std::size_t points) {
+  return 2 + std::to_string(4 * points).size() + (4 * points);
+}
+
+/// A line that sets REAL and then asks `WAV:DATA?` `queries` times.
+std::string real_data_queries(std::size_t queries) {
+  std::string line = "WAV:FORM REAL;DATA?";
+  for (std::size_t query = 1; query < queries; ++query) {
+    line += ";DATA?";
+  }
+  return line;
+}
+
+/// The size of the reply to `line` and the first error it queued, on a capture of `points` points.
+std::pair<std::size_t, std::string> bulk_reply(std::size_t points, const std::string& line) {
+  Instrument instrument;
+  ScpiSession session(instrument);
+  session.send(std::format("ACQ:POIN {};:{}", points, test::kUntriggeredCaptures));
+  instrument.advance(points);
+  const std::size_t size = session.send(line).value_or("").size();
+  return {size, session.next_error()};
+}
+
+// 157 blocks of 427 444 bytes and their 156 joining ';' make exactly kMaxReplyLength.
+TEST(ReplyLimitTest, LineOfDataQueriesUpToTheLimitIsReplied) {
+  constexpr std::size_t kPoints = 106'859;
+  constexpr std::size_t kQueries = 157;
+  ASSERT_EQ((kQueries * real_block_bytes(kPoints)) + kQueries - 1, scpi::kMaxReplyLength);
+
+  EXPECT_EQ(bulk_reply(kPoints, real_data_queries(kQueries)),
+            std::pair(scpi::kMaxReplyLength, std::string(kNoErrorReply)));
+}
+
+// 33 blocks of 2 033 602 bytes and their 32 joining ';' are one byte over kMaxReplyLength: the 32
+// blocks before the last are replied.
+TEST(ReplyLimitTest, LineOfDataQueriesOneByteOverTheLimitIsTooMuchData) {
+  constexpr std::size_t kPoints = 508'398;
+  constexpr std::size_t kQueries = 33;
+  ASSERT_EQ((kQueries * real_block_bytes(kPoints)) + kQueries - 1, scpi::kMaxReplyLength + 1);
+
+  EXPECT_EQ(bulk_reply(kPoints, real_data_queries(kQueries)),
+            std::pair((32 * real_block_bytes(kPoints)) + 31, std::string(kTooMuchDataReply)));
 }
 
 // Time zero on the first sample: Auto takes the first 2 samples, and the ramp's trigger event at

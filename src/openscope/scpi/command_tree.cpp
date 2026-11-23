@@ -413,22 +413,33 @@ Execution CommandTree::execute(Session& session, std::string_view line) const {
 }
 
 void CommandTree::resume(Session& session, Execution& execution) const {
-  const auto add_reply = [&execution](std::optional<std::string> answer) {
+  std::vector<ParsedCommand>& commands = execution.commands_;
+  // Joins `answer` to the line's replies; false, with -223 queued, when they would pass
+  // kMaxReplyLength.
+  const auto add_reply = [&](std::optional<std::string> answer) {
     if (!answer) {
-      return;
+      return true;
+    }
+    const std::size_t joined = execution.reply_ ? execution.reply_->size() + 1 : 0;
+    if (joined + answer->size() > kMaxReplyLength) {
+      session.push_error(kTooMuchData);
+      return false;
     }
     if (execution.reply_) {
       execution.reply_->append(1, ';').append(*answer);
     } else {
       execution.reply_ = std::move(answer);
     }
+    return true;
   };
   if (execution.hold_) {
-    add_reply(std::move(execution.hold_->reply));
+    std::optional<std::string> answer = std::move(execution.hold_->reply);
     execution.hold_.reset();
     ++execution.next_;
+    if (!add_reply(std::move(answer))) {
+      execution.next_ = commands.size();
+    }
   }
-  std::vector<ParsedCommand>& commands = execution.commands_;
   for (; execution.next_ < commands.size(); ++execution.next_) {
     ParsedCommand& command = commands[execution.next_];
     // SCPI-99 compound headers: a header without a leading ':' continues from the path of the
@@ -463,7 +474,9 @@ void CommandTree::resume(Session& session, Execution& execution) const {
       session.push_error(std::move(*error));
       break;
     }
-    add_reply(std::move(std::get<std::optional<std::string>>(result)));
+    if (!add_reply(std::move(std::get<std::optional<std::string>>(result)))) {
+      break;
+    }
   }
   // The line has ended; after an error this discards the rest of it.
   execution.next_ = commands.size();

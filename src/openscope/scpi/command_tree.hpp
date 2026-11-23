@@ -70,6 +70,13 @@ struct Hold {
 /// status, puts that entry on the Session's queue itself, so the line carries on.
 using HandlerResult = std::variant<std::optional<std::string>, ScpiError, Hold>;
 
+/// The most bytes the replies of one line may hold, joined with `;` and without the terminator:
+/// 64 MiB, the most the Python client reads (`MAX_RESPONSE_BYTES` in
+/// python/src/openscope_client/transport.py). A 4 KB line holds hundreds of queries, and each
+/// `WAV:DATA?` or `FFT:DATA?` may reply megabytes, so without it one line could build a reply of
+/// gigabytes while every other client waits (#67).
+inline constexpr std::size_t kMaxReplyLength = std::size_t{64} * 1024 * 1024;
+
 /// Runs a matched command for the calling Session.
 using Handler = std::function<HandlerResult(Session&, const Arguments&)>;
 
@@ -174,8 +181,9 @@ class CommandTree {
 
   /// Executes one line for `session` until it ends or a handler holds it, and returns how far it
   /// got. A syntax error anywhere runs nothing. Any other error, including an execution error a
-  /// handler returns, runs the commands before it and discards the rest of the line. Errors go to
-  /// `session`'s queue.
+  /// handler returns and -223 for a reply that would take the line's replies past
+  /// kMaxReplyLength, runs the commands before it, keeps their replies and discards the rest of
+  /// the line. Errors go to `session`'s queue.
   [[nodiscard]] Execution execute(Session& session, std::string_view line) const;
 
   /// Carries on the held `execution` for `session`: the holding command's Hold reply joins the
