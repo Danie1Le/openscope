@@ -194,13 +194,13 @@ The ring buffer holds 64 blocks, about 64 ms at 1 MS/s, so the processing thread
 
 | | Before, this machine | Before, hosted runner | After, this machine | After, hosted runner |
 |---|---|---|---|---|
-| Dropped blocks | 330 | 294 | 0 | HOSTED_DROPPED |
-| Captures discarded | 17 | 17 | 0 | HOSTED_DISCARDED |
-| Skipped samples | 0 | 0 | 0 | HOSTED_SKIPPED |
-| Slowest `*IDN?` in any second | 0.11 ms | 1.25 ms | 0.75 ms | HOSTED_IDN |
+| Dropped blocks | 330 | 294 | 0 | 0 |
+| Captures discarded | 17 | 17 | 0 | 0 |
+| Skipped samples | 0 | 0 | 0 | 0 |
+| Slowest `*IDN?` in any second | 0.11 ms | 1.25 ms | 0.75 ms | 0.02 ms |
 
-The hosted runner is the CI benchmark job's (`ubuntu-24.04`, 4 CPUs; HOSTED_CPUS): the drops were not peculiar to this machine. `LiveLongestRecordTest` (release builds only) asserts no dropped block, no discarded capture and an exact statistics count over five such captures, with and without a client reading waveforms, measurements and statistics meanwhile; it passed 20 runs in a row of all four of its cases here.
+The hosted runner is the CI benchmark job's (`ubuntu-24.04`, 4 CPUs; an AMD EPYC 7763 for the run before, an Intel Xeon 6975P-C for the run after): the drops were not peculiar to this machine. `LiveLongestRecordTest` (release builds only) asserts no dropped block, no discarded capture and an exact statistics count over five such captures, with and without a client reading waveforms, measurements and statistics meanwhile; it passed 20 runs in a row of all four of its cases here.
 
 Singles at the longest record: the processing thread used to measure a Single's capture itself before ending the Single, about 115 ms during which acquisition, still armed, filled and overflowed the ring. Five Singles at 4 x 1M (`SING;*OPC?;:MEAS:STAT? VPP,CHAN1`, release engine, no other client) dropped 43, 46 and 45 blocks in three runs, and one run also discarded a capture. With the Single's capture measured on the measuring thread too, the same three runs dropped and discarded nothing, so NFR-1 now holds for Singles at the longest record as well as for Running; `LiveLongestRecordTest` asserts it for three Singles.
 
-Under TSan, `test_the_holdoff_spaces_the_trigger_events_of_captures` failed 31 of 48 runs before (12 loops of its 4 cases, twice: 31 both times) and TSAN_AFTER of 48 after. Its Single of a 100 000-point capture made the processing thread measure the Single's capture (110 ms under TSan) and then a second, stale capture assembled from the blocks acquired meanwhile (another 110 ms), so the first Running blocks after `RUN` overflowed the ring, the capture in progress was discarded and the trigger restarted, which cut a holdoff short. The processing thread now measures nothing in live mode, and a capture a command has discarded is never published, so never measured.
+Under TSan, `test_the_holdoff_spaces_the_trigger_events_of_captures` failed 31 of 48 runs before (12 loops of its 4 cases, twice: 31 both times) and 0 of 48 after. Its Single of a 100 000-point capture made the processing thread measure the Single's capture (110 ms under TSan) and then a second, stale capture assembled from the blocks acquired meanwhile (another 110 ms), so the first Running blocks after `RUN` overflowed the ring, the capture in progress was discarded and the trigger restarted, which cut a holdoff short. The processing thread now measures nothing in live mode, and a capture a command has discarded is never published, so never measured.
