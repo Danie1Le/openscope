@@ -642,6 +642,28 @@ TEST_F(HeldLineTest, ResumedLineKeepsItsPath) {
   EXPECT_EQ(next_error_code(), 0);
 }
 
+// A command that holds its line with `again` has not run: it runs again, with its relative
+// header's path, when the line carries on, and its second answer is its reply.
+TEST_F(HeldLineTest, HoldAgainRunsTheHoldingCommandAgainOnResume) {
+  int runs = 0;
+  tree.add(
+      {.header = "TRIGger:WAIT?", .parameters = {}, .handler = [&](Session&, const Arguments&) {
+         calls.push_back({.header = "TRIGger:WAIT?", .arguments = {}});
+         return ++runs == 1 ? HandlerResult{Hold{.reply = "never", .again = true}}
+                            : HandlerResult{std::optional<std::string>("ran")};
+       }});
+  Execution execution = tree.execute(session, "TRIG:MODE AUTO;WAIT?;SOUR CHAN2");
+  EXPECT_TRUE(execution.held());
+
+  tree.resume(session, execution);
+
+  EXPECT_FALSE(execution.held());
+  EXPECT_EQ(execution.reply(), "ran");
+  EXPECT_THAT(headers(),
+              ElementsAre("TRIGger:MODE", "TRIGger:WAIT?", "TRIGger:WAIT?", "TRIGger:SOURce"));
+  EXPECT_EQ(next_error_code(), 0);
+}
+
 TEST_F(HeldLineTest, ErrorAfterTheResumeDiscardsTheRestOfTheLine) {
   Execution execution = tree.execute(session, "*TST?;*HOLD?;BOGUS;*TST?");
 

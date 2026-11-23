@@ -104,10 +104,13 @@ class Instrument {
   /// `execute` returns. Once nothing is pending, the Instrument hands the rest of the line to the
   /// Session's Resumer, as its own piece of work, after the reply of the call that ended the
   /// operation (`advance`, `process`, or `execute` for any Session); the rest runs, and `on_reply`
-  /// is called, when that work runs. There is no timeout. A transport waits for `on_reply` without
-  /// blocking, then sends the Session's next line (the Session's commands run in order). Throws
-  /// std::logic_error when `session` still has a line held, and std::out_of_range for a SessionId
-  /// this Instrument did not open or already closed.
+  /// is called, when that work runs. Until every line that operation released has ended or waits
+  /// again, a command of any other Session that reads or changes instrument-wide state waits too,
+  /// and its line carries on through its Resumer once they have, so the released lines see the
+  /// instrument as the operation left it. There is no timeout. A transport waits for `on_reply`
+  /// without blocking, then sends the Session's next line (the Session's commands run in order).
+  /// Throws std::logic_error when `session` still has a line held, and std::out_of_range for a
+  /// SessionId this Instrument did not open or already closed.
   void execute(SessionId session, std::string_view line, ReplyHandler on_reply);
 
   /// Advances the sample clock by `samples` sample indexes with no wall-clock pacing, as tests do
@@ -178,6 +181,9 @@ class Instrument {
     bool holding = false;
     /// Until close_session. Needs mutex_.
     bool open = true;
+    /// From an operation's end, which released its held line, until that line has ended or waits
+    /// again (settle). Needs mutex_.
+    bool released = false;
   };
 
   /// A line from `execute` until it ends, including while `*OPC?` or `*WAI` holds it until no
@@ -312,16 +318,24 @@ class Instrument {
   /// Enters `state`. Stopped and Armed-single drop the capture in progress, so the next capture
   /// starts with the samples after the change; Running keeps it.
   void enter(RunState state);
-  /// Settles `line` once it has run as far as it can: holds it while an operation is pending,
-  /// carries it on at once when the operation ended since `*OPC?` looked, or, once it has ended,
-  /// passes its reply to its handler and hands the held lines the line may have released (`STOP`)
-  /// to their Resumers. Takes mutex_ itself.
+  /// Deals with `line` once it has run as far as it can: keeps it while an operation is pending
+  /// (held by `*OPC?`) or while released lines settle (a command waiting for them), carries it on
+  /// at once when that ended since the command looked, or, once it has ended, passes its reply to
+  /// its handler and hands on the lines it set going (it ended an operation, or was the last
+  /// released line to settle). Takes mutex_ itself.
   void finish(RunningLine line);
   /// Carries on `line`, handed to its Session's Resumer, unless the Session has closed since.
   void resume(RunningLine line);
   /// When no operation is pending, takes every held line, in the order they were held, for
-  /// `hand_on`. Needs mutex_.
+  /// `hand_on`, and marks them released: until each has settled, other Sessions' commands that
+  /// need mutex_ wait, so the released lines carry on as the operation left the instrument (the
+  /// Single's capture and statistics, Stopped). Needs mutex_.
   std::vector<RunningLine> take_woken();
+  /// Counts the released line of `state`, if it has one, as settled; once every released line
+  /// has, returns the lines whose commands waited for them, for `hand_on`. Needs mutex_.
+  std::vector<RunningLine> settle(SessionState& state);
+  /// Whether `caller`'s line is a released one. Needs mutex_.
+  [[nodiscard]] bool released(const Session& caller) const;
   /// Hands each of `lines` to its Session's Resumer, one line per piece of work. Called without
   /// mutex_, since a Resumer may run the work at once.
   void hand_on(std::vector<RunningLine> lines);
@@ -353,6 +367,10 @@ class Instrument {
   /// The lines held while an operation is pending, at most one per Session: a Session with a
   /// held line sends no other.
   std::vector<RunningLine> held_;
+  /// Released lines that have not settled yet (take_woken).
+  std::size_t settling_ = 0;
+  /// Lines of other Sessions whose command waits for the released lines to settle.
+  std::vector<RunningLine> waiting_;
   /// The generation of the blocks acquired from now on (AcquiredBlock::generation).
   std::uint64_t generation_ = 0;
   /// The sequence number of the next block acquired.
