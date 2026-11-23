@@ -14,7 +14,6 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
-#include <utility>
 #include <vector>
 
 #include "instrument_fixture.hpp"
@@ -240,7 +239,7 @@ TEST_F(BlockProcessingTest, BulkDataQueriesTakeNoLock) {
   instrument.process(acquired(instrument, kResetRecordLength));
   ASSERT_EQ(handed.size(), 1U);
   std::vector<std::string> queries = {"WAV:DATA?", "WAV:PRE?", "FFT:DATA?", "FFT:SPAC?",
-                                      "*IDN?", "SYST:ERR?"};
+                                      "*IDN?",     "SYST:ERR?"};
   for (const Measurement& measurement : measurements()) {
     queries.push_back(std::format("MEAS:{}? CHAN1", measurement.mnemonic));
   }
