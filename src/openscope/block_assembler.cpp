@@ -6,6 +6,7 @@
 #include <span>
 
 #include "openscope/acquired_block.hpp"
+#include "openscope/capture.hpp"
 #include "openscope/capture_assembler.hpp"
 #include "openscope/channel.hpp"
 #include "openscope/sample_block.hpp"
