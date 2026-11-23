@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <functional>
 #include <future>
 #include <memory>
 #include <optional>
@@ -21,7 +22,6 @@ namespace openscope {
 namespace {
 
 using Completed = Instrument::CompletedCapture;
-using test::kPatience;
 
 /// A completed capture of `samples` samples, spread over two channels.
 Completed capture_of(std::size_t samples) {
@@ -36,14 +36,41 @@ std::shared_ptr<const Capture> front_capture(MeasuringQueue& queue) {
   return queue.front({}).value_or(Completed{}).capture;
 }
 
-/// Long enough that a call still waiting after it is waiting, not just slow to start.
-constexpr std::chrono::milliseconds kStillWaiting{50};
+/// A queue call that may wait, run on a thread of its own with a stop token. Going out of scope
+/// requests the stop, so a call a failing test left waiting ends instead of hanging the test.
+template <typename Result>
+class Waiting {
+ public:
+  explicit Waiting(std::function<Result(const std::stop_token&)> call)
+      : result_(std::async(std::launch::async, [this, call = std::move(call)] {
+          return call(stopping_.get_token());
+        })) {}
+  Waiting(const Waiting&) = delete;
+  Waiting& operator=(const Waiting&) = delete;
+  Waiting(Waiting&&) = delete;
+  Waiting& operator=(Waiting&&) = delete;
+  ~Waiting() { stopping_.request_stop(); }
 
-/// Whether `call` is still waiting after kStillWaiting.
-template <typename T>
-bool still_waiting(const std::future<T>& call) {
-  return call.wait_for(kStillWaiting) == std::future_status::timeout;
-}
+  /// True when the call has not returned 50 ms on: long enough that it waits, not just starts.
+  [[nodiscard]] bool still_waiting() const {
+    return result_.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout;
+  }
+
+  /// Requests the stop the call was given.
+  void stop() { stopping_.request_stop(); }
+
+  /// What the call returned, or nullopt when it has not within test::kPatience.
+  std::optional<Result> result() {
+    if (result_.wait_for(test::kPatience) != std::future_status::ready) {
+      return std::nullopt;
+    }
+    return result_.get();
+  }
+
+ private:
+  std::stop_source stopping_;
+  std::future<Result> result_;
+};
 
 TEST(MeasuringQueueTest, TakesCapturesOldestFirst) {
   MeasuringQueue queue(4, 1000);
@@ -74,13 +101,12 @@ TEST(MeasuringQueueTest, PushWaitsWhileTheCaptureLimitIsReached) {
   ASSERT_TRUE(queue.push(capture_of(10), {}));
   ASSERT_TRUE(queue.front({}));  // Being measured.
 
-  std::future<bool> pushed =
-      std::async(std::launch::async, [&] { return queue.push(capture_of(10), {}); });
+  Waiting<bool> pushed(
+      [&](const std::stop_token& stop) { return queue.push(capture_of(10), stop); });
 
-  EXPECT_TRUE(still_waiting(pushed));
+  EXPECT_TRUE(pushed.still_waiting());
   queue.pop();
-  ASSERT_EQ(pushed.wait_for(kPatience), std::future_status::ready);
-  EXPECT_TRUE(pushed.get());
+  EXPECT_EQ(pushed.result(), true);
 }
 
 TEST(MeasuringQueueTest, PushWaitsWhileItsSamplesWouldPassTheSampleLimit) {
@@ -88,59 +114,57 @@ TEST(MeasuringQueueTest, PushWaitsWhileItsSamplesWouldPassTheSampleLimit) {
   ASSERT_TRUE(queue.push(capture_of(60), {}));
   ASSERT_TRUE(queue.push(capture_of(40), {}));  // Exactly at the limit.
 
-  std::future<bool> pushed =
-      std::async(std::launch::async, [&] { return queue.push(capture_of(1), {}); });
+  Waiting<bool> pushed(
+      [&](const std::stop_token& stop) { return queue.push(capture_of(1), stop); });
 
-  EXPECT_TRUE(still_waiting(pushed));
+  EXPECT_TRUE(pushed.still_waiting());
   queue.pop();  // Frees 60 samples.
-  ASSERT_EQ(pushed.wait_for(kPatience), std::future_status::ready);
-  EXPECT_TRUE(pushed.get());
+  EXPECT_EQ(pushed.result(), true);
 }
 
 TEST(MeasuringQueueTest, StopReleasesAPushWaitingForRoomWithoutAppending) {
   MeasuringQueue queue(1, 1000);
   const Completed queued = capture_of(10);
   ASSERT_TRUE(queue.push(queued, {}));
-  std::stop_source stopping;
 
-  std::future<bool> pushed = std::async(
-      std::launch::async, [&] { return queue.push(capture_of(10), stopping.get_token()); });
-  ASSERT_TRUE(still_waiting(pushed));
-  stopping.request_stop();
+  Waiting<bool> pushed(
+      [&](const std::stop_token& stop) { return queue.push(capture_of(10), stop); });
+  ASSERT_TRUE(pushed.still_waiting());
+  pushed.stop();
 
-  ASSERT_EQ(pushed.wait_for(kPatience), std::future_status::ready);
-  EXPECT_FALSE(pushed.get());
+  EXPECT_EQ(pushed.result(), false);
   EXPECT_EQ(front_capture(queue), queued.capture);
   queue.pop();
-  EXPECT_EQ(queue.front(stopping.get_token()), std::nullopt);  // Nothing else was appended.
+  std::stop_source stopped;
+  stopped.request_stop();
+  EXPECT_EQ(queue.front(stopped.get_token()), std::nullopt);  // Nothing else was appended.
 }
 
 TEST(MeasuringQueueTest, FrontWaitsForACapture) {
   MeasuringQueue queue(4, 1000);
   const Completed arriving = capture_of(10);
 
-  std::future<std::optional<Completed>> taken =
-      std::async(std::launch::async, [&] { return queue.front({}); });
-  ASSERT_TRUE(still_waiting(taken));
+  Waiting<std::optional<Completed>> taken(
+      [&](const std::stop_token& stop) { return queue.front(stop); });
+  ASSERT_TRUE(taken.still_waiting());
   ASSERT_TRUE(queue.push(arriving, {}));
 
-  ASSERT_EQ(taken.wait_for(kPatience), std::future_status::ready);
-  const std::optional<Completed> front = taken.get();
+  const std::optional<std::optional<Completed>> front = taken.result();
   ASSERT_TRUE(front.has_value());
-  EXPECT_EQ(front.value_or(Completed{}).capture, arriving.capture);
+  EXPECT_EQ(front.value_or(std::nullopt).value_or(Completed{}).capture, arriving.capture);
 }
 
 TEST(MeasuringQueueTest, StopReleasesAFrontWaitingForACapture) {
   MeasuringQueue queue(4, 1000);
-  std::stop_source stopping;
 
-  std::future<std::optional<Completed>> taken =
-      std::async(std::launch::async, [&] { return queue.front(stopping.get_token()); });
-  ASSERT_TRUE(still_waiting(taken));
-  stopping.request_stop();
+  Waiting<std::optional<Completed>> taken(
+      [&](const std::stop_token& stop) { return queue.front(stop); });
+  ASSERT_TRUE(taken.still_waiting());
+  taken.stop();
 
-  ASSERT_EQ(taken.wait_for(kPatience), std::future_status::ready);
-  EXPECT_EQ(taken.get(), std::nullopt);
+  const std::optional<std::optional<Completed>> front = taken.result();
+  ASSERT_TRUE(front.has_value());  // It returned.
+  EXPECT_EQ(front.value_or(Completed{}), std::nullopt);
 }
 
 }  // namespace

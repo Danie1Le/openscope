@@ -7,7 +7,6 @@
 #include <utility>
 
 #include "openscope/capture.hpp"
-#include "openscope/channel.hpp"
 #include "openscope/instrument.hpp"
 
 namespace openscope {
