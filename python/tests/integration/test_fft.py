@@ -9,10 +9,16 @@ import math
 import statistics
 
 import pytest
-from engine_helpers import TRANSFORM_LENGTH, spectrum_length, take_capture
+from engine_helpers import (
+    SETTINGS_CONFLICT,
+    TRANSFORM_LENGTH,
+    scpi_error,
+    spectrum_length,
+    take_capture,
+)
 from ground_truth import SAMPLE_RATE, Signal, dbv
 
-from openscope_client import Function, ScpiError, Window
+from openscope_client import Function, Window
 
 #: The tests transform TRANSFORM_LENGTH samples: every sample of a record that long, or the first
 #: of the `*RST` record of 10000. Bins of 1E6 / 8192 = 122.0703125 Hz.
@@ -163,5 +169,6 @@ def test_the_spectrum_of_a_channel_not_in_the_capture_is_a_settings_conflict(sco
     take_capture(scope)
     scope.fft.source = 2  # Off at *RST.
 
-    with pytest.raises(ScpiError, match="Settings conflict"):
-        scope.fft.spectrum()
+    raised = scpi_error(scope.fft.spectrum)
+
+    assert (raised.code, raised.message) == SETTINGS_CONFLICT
