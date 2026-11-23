@@ -32,4 +32,6 @@ The CI fuzz smoke runs 60 s on every pull request. Longer runs are done on deman
 
 | Date | Target | Commit | Length | Executions | Corpus | Result |
 |---|---|---|---|---|---|---|
-FUZZ_RECORD
+| 2026-11-23 | `execute_line_fuzzer` (the only target) | c365d09 (#69, with the #68 reply limit) | 1 201 s (`-max_total_time=1200`) | 28 701 (23 a second) | the 7 seeds in `fuzz/corpus` grew to 1 066 inputs (1.4 MiB); 8 934 edges covered | no crash, leak, timeout or sanitizer report; peak RSS 476 MiB |
+
+The run used the `fuzz` preset (Clang 18, ASan + UBSan) in `openscope-dev:24.04` with `-max_len=8192 -timeout=10 -dict=fuzz/scpi.dict` and an empty output corpus, as in README, Fuzzing. Each input builds a fresh Instrument, so a run executes about 25 inputs a second. The fuzzer advances 64 samples a line, so its captures stay short: it cannot reach the 64 MiB reply limit (`-223`), whose boundary the command-tree and waveform tests pin instead.
