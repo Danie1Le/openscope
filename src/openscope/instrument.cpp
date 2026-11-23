@@ -838,7 +838,7 @@ void Instrument::advance(std::size_t samples) {
         // on how `advance` is chunked; and before held lines resume, so they see the Single's
         // capture.
         single_end = assemble(*block, [&](const std::shared_ptr<const Capture>& capture) {
-          publish(*block, capture, measure_all(*capture));
+          publish({.capture = capture, .generation = block->generation}, measure_all(*capture));
         });
         // The Single's capture ends the operation at its last sample: the lines it resumes run
         // with the clock there, and the next block starts there under whatever they changed, so
@@ -877,13 +877,14 @@ std::optional<AcquiredBlock> Instrument::acquire(std::size_t count) {
   return block;
 }
 
-void Instrument::process(const AcquiredBlock& block) {
-  // Each capture is measured as it completes, without the mutex, and published under it.
-  const CaptureSink publish_measured = [this,
-                                        &block](const std::shared_ptr<const Capture>& capture) {
-    const CaptureResults results = measure_all(*capture);
-    const std::scoped_lock lock(mutex_);
-    publish(block, capture, results);
+void Instrument::process(const AcquiredBlock& block, const CaptureHandOff& hand_off) {
+  const CaptureSink hand_on_running = [&](const std::shared_ptr<const Capture>& capture) {
+    CompletedCapture completed{.capture = capture, .generation = block.generation};
+    if (hand_off) {
+      hand_off(std::move(completed));
+    } else {
+      publish_measured(completed);
+    }
   };
   // A Single's capture, the only one its block completes, is kept measured until the Single ends,
   // and published in the same hold of the mutex: no command falls between the two, so a command
@@ -894,8 +895,8 @@ void Instrument::process(const AcquiredBlock& block) {
     single_results = measure_all(*capture);
     single_capture = capture;
   };
-  const std::optional<std::size_t> single_end = assemble(
-      block, capture_limit(block) == CaptureLimit::kFirst ? keep_measured : publish_measured);
+  const std::optional<std::size_t> single_end =
+      assemble(block, capture_limit(block) == CaptureLimit::kFirst ? keep_measured : hand_on_running);
   if (!single_end) {
     return;
   }
@@ -903,7 +904,7 @@ void Instrument::process(const AcquiredBlock& block) {
   std::vector<RunningLine> woken;
   {
     const std::scoped_lock lock(mutex_);
-    publish(block, single_capture, single_results);
+    publish({.capture = single_capture, .generation = block.generation}, single_results);
     rest_runs = conclude(block);
     woken = take_woken();
   }
@@ -918,8 +919,14 @@ void Instrument::process(const AcquiredBlock& block) {
   }
   if (rest_runs && *single_end < block.samples.count) {
     captures_.push(samples_from(block.samples, *single_end), block.acquisition, block.channels,
-                   block.trigger, CaptureLimit::kEvery, publish_measured);
+                   block.trigger, CaptureLimit::kEvery, hand_on_running);
   }
+}
+
+void Instrument::publish_measured(const CompletedCapture& completed) {
+  const CaptureResults results = measure_all(*completed.capture);
+  const std::scoped_lock lock(mutex_);
+  publish(completed, results);
 }
 
 double Instrument::sample_rate() const {
@@ -976,14 +983,13 @@ CaptureLimit Instrument::capture_limit(const AcquiredBlock& block) const {
   return block.generation == run_generation_ ? CaptureLimit::kEvery : block.limit;
 }
 
-void Instrument::publish(const AcquiredBlock& block, const std::shared_ptr<const Capture>& capture,
-                         const CaptureResults& results) {
+void Instrument::publish(const CompletedCapture& completed, const CaptureResults& results) {
   // A command since the block was acquired has discarded what it belongs to: its capture would
   // show settings older than that command. Counting and publishing in one hold of the mutex keeps
   // the statistics' current result the latest capture's.
-  if (block.generation == generation_) {
+  if (completed.generation == generation_) {
     statistics_.add(results);
-    latest_.store(capture);
+    latest_.store(completed.capture);
   }
 }
 

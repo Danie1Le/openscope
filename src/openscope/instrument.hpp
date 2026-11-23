@@ -131,20 +131,38 @@ class Instrument {
   /// kMaxBlockLength.
   [[nodiscard]] std::optional<AcquiredBlock> acquire(std::size_t count);
 
+  /// A completed capture with the generation of the block it completed in: what publishing it
+  /// checks, and what `publish_measured` needs to measure and publish it later, on another thread.
+  struct CompletedCapture {
+    std::shared_ptr<const Capture> capture;
+    std::uint64_t generation = 0;
+  };
+
+  /// Takes each Running capture `process` completes, in order, for `publish_measured`.
+  using CaptureHandOff = std::function<void(CompletedCapture completed)>;
+
   /// Live mode's processing half: assembles `block`, from `acquire`, into captures without the
-  /// mutex that commands take, and measures each capture for the measurement statistics as it
-  /// completes, also without it. It takes the mutex only to count and publish a capture or end a
-  /// Single, about once a capture. A capture is counted, and becomes the latest capture in the
-  /// same hold of the mutex, only when no command has discarded the capture in progress since the
-  /// block was acquired, so neither ever holds settings older than a command that has already
-  /// returned. A Single's capture stops the instrument and hands each line held on it to its
-  /// Session's Resumer; this thread runs none of them, so the ring buffer keeps draining. When
-  /// `RUN` has ended the Single since the block was acquired, the rest of the block,
-  /// and every later block acquired while the Single was armed, is captured as Running, with the
-  /// trigger restarted at the Single's capture as after any Single. Blocks must come in the order
-  /// they were acquired; a block that never arrives is a dropped block, and the capture that would
-  /// span it is discarded and counted.
-  void process(const AcquiredBlock& block);
+  /// mutex that commands take. Each Running capture goes to `hand_off` as it completes or, when
+  /// there is none, through `publish_measured` here. A Single's capture is measured here, also
+  /// without the mutex, and published with the Single's end in one hold of it, so a long one holds
+  /// up processing while it is measured (the blocks acquired meanwhile follow the Single's capture
+  /// and are of no use unless `RUN` came first). A capture is
+  /// counted, and becomes the latest capture in the same hold of the mutex, only when no command
+  /// has discarded the capture in progress since the block was acquired, so neither ever holds
+  /// settings older than a command that has already returned. A Single's capture stops the
+  /// instrument and hands each line held on it to its Session's Resumer; this thread runs none of
+  /// them, so the ring buffer keeps draining. When `RUN` has ended the Single since the block was
+  /// acquired, the rest of the block, and every later block acquired while the Single was armed,
+  /// is captured as Running, with the trigger restarted at the Single's capture as after any
+  /// Single. Blocks must come in the order they were acquired; a block that never arrives is a
+  /// dropped block, and the capture that would span it is discarded and counted.
+  void process(const AcquiredBlock& block, const CaptureHandOff& hand_off = {});
+
+  /// Measures `completed`, from `process`'s hand-off, for the measurement statistics without the
+  /// mutex, then counts and publishes it as `process` would have (#71: measuring a capture of
+  /// four 1M-sample channels takes longer than live mode's ring buffer holds blocks). Captures
+  /// must come from one thread at a time, in the order they were handed off.
+  void publish_measured(const CompletedCapture& completed);
 
   /// Samples per second on the sample clock (`ACQuire:SRATe`), which live mode paces against.
   [[nodiscard]] double sample_rate() const;
@@ -208,11 +226,10 @@ class Instrument {
   /// How many captures assembling `block` makes: its own limit, unless `RUN` has already ended
   /// the Single it was acquired for. Processing state only, so it needs no lock.
   [[nodiscard]] CaptureLimit capture_limit(const AcquiredBlock& block) const;
-  /// Counts `capture`, which completed in `block`, in the measurement statistics with its
-  /// `results` and makes it the latest capture, unless a command has discarded the capture in
-  /// progress since `block` was acquired. Needs mutex_.
-  void publish(const AcquiredBlock& block, const std::shared_ptr<const Capture>& capture,
-               const CaptureResults& results);
+  /// Counts `completed` in the measurement statistics with its `results` and makes it the latest
+  /// capture, unless a command has discarded the capture in progress since the block it completed
+  /// in was acquired. Needs mutex_.
+  void publish(const CompletedCapture& completed, const CaptureResults& results);
   /// Ends the Single whose capture completed inside `block`, unless a command has discarded the
   /// capture in progress since `block` was acquired; the caller then hands the lines held on it
   /// on (take_woken). Returns true when `RUN` had already ended the Single, so the samples after

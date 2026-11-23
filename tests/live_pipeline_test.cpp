@@ -7,6 +7,8 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cstddef>
+#include <format>
 #include <functional>
 #include <future>
 #include <memory>
@@ -162,6 +164,62 @@ TEST_F(LivePipelineTest, StatisticsHoldTheChannelsOfTheCapturesTheyCount) {
     EXPECT_EQ(error, enabled ? test::kNoErrorReply : test::kSettingsConflictReply) << round;
   }
 }
+
+// NFR-1 (#71): Running with all four channels at 1 MS/s and the longest record drops no block and
+// discards no capture, and the statistics count every capture published. Measuring one such
+// capture takes longer than the ring buffer holds blocks, so it must not stall processing. Release
+// builds only: unoptimised and sanitized builds measure captures this long slower than they come.
+// With a client (the parameter), one more Session reads each capture's waveform, a measurement
+// and the statistics all the while.
+class LiveLongestRecordTest : public test::InstrumentFixture,
+                              public testing::WithParamInterface<bool> {};
+
+TEST_P(LiveLongestRecordTest, RunningAtFourChannelsLosesNoBlockAndCountsEveryCapture) {
+#ifndef NDEBUG
+  GTEST_SKIP() << "release builds only";
+#endif
+  constexpr std::size_t kRecordLength = AcquisitionSettings::kMaxRecordLength;
+  // Noisy sines on every channel, captured untriggered back to back from sample 0, so the latest
+  // capture's first sample tells how many captures came before it.
+  session.send(std::format(
+      "{};:{};:SOUR1:NOIS 0.01;:SOUR2:NOIS 0.01;:SOUR3:NOIS 0.01;:SOUR4:NOIS 0.01;:ACQ:POIN {}",
+      test::kUntriggeredCaptures, test::kEnableChannelsTwoToFour, kRecordLength));
+  ASSERT_EQ(session.next_error(), test::kNoErrorReply);
+  constexpr int kCaptures = 5;  // About five seconds.
+  test::ScpiSession client(instrument);
+  std::shared_ptr<const Capture> latest;
+  std::optional<std::string> reply;
+  LiveCounters counters;
+  {
+    const LivePipeline live(instrument);
+    int published = 0;
+    const bool enough = eventually([&] {
+      if (GetParam()) {
+        (void)client.send("WAV:FORM REAL;:WAV:DATA?;:MEAS:FREQ? CHAN1;:MEAS:STAT? VPP,CHAN4");
+      }
+      const std::shared_ptr<const Capture> now = instrument.latest_capture();
+      published += now != latest ? 1 : 0;
+      latest = now;
+      return published >= kCaptures;
+    });
+    ASSERT_TRUE(enough) << published;
+    // STOP freezes the latest capture and the statistics together.
+    reply = session.send("STOP;:MEAS:STAT? VPP,CHAN4");
+    latest = instrument.latest_capture();
+    counters = live.counters();
+  }
+
+  EXPECT_EQ(counters.dropped_blocks, 0U);
+  EXPECT_EQ(counters.discarded_captures, 0U);
+  ASSERT_NE(latest, nullptr);
+  EXPECT_EQ(test::statistics_of(reply).count,
+            static_cast<double>((latest->first_index / kRecordLength) + 1));
+}
+
+INSTANTIATE_TEST_SUITE_P(Clients, LiveLongestRecordTest, testing::Bool(),
+                         [](const testing::TestParamInfo<bool>& info) {
+                           return info.param ? "WithAClient" : "WithNoClient";
+                         });
 
 TEST_F(LivePipelineTest, StopFreezesTheLatestCapture) {
   const LivePipeline live(instrument);

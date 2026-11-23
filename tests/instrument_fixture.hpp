@@ -33,6 +33,9 @@ inline constexpr auto kUntriggeredCaptures = "TRIG:POS 0;LEV 100";
 /// each capture show exactly when it started.
 inline constexpr auto kUntriggeredDc = "SOUR1:FUNC DC;:TRIG:POS 0";
 
+/// Enables the channels *RST leaves off, so a capture holds all four.
+inline constexpr auto kEnableChannelsTwoToFour = "CHAN2:DISP ON;:CHAN3:DISP ON;:CHAN4:DISP ON";
+
 /// `instrument`'s latest capture. Fails the test and returns an empty capture when there is none,
 /// so a test can read its fields without crashing the test binary.
 inline std::shared_ptr<const Capture> latest(const Instrument& instrument) {

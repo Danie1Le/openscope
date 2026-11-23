@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "instrument_fixture.hpp"
@@ -21,6 +22,7 @@
 #include "openscope/capture.hpp"
 #include "openscope/instrument.hpp"
 #include "openscope/measurement.hpp"
+#include "reply_numbers.hpp"
 #include "scpi_session.hpp"
 
 namespace openscope {
@@ -321,6 +323,76 @@ TEST_F(BlockProcessingTest, RunDuringASinglesBlockCapturesTheRestOfTheBlock) {
 
   EXPECT_EQ(first_index(instrument), 40U);
   EXPECT_EQ(instrument.discarded_captures(), 0U);
+}
+
+/// Every Running capture `process` hands off from `block`, in order.
+std::vector<Instrument::CompletedCapture> handed_off(Instrument& instrument,
+                                                     const AcquiredBlock& block) {
+  std::vector<Instrument::CompletedCapture> completed;
+  instrument.process(block, [&](Instrument::CompletedCapture capture) {
+    completed.push_back(std::move(capture));
+  });
+  return completed;
+}
+
+// #71: live mode measures Running captures on another thread. Handed off, a capture is neither
+// the latest nor counted until publish_measured has measured it, and then it is both, in order.
+TEST_F(BlockProcessingTest, HandedOffCapturesArePublishedOnlyOnceMeasured) {
+  session.send("ACQ:POIN 100");
+
+  const std::vector<Instrument::CompletedCapture> completed =
+      handed_off(instrument, acquired(instrument, 300));
+
+  ASSERT_EQ(completed.size(), 3U);
+  EXPECT_EQ(instrument.latest_capture(), nullptr);
+  session.send("MEAS:STAT? VAV,CHAN1");
+  EXPECT_EQ(session.next_error(), test::kDataStaleReply);  // Nothing counted.
+  for (const Instrument::CompletedCapture& capture : completed) {
+    instrument.publish_measured(capture);
+    EXPECT_EQ(instrument.latest_capture(), capture.capture);
+  }
+  EXPECT_EQ(first_index(instrument), 200U);
+  EXPECT_EQ(test::statistics_of(session.send("MEAS:STAT? VAV,CHAN1")).count, 3.0);
+}
+
+// A command between the hand-off and the measuring discards the capture, as it would one still
+// in progress: it never shows settings older than a command that has returned.
+TEST_F(BlockProcessingTest, HandedOffCaptureDiscardedSinceIsNeitherPublishedNorCounted) {
+  const std::vector<Instrument::CompletedCapture> completed =
+      handed_off(instrument, acquired(instrument, kResetRecordLength));
+  ASSERT_EQ(completed.size(), 1U);
+
+  session.send("SOUR1:OFFS 0.5");
+  instrument.publish_measured(completed.front());
+
+  EXPECT_EQ(instrument.latest_capture(), nullptr);
+  session.send("MEAS:STAT? VAV,CHAN1");
+  EXPECT_EQ(session.next_error(), test::kDataStaleReply);  // Nothing counted.
+}
+
+// A Single's capture is not handed off: it is published with the Single's end, before the held
+// lines carry on, so they see it.
+TEST_F(BlockProcessingTest, SinglesCaptureIsPublishedByProcessNotHandedOff) {
+  const auto reply = session.start("SINGle;*OPC?;:MEAS:STAT? VAV,CHAN1");
+
+  EXPECT_THAT(handed_off(instrument, acquired(instrument, kResetRecordLength)), testing::IsEmpty());
+
+  EXPECT_EQ(first_index(instrument), 0U);
+  EXPECT_THAT(reply->text, testing::Optional(testing::EndsWith(",1")));  // A count of one.
+}
+
+// After RUN ends a Single inside its block, the rest of the block is captured as Running, and its
+// captures are handed off like any other Running capture.
+TEST_F(BlockProcessingTest, RunningCapturesAfterASinglesCaptureAreHandedOff) {
+  session.send("ACQ:POIN 10;:SINGle");
+  const AcquiredBlock armed = acquired(instrument, 25);
+  session.send("RUN");
+
+  const std::vector<Instrument::CompletedCapture> completed = handed_off(instrument, armed);
+
+  EXPECT_EQ(first_index(instrument), 0U);  // The Single's, published by process.
+  ASSERT_EQ(completed.size(), 1U);
+  EXPECT_EQ(completed.front().capture->first_index, 10U);
 }
 
 // The Single still ends at its capture, so the trigger restarts there as after any Single: the
