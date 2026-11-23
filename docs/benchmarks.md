@@ -120,7 +120,9 @@ cd python && OPENSCOPE_ENGINE_PATH=../build/release/src/openscope-engine OPENSCO
 
 or from the Actions tab with the **Soak** workflow (`workflow_dispatch`, length in whole seconds from 1 to 18000, 3600 by default; the run is stopped 600 s past that length and its JUnit report uploaded either way).
 
-One run of the default 600 s, on 2026-11-22 on the machine above (release engine), passed: 3 967 Singles, 4 471 reader rounds, 11 819 setting changes and 1 534 933 connections, with the engine's resident memory between 5.0 and 5.6 MiB throughout. That is ten minutes, not the hour the workflow defaults to; no hour-long run has been recorded yet.
+One run of the default 600 s, on 2026-11-22 on the machine above (release engine), passed: 3 967 Singles, 4 471 reader rounds, 11 819 setting changes and 1 534 933 connections, with the engine's resident memory between 5.0 and 5.6 MiB throughout.
+
+One hour-long run passed on a GitHub-hosted `ubuntu-24.04` runner: the Soak workflow with `seconds=3600` on `main` at de5e643 ([run 45084826659](https://github.com/Danie1Le/openscope/actions/runs/45084826659), 2026-11-22 23:45 to 2026-11-23 00:45 UTC, release engine built with g++-14), `1 passed in 3600.49s`. Rounds per worker: 232 890 Singles, 5 226 002 reader rounds, 70 869 setting changes and 329 170 connections. Resident memory warmed up and at most: engine 6 040 and 6 192 KiB, the test itself 43 552 and 43 884 KiB, so neither grew by more than 0.4 MiB over the hour. That run predates the dropped-block check, so it did not record the live counters.
 
 ## SPSC ring buffer throughput
 

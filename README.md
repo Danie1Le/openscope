@@ -42,7 +42,7 @@ build/release/src/openscope-engine --port 0   # a free port, named in the "liste
 |---|---|---|
 | `--address <ip>` | `127.0.0.1` | Local IP address to listen on. Any other address exposes the instrument, which has no authentication, to the network. Host names are not resolved. |
 | `--port <0-65535>` | `5025` | TCP port; `0` picks a free one. |
-| `--idle-timeout <1-86400>` | `300` | Seconds a client may send no command and get no reply before it is disconnected. A client waiting on `*OPC?` is never idle. |
+| `--idle-timeout <1-86400>` | `300` | Seconds a client may send no command and get no reply before it is disconnected. A client waiting on `*OPC?` or `*WAI` is never idle. |
 | `--seed <n>` | `0` | Seed of the generators' noise: the same seed and the same commands give the same signals. |
 | `-h`, `--help` | | Print the options and exit. |
 
@@ -92,11 +92,11 @@ build/fuzz/fuzz/execute_line_fuzzer -max_total_time=600 -max_len=8192 -dict=fuzz
   fuzz-corpus fuzz/corpus
 ```
 
-New inputs go to `fuzz-corpus`, the first directory; `fuzz/corpus` holds the committed seeds. A crash leaves the input in a `crash-*` file; pass that file to the fuzzer to replay it.
+New inputs go to `fuzz-corpus`, the first directory; `fuzz/corpus` holds the committed seeds. A crash leaves the input in a `crash-*` file; pass that file to the fuzzer to replay it. Longer runs are recorded in `docs/incidents.md`, which also holds short notes on the real bugs that the sanitizers, the fuzzer, the soak and the other verification tests have found.
 
 ## Coverage
 
-CI fails when line coverage of any of the trigger, measurement and SCPI parser areas is under 85 % (NFR-11); each area is gated on its own, not on the sum. The threshold, the areas and their files are in `tools/coverage_gate.py`; the llvm-cov report is the `llvm-cov-report` artifact of the CI run.
+CI fails when line coverage of any of the trigger, measurement and SCPI parser areas is under 85 % (NFR-11); each area is gated on its own, not on the sum. The trigger area holds both edge detection (`trigger.cpp`) and capture assembly (`capture.cpp`: pre-trigger samples, holdoff, the Auto timeout and where time zero lands). The threshold, the areas and their files are in `tools/coverage_gate.py`; the llvm-cov report is the `llvm-cov-report` artifact of the CI run.
 
 ```sh
 CXX=clang++-18 cmake --preset coverage && cmake --build --preset coverage && ctest --preset coverage
