@@ -69,7 +69,7 @@ TEST_F(UntriggeredDcFixture, SendLiveRepliesALineThatEndsAtOnce) {
 // The line ends on the thread that completes the Single, after send_live has begun to wait.
 TEST_F(UntriggeredDcFixture, SendLiveWaitsForALineThatEndsOnAnotherThread) {
   session.send("ACQ:POIN 4");
-  std::jthread single_taker([&] {
+  const std::jthread single_taker([&] {
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     instrument.advance(4);
   });
