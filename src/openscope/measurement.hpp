@@ -99,7 +99,7 @@ MeasurementResult evaluate(const Measurement& measurement, const ChannelSettings
 class MeasurementEngine {
  public:
   /// Measurement `measurement` (a position in measurements()) of channel `channel` (1 to 4) of
-  /// `capture`. Asking about a different capture drops every cached result. Throws
+  /// `capture`. Asking about a different capture starts the cache afresh. Throws
   /// std::out_of_range when `measurement` is not in measurements() or `channel` is not in
   /// `capture`.
   MeasurementResult measure(const std::shared_ptr<const Capture>& capture, std::size_t channel,

@@ -71,7 +71,7 @@ class CaptureCache {
   /// callers still holding the old values keep them.
   std::shared_ptr<Values> of(const std::shared_ptr<const Capture>& capture) {
     const std::scoped_lock lock(mutex_);
-    if (values_ == nullptr || capture_.lock() != capture) {
+    if (capture_.lock() != capture) {
       capture_ = capture;
       values_ = std::make_shared<Values>();
     }
@@ -81,24 +81,25 @@ class CaptureCache {
  private:
   std::mutex mutex_;
   std::weak_ptr<const Capture> capture_;
-  std::shared_ptr<Values> values_;
+  std::shared_ptr<Values> values_ = std::make_shared<Values>();
 };
 
 /// A value computed at most once: the first caller computes it, and callers at the same time wait
-/// for that result instead of computing it again. Any thread may call `get`.
+/// for that result instead of computing it again. Any thread may call `get`. `Value` is default
+/// constructible; the default is never returned.
 template <typename Value>
 class ComputedOnce {
  public:
   /// The value, from `compute()` on the first call.
   template <typename Compute>
   const Value& get(Compute compute) {
-    std::call_once(once_, [&] { value_.emplace(compute()); });
-    return *value_;
+    std::call_once(once_, [&] { value_ = compute(); });
+    return value_;
   }
 
  private:
   std::once_flag once_;
-  std::optional<Value> value_;
+  Value value_{};
 };
 
 /// How many of the captures a sample block could complete `CaptureAssembler::push` completes.

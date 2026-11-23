@@ -280,8 +280,9 @@ TEST(ComputedOnceTest, ComputesOnceForCallersOnSeveralThreads) {
     ++computations;
     return 42;
   };
-  std::vector<std::thread> callers;
   std::array<int, 4> seen{};
+  std::vector<std::thread> callers;
+  callers.reserve(seen.size());
   for (int& result : seen) {
     callers.emplace_back([&] { result = value.get(compute); });
   }

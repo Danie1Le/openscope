@@ -18,19 +18,15 @@ namespace openscope {
 class SpectrumCache {
  public:
   /// magnitude_spectrum_db of channel `channel` (1 to 4) of `capture` under `window`. Asking
-  /// about a different capture drops every cached spectrum. Throws std::out_of_range when
+  /// about a different capture starts the cache afresh. Throws std::out_of_range when
   /// `channel` is not in `capture`.
   std::shared_ptr<const std::vector<float>> spectrum(const std::shared_ptr<const Capture>& capture,
                                                      std::size_t channel, FftWindow window);
 
  private:
-  /// How many windows FftWindow names.
-  static constexpr std::size_t kWindowCount =
-      static_cast<std::size_t>(FftWindow::kBlackmanHarris) + 1;
-
   /// One capture's spectra, by channel number - 1 and window.
   using Spectra =
-      std::array<std::array<ComputedOnce<std::vector<float>>, kWindowCount>, kChannelCount>;
+      std::array<std::array<ComputedOnce<std::vector<float>>, kFftWindowCount>, kChannelCount>;
 
   /// The spectra of the capture last asked about.
   CaptureCache<Spectra> spectra_;
