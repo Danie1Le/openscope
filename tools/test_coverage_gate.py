@@ -36,6 +36,22 @@ class FailingAreasTest(unittest.TestCase):
         self.assertEqual(coverage_gate.failing_areas({"a": (0, 0)}), ["a"])
 
 
+class SummaryTest(unittest.TestCase):
+    def test_marks_the_failed_areas_and_only_them(self):
+        lines = {path: counts(1, 2) for path in coverage_gate.GATED_FILES}
+        totals = coverage_gate.area_totals(lines)
+        trigger_lines = 2 * len(coverage_gate.AREAS["trigger"])
+        measurement_lines = 2 * len(coverage_gate.AREAS["measurement"])
+
+        text = coverage_gate.summary(lines, totals, ["measurement"]).splitlines()
+
+        self.assertIn(f"  trigger: 50.00% ({trigger_lines // 2} of {trigger_lines} lines) ok", text)
+        self.assertIn(
+            f"  measurement: 50.00% ({measurement_lines // 2} of {measurement_lines} lines) BELOW",
+            text,
+        )
+
+
 class ConfigurationTest(unittest.TestCase):
     def test_every_gated_file_is_in_exactly_one_area(self):
         self.assertEqual(len(coverage_gate.GATED_FILES), len(set(coverage_gate.GATED_FILES)))
