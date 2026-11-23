@@ -1,6 +1,7 @@
 """The server's protection limits: 4 KB lines, 64 MiB replies, 8 clients and the idle timeout
 (docs/scpi-reference.md, Connecting and Lines)."""
 
+import socket
 import threading
 import time
 from collections.abc import Callable
@@ -10,6 +11,7 @@ from engine_helpers import LONGEST_RECORD, PATIENCE, scpi_error
 from server_limits import INPUT_BUFFER_OVERRUN, MAX_CLIENTS, MAX_LINE, TOO_MUCH_DATA
 
 from openscope_client import TriggerMode
+from openscope_client.errors import parse_error_entry
 from openscope_client.transport import MAX_RESPONSE_BYTES
 
 #: How long another client's `*IDN?` may take while a line of bulk queries runs: generous for a
@@ -77,15 +79,21 @@ def waits_while(other: Callable[[str], str], line: Callable[[], object]) -> list
     return waits
 
 
-@pytest.fixture
-def bulk(engine):
-    """A raw Session of `engine` that has taken a Single of the longest record."""
-    session = engine.raw_session()
-    assert session.query(f"ACQ:POIN {LONGEST_RECORD};:SING;*OPC?") == "1"
-    return session
+def plain_query(connection: socket.socket, line: str) -> bytes:
+    """Sends `line` and reads its reply, which must hold no block, to its `\\n`, doing no more in
+    Python per chunk than a socket read. Parsing 57 MB of ASCII in this process, as the client
+    does, holds the GIL for tenths of a second and would delay the thread a test times."""
+    connection.sendall(f"{line}\n".encode())
+    chunks = [connection.recv(1 << 20)]
+    while not chunks[-1].endswith(b"\n"):
+        chunks.append(connection.recv(1 << 20))
+        assert chunks[-1], "the engine closed the connection"
+    return b"".join(chunks)[:-1]
 
 
-def test_a_line_of_bulk_queries_stops_at_the_reply_limit_and_others_are_served(engine, bulk):
+def test_a_line_of_bulk_queries_stops_at_the_reply_limit_and_others_are_served(engine):
+    bulk = engine.raw_session()
+    assert bulk.query(f"ACQ:POIN {LONGEST_RECORD};:SING;*OPC?") == "1"
     levels = 4 * (LONGEST_RECORD // 2 + 1)  # float32 bytes of the spectrum: 2 MiB.
     spectrum = len(f"#{len(str(levels))}{levels}") + levels  # As one IEEE 488.2 block.
     line = bulk_line("FFT:DATA?")
@@ -100,14 +108,17 @@ def test_a_line_of_bulk_queries_stops_at_the_reply_limit_and_others_are_served(e
     assert max(waits) < OTHER_CLIENT_CEILING
 
 
-def test_another_clients_commands_do_not_wait_for_a_bulk_line_to_be_formatted(engine, bulk):
+def test_another_clients_commands_do_not_wait_for_a_bulk_line_to_be_formatted(engine):
     # About 3.5 ASCII blocks of 16 MiB fit the reply: 0.6 s of formatting, which no other client
     # waits for, since lines of different Sessions run in parallel.
-    waits = waits_while(
-        engine.raw_session().query, lambda: bulk.query_bytes(bulk_line("WAV:FORM ASC;DATA?"))
-    )
+    with socket.create_connection(("127.0.0.1", engine.port), timeout=PATIENCE) as bulk:
+        assert plain_query(bulk, f"ACQ:POIN {LONGEST_RECORD};:SING;*OPC?") == b"1"
 
-    assert bulk.next_error() == TOO_MUCH_DATA
+        waits = waits_while(
+            engine.raw_session().query, lambda: plain_query(bulk, bulk_line("WAV:FORM ASC;DATA?"))
+        )
+
+        assert parse_error_entry(plain_query(bulk, "SYST:ERR?")) == TOO_MUCH_DATA
     assert max(waits) < UNSTALLED_CEILING
 
 
