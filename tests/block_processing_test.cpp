@@ -6,11 +6,13 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "instrument_fixture.hpp"
@@ -180,6 +182,28 @@ TEST_F(BlockProcessingTest, SingleCaptureEndsTheHeldLineAndStops) {
   EXPECT_EQ(reply->text, "1");
   EXPECT_EQ(first_index(instrument), 0U);
   EXPECT_EQ(instrument.acquire(1), std::nullopt);
+}
+
+// #67: the processing thread runs no held line. Each Session's line is handed to its own
+// Scheduler as a piece of work of its own, so held bulk lines never run back to back in one call.
+TEST_F(BlockProcessingTest, SingleCaptureHandsEachHeldLineToItsSchedulerAsItsOwnWork) {
+  std::vector<std::function<void()>> handed;
+  const Scheduler queue = [&](std::function<void()> work) { handed.push_back(std::move(work)); };
+  ScpiSession first(instrument, queue);
+  ScpiSession second(instrument, queue);
+  const auto first_reply = first.start("SINGle;*OPC?;:WAV:SOUR?");
+  const auto second_reply = second.start("*OPC?;:WAV:SOUR CHAN2;SOUR?");
+
+  instrument.process(acquired(instrument, kResetRecordLength));
+
+  ASSERT_EQ(handed.size(), 2U);
+  EXPECT_FALSE(first_reply->ended);
+  EXPECT_FALSE(second_reply->ended);
+  handed.at(1)();
+  EXPECT_FALSE(first_reply->ended);
+  EXPECT_EQ(second_reply->text, "1;CHAN2");
+  handed.at(0)();
+  EXPECT_EQ(first_reply->text, "1;CHAN1");
 }
 
 // The Single's capture ends inside the block: the rest of the block is not captured, since the

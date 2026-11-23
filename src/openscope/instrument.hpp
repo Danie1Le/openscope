@@ -12,6 +12,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "openscope/acquired_block.hpp"
@@ -33,11 +34,22 @@ namespace openscope {
 enum class SessionId : std::uint64_t {};
 
 /// Receives the reply to one line when the line ends: the replies of its queries joined with `;`,
-/// or nullopt when no query replied. The line may end after `execute` returns, inside `advance` or
-/// `process` (which may run on another thread) or inside another Session's `execute`. It runs
-/// while the Instrument holds its mutex, so a ReplyHandler must not call back into the
-/// Instrument; it only hands the reply to the transport.
+/// or nullopt when no query replied. It runs on the thread that ran the end of the line, without
+/// the Instrument's mutex: inside `execute`, or, for a line `*OPC?` held, inside the work its
+/// Session's Scheduler was given.
 using ReplyHandler = std::function<void(std::optional<std::string> reply)>;
+
+/// Runs work for one Session in order with that Session's lines: how a transport carries on a
+/// line `*OPC?` or `*WAI` held (#67). When the operation the line waits for ends, the Instrument
+/// calls it, without its mutex, with the work that runs the rest of that one line; it calls it on
+/// the thread that ended the operation, which in live mode is the processing thread, so a live
+/// transport must post the work to where the Session's lines run rather than run it there. A
+/// Scheduler that runs the work at once suits test mode, which steps the sample clock by hand.
+using Scheduler = std::function<void(std::function<void()> work)>;
+
+/// The Scheduler for test mode, where one thread steps the sample clock with `advance`, and for a
+/// Session that never holds a line: runs the work at once, on the calling thread.
+inline void run_at_once(const std::function<void()>& work) { work(); }
 
 /// The single entry point for instrument behaviour. It owns every Session and the instrument-wide
 /// state (generators, channels, acquisition and trigger settings, the run state, the sample clock,
@@ -49,7 +61,10 @@ using ReplyHandler = std::function<void(std::optional<std::string> reply)>;
 /// steps it with `advance`. In live mode an acquisition thread calls `acquire` and a processing
 /// thread calls `process` on the blocks it acquired (#8). Either way any thread may call
 /// `open_session`, `close_session`, `execute`, `sample_rate`, `latest_capture` and
-/// `discarded_captures` at the same time.
+/// `discarded_captures` at the same time, and lines of different Sessions run at the same time
+/// (#67): each command that reads or changes instrument-wide state holds the mutex only while it
+/// runs, and the queries that read only their Session and a capture (`WAV:DATA?`, `FFT:DATA?`,
+/// the measurements) hold none, so one client's bulk data never stalls another's commands.
 class Instrument {
  public:
   /// The longest line, in bytes without its terminator, that `execute` runs (4 KB).
@@ -70,8 +85,8 @@ class Instrument {
   Instrument& operator=(Instrument&&) = delete;
   ~Instrument() = default;
 
-  /// Opens a new Session with an empty error queue.
-  SessionId open_session();
+  /// Opens a new Session with an empty error queue, whose held lines `schedule` carries on.
+  SessionId open_session(Scheduler schedule);
 
   /// Closes `session` when its client disconnects; its SessionId is never valid again. A line it
   /// has held is dropped without a reply. Throws std::out_of_range for a SessionId this Instrument
@@ -81,23 +96,26 @@ class Instrument {
   /// Executes one line of SCPI text for `session` and passes its reply to `on_reply`, once, when
   /// the line ends. `line` excludes its terminator: the transport strips the trailing `\n` and an
   /// optional `\r` before calling. A line longer than kMaxLineLength only queues -363. Errors are
-  /// pushed onto that Session's error queue, not replied.
+  /// pushed onto that Session's error queue, not replied. A command of another Session may run
+  /// between two commands of the line.
   ///
-  /// While an operation is pending (a Single is armed), `*OPC?` and `*WAI` hold the line: the rest
-  /// of it runs, and `on_reply` is called, only once nothing is pending, from inside the call that
-  /// ended the operation (`advance`, or `execute` for any Session), after that call's own reply.
-  /// There is no timeout. A transport waits for `on_reply` without blocking, then sends the
-  /// Session's next line (the Session's commands run in order). Throws std::logic_error when
-  /// `session` still has a line held, and std::out_of_range for a SessionId this Instrument did
-  /// not open or already closed.
+  /// While an operation is pending (a Single is armed), `*OPC?` and `*WAI` hold the line, and
+  /// `execute` returns. Once nothing is pending, the Instrument hands the rest of the line to the
+  /// Session's Scheduler, as its own piece of work, after the reply of the call that ended the
+  /// operation (`advance`, `process`, or `execute` for any Session); the rest runs, and `on_reply`
+  /// is called, when that work runs. There is no timeout. A transport waits for `on_reply` without
+  /// blocking, then sends the Session's next line (the Session's commands run in order). Throws
+  /// std::logic_error when `session` still has a line held, and std::out_of_range for a SessionId
+  /// this Instrument did not open or already closed.
   void execute(SessionId session, std::string_view line, ReplyHandler on_reply);
 
   /// Advances the sample clock by `samples` sample indexes with no wall-clock pacing, as tests do
   /// (ADR 0003), in sample blocks of at most kMaxBlockLength. Unless the instrument is Stopped,
   /// every enabled channel is sampled and each capture that fills becomes the latest capture. A
-  /// Single's capture stops the instrument and ends the lines held on it at its last sample, and
-  /// the samples after it follow whatever those lines change. So one call gives the same captures
-  /// and replies as any split of it into smaller calls.
+  /// Single's capture stops the instrument and hands the lines held on it to their Schedulers at
+  /// its last sample. With Schedulers that run the work at once, as in test mode, those lines end
+  /// there and the samples after it follow whatever they change, so one call gives the same
+  /// captures and replies as any split of it into smaller calls.
   void advance(std::size_t samples);
 
   /// Live mode's acquisition half: takes the next `count` sample indexes on the sample clock and
@@ -114,8 +132,9 @@ class Instrument {
   /// Single, about once a capture. A capture is counted, and becomes the latest capture in the
   /// same hold of the mutex, only when no command has discarded the capture in progress since the
   /// block was acquired, so neither ever holds settings older than a command that has already
-  /// returned. A Single's capture stops the instrument and ends the lines held on it, on this
-  /// thread; when `RUN` has ended the Single since the block was acquired, the rest of the block,
+  /// returned. A Single's capture stops the instrument and hands each line held on it to its
+  /// Session's Scheduler; this thread runs none of them, so the ring buffer keeps draining. When
+  /// `RUN` has ended the Single since the block was acquired, the rest of the block,
   /// and every later block acquired while the Single was armed, is captured as Running, with the
   /// trigger restarted at the Single's capture as after any Single. Blocks must come in the order
   /// they were acquired; a block that never arrives is a dropped block, and the capture that would
@@ -149,9 +168,20 @@ class Instrument {
     kArmedSingle,
   };
 
-  /// A line `*OPC?` or `*WAI` holds until no operation is pending.
+  /// One open Session and how its held lines are carried on.
+  struct SessionState {
+    /// Touched only by the Session's own lines, which run one at a time, so not by mutex_.
+    Session session;
+    Scheduler schedule;
+    /// While the Session has a line held, or handed to `schedule` and not yet ended. Needs mutex_.
+    bool holding = false;
+    /// Until close_session. Needs mutex_.
+    bool open = true;
+  };
+
+  /// A line that is running, or that `*OPC?` or `*WAI` holds until no operation is pending.
   struct HeldLine {
-    SessionId session;
+    std::shared_ptr<SessionState> state;
     scpi::Execution execution;
     ReplyHandler on_reply;
   };
@@ -175,13 +205,21 @@ class Instrument {
   void publish(const AcquiredBlock& block, const std::shared_ptr<const Capture>& capture,
                const CaptureResults& results);
   /// Ends the Single whose capture completed inside `block`, unless a command has discarded the
-  /// capture in progress since `block` was acquired. Returns true when `RUN` had already ended
-  /// the Single, so the samples after that capture are still to be captured as Running. Needs
-  /// mutex_.
+  /// capture in progress since `block` was acquired; the caller then hands the lines held on it
+  /// on (take_woken). Returns true when `RUN` had already ended the Single, so the samples after
+  /// that capture are still to be captured as Running. Needs mutex_.
   bool conclude(const AcquiredBlock& block);
   /// Discards the capture in progress: the blocks acquired from now on start a new generation,
   /// and a capture never mixes two generations.
   void discard_capture() { ++generation_; }
+
+  /// Registers `command` with its handler run under mutex_: every command that reads or changes
+  /// instrument-wide state.
+  void add_command(scpi::Command command);
+  /// Registers `command` to run without mutex_: only a command that touches nothing but its own
+  /// Session, the latest capture (an atomic load) and the caches, so the costly part of a query
+  /// (a block, ASCII text, a spectrum, a measurement) never stalls other Sessions.
+  void add_lock_free_command(scpi::Command command) { commands_.add(std::move(command)); }
 
   /// `RUN`, `STOP`, `SINGle`, and the `*OPC?` and `*WAI` that wait on a Single.
   void add_run_control_commands();
@@ -272,17 +310,28 @@ class Instrument {
   /// Enters `state`. Stopped and Armed-single drop the capture in progress, so the next capture
   /// starts with the samples after the change; Running keeps it.
   void enter(RunState state);
-  /// When no operation is pending, carries on every held line, in the order they were held, and
-  /// passes the reply of each line that ends to its handler.
-  void resume_held();
+  /// Settles `line` once it has run as far as it can: holds it while an operation is pending,
+  /// carries it on at once when the operation ended since `*OPC?` looked, or, once it has ended,
+  /// passes its reply to its handler and hands the held lines the line may have released (`STOP`)
+  /// to their Schedulers. Takes mutex_ itself.
+  void finish(HeldLine line);
+  /// Carries on `line`, handed to its Session's Scheduler, unless the Session has closed since.
+  void resume(HeldLine line);
+  /// When no operation is pending, takes every held line, in the order they were held, for
+  /// `schedule`. Needs mutex_.
+  std::vector<HeldLine> take_woken();
+  /// Hands each of `lines` to its Session's Scheduler, one line per piece of work. Called without
+  /// mutex_, since a Scheduler may run the work at once.
+  void schedule(std::vector<HeldLine> lines);
   /// Whether an operation is pending: a Single is armed (GLOSSARY: Pending operation).
   [[nodiscard]] bool pending() const { return run_state_ == RunState::kArmedSingle; }
 
   /// Guards the Sessions and every setting, the sample clock and the run state: everything down
-  /// to the processing state below.
+  /// to the processing state below, except each Session's own state and the caches, which guard
+  /// themselves. Held only while one command, or capture processing, reads or changes them.
   mutable std::mutex mutex_;
   scpi::CommandTree commands_;
-  std::unordered_map<SessionId, Session> sessions_;
+  std::unordered_map<SessionId, std::shared_ptr<SessionState>> sessions_;
   std::uint64_t next_session_id_ = 0;
 
   /// The seed every Generator's seed derives from, kept for `*RST`.
@@ -299,7 +348,8 @@ class Instrument {
   SpectrumCache spectra_;
   /// Every capture completed since the last capture_setting_changed(), `*RST` or `MEAS:STAT:RES`.
   MeasurementStatistics statistics_;
-  /// At most one per Session: a Session with a held line sends no other.
+  /// The lines held while an operation is pending, at most one per Session: a Session with a
+  /// held line sends no other.
   std::vector<HeldLine> held_;
   /// The generation of the blocks acquired from now on (AcquiredBlock::generation).
   std::uint64_t generation_ = 0;

@@ -33,7 +33,7 @@ int run(std::span<char*> arguments) {
   const std::string rate_command =
       arguments.size() > 2 ? std::format("ACQ:SRAT {};:", arguments[2]) : std::string();
   openscope::Instrument instrument;
-  const openscope::SessionId session = instrument.open_session();
+  const openscope::SessionId session = instrument.open_session(openscope::run_at_once);
   // Every channel on, each with noise.
   instrument.execute(session,
                      rate_command +

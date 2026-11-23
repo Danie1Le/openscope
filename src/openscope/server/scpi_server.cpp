@@ -12,12 +12,15 @@
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/post.hpp>
 #include <boost/asio/steady_timer.hpp>
+#include <boost/asio/strand.hpp>
+#include <boost/asio/thread_pool.hpp>
 #include <boost/asio/write.hpp>
 #include <boost/system/detail/error_code.hpp>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <functional>
 #include <memory>
 #include <nlohmann/json.hpp>  // IWYU pragma: keep (the definition of ordered_json)
 #include <nlohmann/json_fwd.hpp>
@@ -25,6 +28,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -45,6 +49,9 @@ namespace {
 /// runs: a kept line that ends in `\r` loses it and must still be over the limit when the real
 /// line is, so the Instrument rejects every line that is too long, and nothing more is needed.
 constexpr std::size_t kKeptLineLength = Instrument::kMaxLineLength + 2;
+
+/// Where one Session's lines run, one at a time, on the server's thread pool.
+using Strand = asio::strand<asio::thread_pool::executor_type>;
 
 /// What ends every reply.
 constexpr std::string_view kNewline = "\n";
@@ -94,7 +101,12 @@ class ScpiServer::Connection : public std::enable_shared_from_this<Connection> {
         socket_(std::move(socket)),
         idle_timer_(socket_.get_executor()),
         peer_(std::move(peer)),
-        session_(server.instrument_->open_session()) {}
+        strand_(std::make_unique<Strand>(asio::make_strand(server.execution_))),
+        // A held line carries on on this Session's strand, never on the thread that ended its
+        // operation (the live pipeline's processing thread).
+        session_(server.instrument_->open_session([strand = *strand_](std::function<void()> work) {
+          asio::post(strand, std::move(work));
+        })) {}
 
   Connection(const Connection&) = delete;
   Connection& operator=(const Connection&) = delete;
@@ -115,7 +127,13 @@ class ScpiServer::Connection : public std::enable_shared_from_this<Connection> {
       return;
     }
     closed_ = true;
-    server_->instrument_->close_session(session_);
+    // On the strand, after the line it may be running, which needs the Session open.
+    asio::post(*strand_, [instrument = server_->instrument_, session = session_] {
+      instrument->close_session(session);
+    });
+    // A strand must not outlive the server's thread pool, and the io_context may hold this
+    // connection longer; nothing posts to it once the connection is closed.
+    strand_.reset();
     log("disconnect", {{"reason", reason}});
     error_code ignored;
     std::ignore = socket_.close(ignored);
@@ -176,14 +194,13 @@ class ScpiServer::Connection : public std::enable_shared_from_this<Connection> {
     read();
   }
 
-  /// Executes the assembled line on the Session. Its reply may come later, from another thread (a
-  /// line held by `*OPC?`), so it is posted to this connection's executor and never waited for.
+  /// Executes the assembled line on the Session's strand. Its reply comes later, from that strand,
+  /// so it is posted to this connection's executor and never waited for.
   void run_line() {
-    std::string_view line = line_;
-    if (line.ends_with('\r')) {
-      line.remove_suffix(1);
+    if (line_.ends_with('\r')) {
+      line_.pop_back();
     }
-    if (line.size() > Instrument::kMaxLineLength) {
+    if (line_.size() > Instrument::kMaxLineLength) {
       log("error",
           {{"error", std::format("line longer than {} bytes", Instrument::kMaxLineLength)}});
     }
@@ -193,14 +210,15 @@ class ScpiServer::Connection : public std::enable_shared_from_this<Connection> {
     idle_timer_.expires_at(std::chrono::steady_clock::time_point::max());
     // The handler keeps the connection alive while the line runs, even with no I/O pending (a
     // full input buffer). A held line's handler is dropped when `close` ends the Session.
-    server_->instrument_->execute(
-        session_, line,
-        [self = shared_from_this(),
-         executor = socket_.get_executor()](std::optional<std::string> reply) {
-          asio::post(executor,
-                     [self, reply = std::move(reply)]() mutable { self->reply(std::move(reply)); });
-        });
-    line_.clear();
+    asio::post(*strand_, [self = shared_from_this(), executor = socket_.get_executor(),
+                          line = std::exchange(line_, {})] {
+      self->server_->instrument_->execute(
+          self->session_, line, [self, executor](std::optional<std::string> reply) {
+            asio::post(executor, [self, reply = std::move(reply)]() mutable {
+              self->reply(std::move(reply));
+            });
+          });
+    });
   }
 
   /// Writes the reply to the line that ran, if it has one, then runs the next line.
@@ -253,6 +271,8 @@ class ScpiServer::Connection : public std::enable_shared_from_this<Connection> {
   tcp::socket socket_;
   asio::steady_timer idle_timer_;
   std::string peer_;
+  /// Where this Session's lines run, one at a time; empty once the connection is closed.
+  std::unique_ptr<Strand> strand_;
   SessionId session_;
   /// What one read receives into.
   std::array<char, 4096> chunk_{};
@@ -274,7 +294,8 @@ ScpiServer::ScpiServer(asio::io_context& io, Instrument& instrument, const Serve
       idle_timeout_(options.idle_timeout),
       acceptor_(listening_acceptor(io, options)),
       accept_retry_(io),
-      port_(acceptor_.local_endpoint().port()) {
+      port_(acceptor_.local_endpoint().port()),
+      execution_(std::clamp(std::thread::hardware_concurrency(), 1U, kMaxExecutionThreads)) {
   log_->write("listening", {{"address", options.address}, {"port", port_}});
   accept();
 }
@@ -290,6 +311,8 @@ ScpiServer::~ScpiServer() {
       }
     }
   }
+  // Runs what is still queued, the Sessions' closes included, before the Instrument may go.
+  execution_.join();
 }
 
 void ScpiServer::accept() {

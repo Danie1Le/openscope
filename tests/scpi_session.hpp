@@ -51,8 +51,10 @@ struct LineReply {
 /// tests read as a SCPI conversation.
 class ScpiSession {
  public:
-  explicit ScpiSession(Instrument& instrument)
-      : instrument_(&instrument), id_(instrument.open_session()) {}
+  /// A Session whose held lines `schedule` carries on: by default at once, inside the call that
+  /// ended the operation, as test mode needs.
+  explicit ScpiSession(Instrument& instrument, Scheduler schedule = run_at_once)
+      : instrument_(&instrument), id_(instrument.open_session(std::move(schedule))) {}
 
   /// Executes one SCPI line that ends at once and returns the reply, if any. Fails the test when
   /// the line has not ended.

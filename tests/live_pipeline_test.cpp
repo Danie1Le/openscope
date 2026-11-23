@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <functional>
 #include <future>
 #include <memory>
 #include <optional>
@@ -85,23 +86,30 @@ TEST_F(LivePipelineTest, CapturesAfterASettingChangeHoldOnlyTheNewSignal) {
   }
 }
 
-// Spec story 34 in live mode: the processing thread completes the Single and replies.
-TEST_F(LivePipelineTest, SingleOpcRepliesFromTheProcessingThreadOnceTheCaptureIsComplete) {
-  const LivePipeline live(instrument);
-  std::promise<std::optional<std::string>> replied;
-  std::thread::id replier;
-  const SessionId id = instrument.open_session();
-
-  instrument.execute(id, "SINGle;*OPC?", [&](std::optional<std::string> reply) {
-    replier = std::this_thread::get_id();
-    replied.set_value(std::move(reply));
+// Spec story 34 in live mode: the processing thread completes the Single, but never runs the held
+// line (#67). It hands the rest of the line to the Session's Scheduler, and the line ends, and
+// replies, where that work runs: here, on the test thread.
+TEST_F(LivePipelineTest, SingleOpcIsCarriedOnByTheSchedulerNotTheProcessingThread) {
+  std::promise<std::function<void()>> handed;
+  std::thread::id handed_from;
+  test::ScpiSession waiting(instrument, [&](std::function<void()> work) {
+    handed_from = std::this_thread::get_id();
+    handed.set_value(std::move(work));
   });
-
-  std::future<std::optional<std::string>> reply = replied.get_future();
-  ASSERT_EQ(reply.wait_for(kPatience), std::future_status::ready);
-  EXPECT_EQ(reply.get(), "1");
-  EXPECT_NE(replier, std::this_thread::get_id());
+  std::shared_ptr<const test::LineReply> reply;
+  std::future<std::function<void()>> work = handed.get_future();
+  {
+    const LivePipeline live(instrument);
+    reply = waiting.start("SINGle;*OPC?");
+    ASSERT_EQ(work.wait_for(kPatience), std::future_status::ready);
+  }
+  EXPECT_NE(handed_from, std::this_thread::get_id());  // From the processing thread.
   EXPECT_NE(instrument.latest_capture(), nullptr);
+  EXPECT_FALSE(reply->ended);
+
+  work.get()();
+
+  EXPECT_EQ(reply->text, "1");
 }
 
 // Four sine channels at 1 GS/s are far more than any machine samples in real time: acquisition
