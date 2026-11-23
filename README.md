@@ -2,6 +2,11 @@
 
 OpenScope is a software oscilloscope engine in C++20. It samples simulated signals, triggers them into captures, measures the captures, and exposes all of it to scripts over SCPI.
 
+<p align="center">
+  <a href="docs/media/openscope.mp4"><img src="docs/media/openscope.jpg" width="800" alt="OpenScope in 21 seconds: a SCPI session over TCP, a glitch caught by the trigger, measurements, an FFT and the test counts. Select to play the video."></a>
+</p>
+<p align="center"><sub>21 seconds, with sound. Every command, reply, waveform and spectrum in it came from the real engine.</sub></p>
+
 The live web display (which will follow [ADR 0001](docs/adr/0001-ui-speaks-scpi-over-websocket.md)) and observability are planned follow-ups and not part of v1.
 
 Further reading:
@@ -166,3 +171,7 @@ build/benchmark/bench/live_run 60   # live mode at 4 channels x 1 MS/s for 60 s 
 ## CI
 
 Every pull request runs the format check (clang-format and ruff), GCC debug and release, Clang debug with clang-tidy, ASan + UBSan, TSan, the coverage gate, the 60-second fuzz smoke run and the pytest suite. The benchmarks run too, but they are only reported and never block a merge. `main` requires the other checks to pass before a pull request can merge.
+
+## License
+
+MIT. See [`LICENSE`](LICENSE).
