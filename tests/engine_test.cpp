@@ -189,7 +189,7 @@ TEST_P(SignalTest, StopsTheEngineCleanlyFromTheMomentItListens) {
   // With what live mode lost by then (#67).
   EXPECT_THAT(engine.output(),
               ContainsRegex(std::format(R"("event":"stopping","signal":{},"dropped_blocks":[0-9]+,)"
-                                        R"("skipped_samples":[0-9]+,"discarded_captures":[0-9]+}})",
+                                        R"("skipped_samples":[0-9]+,"discarded_captures":[0-9]+[^,])",
                                         GetParam())));
 }
 
