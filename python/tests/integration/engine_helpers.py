@@ -9,10 +9,13 @@ from ground_truth import SAMPLE_RATE, Signal
 
 from openscope_client import ErrorEntry, FaultKind, Function, OpenScope, ScpiError, WaveformData
 
+#: What a header no command matches queues.
+UNDEFINED_HEADER = ErrorEntry(-113, "Undefined header")
+
 #: Lines the instrument rejects, each with the one error it queues; no two errors alike
 #: (docs/scpi-reference.md, Error codes).
 REJECTED_LINES = (
-    ("SYST:BOGUS", ErrorEntry(-113, "Undefined header")),
+    ("SYST:BOGUS", UNDEFINED_HEADER),
     ("CHAN5:SCAL 1", ErrorEntry(-114, "Header suffix out of range")),
     ("SOUR1:FREQ 2E9", ErrorEntry(-222, "Data out of range")),
     ("TRIG:MODE SING", ErrorEntry(-224, "Illegal parameter value")),
@@ -44,6 +47,9 @@ def live_counters(event: dict[str, Any]) -> dict[str, int]:
 #: The `*RST` record length, and the longest (`ACQ:POIN`).
 RECORD_LENGTH = 10000
 LONGEST_RECORD = 1048576
+#: The samples `FFT:DATA?` transforms at the `*RST` record length: the largest power of two not
+#: over it. A spectrum holds TRANSFORM_LENGTH // 2 + 1 levels.
+TRANSFORM_LENGTH = 8192
 
 #: Seconds to wait for the engine to start, stop, log an event or reach a state.
 PATIENCE = 20.0

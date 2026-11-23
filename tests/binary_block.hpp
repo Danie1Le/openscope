@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "openscope/scpi/ascii.hpp"
+#include "scpi_session.hpp"
 
 namespace openscope::test {
 
@@ -42,6 +43,12 @@ inline std::vector<float> decode_float32_block(std::string_view reply) {
     values.push_back(std::bit_cast<float>(bits));
   }
   return values;
+}
+
+/// The float32 values of the block `session` replies to `query` (`WAV:DATA?` in REAL, `FFT:DATA?`).
+/// Fails the test and returns no values when the reply is not one well-formed block.
+inline std::vector<float> float32_reply(ScpiSession& session, std::string_view query) {
+  return decode_float32_block(session.send(query).value_or(""));
 }
 
 }  // namespace openscope::test

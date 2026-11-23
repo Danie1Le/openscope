@@ -352,7 +352,8 @@ TEST_F(BlockProcessingTest, AcquiringOnAnotherThreadWhileCommandsChangeTheGenera
 bool single_capture_stays_latest() {
   Instrument instrument(7);
   ScpiSession session(instrument);
-  session.send("TRIG:POS 0;LEV 100;:ACQ:POIN 100");
+  session.send(test::kUntriggeredCaptures);
+  session.send("ACQ:POIN 100");
   session.send("SINGle");
   std::thread processing([&] {
     for (std::optional<AcquiredBlock> block = instrument.acquire(50); block;
