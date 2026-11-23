@@ -78,9 +78,15 @@ def waits_while(other: Callable[[str], str], line: Callable[[], object]) -> list
     return waits
 
 
-def test_a_line_of_bulk_queries_stops_at_the_reply_limit_and_others_are_served(engine):
-    bulk = engine.raw_session()
-    assert bulk.query(f"ACQ:POIN {LONGEST_RECORD};:SING;*OPC?") == "1"
+@pytest.fixture
+def bulk(engine):
+    """A raw Session of `engine` that has taken a Single of the longest record."""
+    session = engine.raw_session()
+    assert session.query(f"ACQ:POIN {LONGEST_RECORD};:SING;*OPC?") == "1"
+    return session
+
+
+def test_a_line_of_bulk_queries_stops_at_the_reply_limit_and_others_are_served(engine, bulk):
     levels = 4 * (LONGEST_RECORD // 2 + 1)  # float32 bytes of the spectrum: 2 MiB.
     spectrum = len(f"#{len(str(levels))}{levels}") + levels  # As one IEEE 488.2 block.
     line = bulk_line("FFT:DATA?")
@@ -95,12 +101,9 @@ def test_a_line_of_bulk_queries_stops_at_the_reply_limit_and_others_are_served(e
     assert max(waits) < OTHER_CLIENT_CEILING
 
 
-def test_another_clients_commands_do_not_wait_for_a_bulk_line_to_be_formatted(engine):
-    # About 3.5 ASCII blocks of 16 MiB fit the reply: 0.6 s of formatting, which other clients
-    # waited for while lines ran under the Instrument's mutex (#68 review).
-    bulk = engine.raw_session()
-    assert bulk.query(f"ACQ:POIN {LONGEST_RECORD};:SING;*OPC?") == "1"
-
+def test_another_clients_commands_do_not_wait_for_a_bulk_line_to_be_formatted(engine, bulk):
+    # About 3.5 ASCII blocks of 16 MiB fit the reply: 0.6 s of formatting, which no other client
+    # waits for, since lines of different Sessions run in parallel.
     waits = waits_while(
         engine.raw_session().query, lambda: bulk.query_bytes(bulk_line("WAV:FORM ASC;DATA?"))
     )
