@@ -375,6 +375,22 @@ TEST_F(BlockProcessingTest, StatisticsQueryWaitsForThePublishedCapturesToBeCount
   EXPECT_EQ(test::statistics_of(reply->text).count, 2.0);
 }
 
+// Only the captures published before the query hold it up: while Running, more keep coming, and
+// a query that waited for all of them might never reply (it did not under TSan).
+TEST_F(BlockProcessingTest, StatisticsQueryDoesNotWaitForCapturesPublishedAfterIt) {
+  session.send("ACQ:POIN 100");
+  const std::vector<Instrument::CompletedCapture> before =
+      handed_off(instrument, acquired(instrument, 100));
+  const auto reply = session.start("MEAS:STAT? VAV,CHAN1");
+  const std::vector<Instrument::CompletedCapture> after =
+      handed_off(instrument, acquired(instrument, 100));
+
+  count_all(instrument, before);
+
+  EXPECT_EQ(test::statistics_of(reply->text).count, 1.0);
+  count_all(instrument, after);
+}
+
 // A capture that completed before a statistics reset never counts after it (#71 review): the
 // statistics start from the captures that complete after the reset.
 TEST_F(BlockProcessingTest, CapturesCompletedBeforeAStatisticsResetAreNotCounted) {

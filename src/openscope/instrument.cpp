@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <format>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -229,10 +230,10 @@ void Instrument::add_command(scpi::Command command) {
   commands_.add(std::move(command));
 }
 
-bool Instrument::released(const Session& caller) const {
-  return std::ranges::any_of(sessions_, [&](const auto& open) {
-    return open.second->released && &open.second->session == &caller;
-  });
+Instrument::SessionState* Instrument::state_of(const Session& caller) const {
+  const auto found = std::ranges::find_if(
+      sessions_, [&](const auto& open) { return &open.second->session == &caller; });
+  return found == sessions_.end() ? nullptr : found->second.get();
 }
 
 void Instrument::add_run_control_commands() {
@@ -487,9 +488,14 @@ void Instrument::add_statistics_commands() {
        .parameters = {scpi::KeywordParameter{.choices = std::move(mnemonics)}, channel_parameter()},
        .handler = [this](Session& caller, const Arguments& arguments) -> scpi::HandlerResult {
          // Captures already published but still being measured would be left out (#71): the
-         // query waits, holding its line, and runs again once they are counted (count_measured).
-         if (uncounted_ > 0) {
-           return scpi::Hold{.reply = std::nullopt, .again = true};
+         // query waits, holding its line, and runs again once those are counted
+         // (count_measured). Captures published after it began to wait do not hold it up.
+         if (SessionState* state = state_of(caller)) {
+           state->counted_by = state->counted_by.value_or(handed_off_);
+           if (waits_for_count(*state)) {
+             return scpi::Hold{.reply = std::nullopt, .again = true};
+           }
+           state->counted_by.reset();
          }
          if (statistics_.empty()) {
            return kDataCorruptOrStale;  // No capture since the statistics were last reset.
@@ -716,12 +722,12 @@ std::optional<std::vector<Instrument::RunningLine>> Instrument::keep(RunningLine
   // Session) or for the published captures to be counted (MEAS:STAT?).
   const bool runs_again = line.execution.held_to_run_again();
   const bool waits_to_settle = runs_again && settling_ > 0 && !line.state->released;
-  const bool waits_for_count = runs_again && !waits_to_settle && uncounted_ > 0;
-  if (!(runs_again ? waits_to_settle || waits_for_count : pending())) {
+  const bool counting = runs_again && !waits_to_settle && waits_for_count(*line.state);
+  if (!(runs_again ? waits_to_settle || counting : pending())) {
     return std::nullopt;
   }
   line.state->holding = true;
-  if (waits_for_count) {
+  if (counting) {
     awaiting_count_.push_back(std::move(line));
     return std::vector<RunningLine>{};
   }
@@ -968,9 +974,13 @@ void Instrument::count_measured(const CompletedCapture& completed) {
     if (completed.statistics_epoch == statistics_epoch_) {
       statistics_.add(results);
     }
-    if (--uncounted_ == 0) {
-      counted = std::exchange(awaiting_count_, {});
-    }
+    ++counted_;
+    // Order kept: the lines whose captures are all counted now, in the order they began to wait.
+    const auto still_waits = std::ranges::stable_partition(
+        awaiting_count_, [&](const RunningLine& line) { return !waits_for_count(*line.state); });
+    counted.assign(std::make_move_iterator(awaiting_count_.begin()),
+                   std::make_move_iterator(still_waits.begin()));
+    awaiting_count_.erase(awaiting_count_.begin(), still_waits.begin());
   }
   hand_on(std::move(counted));
 }
@@ -1042,7 +1052,7 @@ std::optional<Instrument::CompletedCapture> Instrument::publish(
     statistics_.add(*results);
     return std::nullopt;
   }
-  ++uncounted_;
+  ++handed_off_;
   return CompletedCapture{.capture = capture, .statistics_epoch = statistics_epoch_};
 }
 
