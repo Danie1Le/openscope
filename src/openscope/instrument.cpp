@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <format>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -206,12 +207,23 @@ Instrument::Instrument(std::uint64_t seed)
 }
 
 void Instrument::add_command(scpi::Command command) {
-  command.handler = [this, handler = std::move(command.handler)](Session& caller,
-                                                                 const Arguments& arguments) {
+  command.handler = [this, handler = std::move(command.handler)](
+                        Session& caller, const Arguments& arguments) -> scpi::HandlerResult {
     const std::scoped_lock lock(mutex_);
+    // The lines an operation's end released carry on as it left the instrument: until they have,
+    // this command waits, holding its line, and runs once they have (settle).
+    if (settling_ > 0 && !released(caller)) {
+      return scpi::Hold{.reply = std::nullopt, .again = true};
+    }
     return handler(caller, arguments);
   };
   commands_.add(std::move(command));
+}
+
+bool Instrument::released(const Session& caller) const {
+  return std::ranges::any_of(sessions_, [&](const auto& open) {
+    return open.second->released && &open.second->session == &caller;
+  });
 }
 
 void Instrument::add_run_control_commands() {
@@ -683,36 +695,53 @@ void Instrument::enter(RunState state) {
 
 void Instrument::finish(RunningLine line) {
   while (line.execution.held()) {
+    std::vector<RunningLine> settled;
+    bool kept = false;
     {
       const std::scoped_lock lock(mutex_);
-      // Checked again here, under the lock the operation ends under, so no end is missed. The
-      // holding command has no effect of its own, so a line held here waits as if `*OPC?` had run
-      // now: after a `STOP;SINGle` of another Session in between, for that new Single.
-      if (pending()) {
+      // Checked again here, under the lock that operations end and lines settle under, so no end
+      // is missed. The holding command has no effect of its own, so a line held here waits as if
+      // it had run now: `*OPC?` after a `STOP;SINGle` of another Session in between waits for
+      // that new Single.
+      const bool runs_again = line.execution.held_to_run_again();
+      if (runs_again ? settling_ > 0 : pending()) {
         line.state->holding = true;
-        held_.push_back(std::move(line));
-        return;
+        settled = settle(*line.state);  // A released line that waits again has settled.
+        (runs_again ? waiting_ : held_).push_back(std::move(line));
+        kept = true;
       }
     }
-    // The operation ended between `*OPC?` seeing it pending and now: what it waited for is over.
+    if (kept) {
+      hand_on(std::move(settled));
+      return;
+    }
     commands_.resume(line.state->session, line.execution);
   }
-  std::vector<RunningLine> woken;
+  std::vector<RunningLine> released;
   {
     const std::scoped_lock lock(mutex_);
     line.state->holding = false;
-    woken = take_woken();  // This line may have ended the operation (STOP, RUN, *RST).
+    released = settle(*line.state);
+    // This line may have ended the operation (STOP, RUN, *RST).
+    std::ranges::move(take_woken(), std::back_inserter(released));
   }
   line.on_reply(line.execution.take_reply());
-  hand_on(std::move(woken));
+  hand_on(std::move(released));
 }
 
 void Instrument::resume(RunningLine line) {
+  std::vector<RunningLine> settled;
+  bool open = false;
   {
     const std::scoped_lock lock(mutex_);
-    if (!line.state->open) {
-      return;
+    open = line.state->open;
+    if (!open) {
+      settled = settle(*line.state);
     }
+  }
+  if (!open) {
+    hand_on(std::move(settled));
+    return;
   }
   commands_.resume(line.state->session, line.execution);
   finish(std::move(line));
@@ -721,7 +750,23 @@ void Instrument::resume(RunningLine line) {
 std::vector<Instrument::RunningLine> Instrument::take_woken() {
   // Every line held when the operation ended carries on, even after an earlier one arms another
   // Single: what each waited for is over. One that waits again is held again (finish).
-  return pending() ? std::vector<RunningLine>{} : std::exchange(held_, {});
+  if (pending()) {
+    return {};
+  }
+  std::vector<RunningLine> woken = std::exchange(held_, {});
+  for (RunningLine& line : woken) {
+    line.state->released = true;
+  }
+  settling_ += woken.size();
+  return woken;
+}
+
+std::vector<Instrument::RunningLine> Instrument::settle(SessionState& state) {
+  if (!state.released) {
+    return {};
+  }
+  state.released = false;
+  return --settling_ == 0 ? std::exchange(waiting_, {}) : std::vector<RunningLine>{};
 }
 
 void Instrument::hand_on(std::vector<RunningLine> lines) {
@@ -748,7 +793,9 @@ void Instrument::close_session(SessionId session) {
     throw std::out_of_range("unknown Session");
   }
   found->second->open = false;
-  std::erase_if(held_, [&](const RunningLine& held) { return held.state == found->second; });
+  const auto of_this_session = [&](const RunningLine& line) { return line.state == found->second; };
+  std::erase_if(held_, of_this_session);
+  std::erase_if(waiting_, of_this_session);
   sessions_.erase(found);
 }
 
