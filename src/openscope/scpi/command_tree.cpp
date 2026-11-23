@@ -369,6 +369,26 @@ std::optional<ScpiError> convert_all(const std::vector<ParameterRule>& rules, st
   return std::nullopt;
 }
 
+/// Joins `answer`, a query's reply if it has one, to `replies`, the line's replies so far. Returns
+/// false, with -223 queued for `session`, when the joined replies would pass kMaxReplyLength.
+bool join_reply(Session& session, std::optional<std::string>& replies,
+                std::optional<std::string> answer) {
+  if (!answer) {
+    return true;
+  }
+  const std::size_t joined = replies ? replies->size() + 1 : 0;
+  if (joined + answer->size() > kMaxReplyLength) {
+    session.push_error(kTooMuchData);
+    return false;
+  }
+  if (replies) {
+    replies->append(1, ';').append(*answer);
+  } else {
+    replies = std::move(answer);
+  }
+  return true;
+}
+
 }  // namespace
 
 std::string_view short_form(std::string_view pattern) {
@@ -414,23 +434,8 @@ Execution CommandTree::execute(Session& session, std::string_view line) const {
 
 void CommandTree::resume(Session& session, Execution& execution) const {
   std::vector<ParsedCommand>& commands = execution.commands_;
-  // Joins `answer` to the line's replies; false, with -223 queued, when they would pass
-  // kMaxReplyLength.
   const auto add_reply = [&](std::optional<std::string> answer) {
-    if (!answer) {
-      return true;
-    }
-    const std::size_t joined = execution.reply_ ? execution.reply_->size() + 1 : 0;
-    if (joined + answer->size() > kMaxReplyLength) {
-      session.push_error(kTooMuchData);
-      return false;
-    }
-    if (execution.reply_) {
-      execution.reply_->append(1, ';').append(*answer);
-    } else {
-      execution.reply_ = std::move(answer);
-    }
-    return true;
+    return join_reply(session, execution.reply_, std::move(answer));
   };
   bool fits = true;
   if (execution.hold_) {
