@@ -120,7 +120,8 @@ class ScpiServer::Connection : public std::enable_shared_from_this<Connection> {
   }
 
   /// Ends the Session (dropping a line it has held) and closes the socket, once. The event is
-  /// logged before the socket closes, so the client sees the close only after it is logged.
+  /// logged after the socket closes (#72): a client or a tool that acts on the event must find the
+  /// connection already closed.
   void close(std::string_view reason) {
     if (closed_) {
       return;
@@ -134,10 +135,10 @@ class ScpiServer::Connection : public std::enable_shared_from_this<Connection> {
     // connection longer. The Session's Resumer keeps its own copy until close_session runs, which
     // `~ScpiServer` waits for when it joins the pool.
     strand_.reset();
-    log("disconnect", {{"reason", reason}});
     error_code ignored;
     std::ignore = socket_.close(ignored);
     idle_timer_.cancel();
+    log("disconnect", {{"reason", reason}});
   }
 
   [[nodiscard]] bool closed() const { return closed_; }
@@ -348,8 +349,9 @@ void ScpiServer::admit(tcp::socket socket) {
   }
   std::string peer = describe(endpoint);
   if (connections_.size() >= kMaxClients) {
-    log_->write("refuse", {{"peer", peer}, {"reason", "too many clients"}});
     std::ignore = socket.close(error);
+    // Logged once the socket is closed, as `disconnect` is (#72): the client may act on the event.
+    log_->write("refuse", {{"peer", peer}, {"reason", "too many clients"}});
     return;
   }
   auto connection = std::make_shared<Connection>(*this, std::move(socket), std::move(peer));
