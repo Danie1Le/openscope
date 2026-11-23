@@ -45,9 +45,10 @@ struct Capture {
   double sample_rate = 0.0;
   /// Sample indexes in the capture: the length of every channel's samples.
   std::size_t record_length = 0;
-  /// The sample of the capture where time zero sits: the trigger event, or for an untriggered
-  /// capture the pre-trigger position. Either way it is the trigger's pre-trigger sample count.
-  std::size_t trigger_position = 0;
+  /// The time-zero sample (GLOSSARY): the sample of the capture where time zero sits, the trigger
+  /// event or, in an untriggered capture, the one the trigger position names. Either way it is the
+  /// trigger's pre-trigger sample count.
+  std::size_t time_zero_sample = 0;
   /// True when no trigger event placed time zero (an untriggered capture).
   bool untriggered = true;
   /// Each channel's samples, indexed by channel number - 1; empty for a channel that was not
@@ -175,7 +176,7 @@ class CaptureAssembler {
   /// sample index its holdoff lets place a capture.
   std::optional<EdgeTrigger> trigger_;
   SampleIndex holdoff_end_ = 0;
-  /// The capture being collected, and how many samples it holds. Its `trigger_position` and
+  /// The capture being collected, and how many samples it holds. Its `time_zero_sample` and
   /// `untriggered` are set when it completes, from the placement state below.
   std::optional<Capture> building_;
   std::size_t filled_ = 0;

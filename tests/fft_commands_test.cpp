@@ -28,6 +28,7 @@ namespace {
 using test::captured;
 using test::dbv;
 using test::decode_float32_block;
+using test::float32_reply;
 using test::kDataStaleReply;
 using test::kDataTypeErrorReply;
 using test::kIllegalParameterValueReply;
@@ -59,7 +60,7 @@ class FftCommandsTest : public test::InstrumentFixture {
         std::format("ACQ:SRAT 1.024E6;POIN {};:TRIG:LEV 2;POS 0;:SOUR1:FREQ {};:FFT:WIND {}",
                     kRecordLength, frequency, window));
     instrument.advance(kRecordLength);
-    return decode_float32_block(session.send("FFT:DATA?").value_or(""));
+    return float32_reply(session, "FFT:DATA?");
   }
 };
 
@@ -153,7 +154,7 @@ TEST_F(FftCommandsTest, EachSourceAndWindowOfOneCaptureReadsItsOwnSpectrum) {
       for (const auto& [keyword, window] : {std::pair{"RECT", FftWindow::kRectangular},
                                             std::pair{"BHAR", FftWindow::kBlackmanHarris}}) {
         reader->send(std::format("FFT:SOUR CHAN{};WIND {}", channel, keyword));
-        EXPECT_EQ(decode_float32_block(reader->send("FFT:DATA?").value_or("")),
+        EXPECT_EQ(float32_reply(*reader, "FFT:DATA?"),
                   magnitude_spectrum_db(captured(instrument, channel).samples, window))
             << channel << keyword;
       }
@@ -176,7 +177,7 @@ TEST_F(FftCommandsTest, ARecordLengthOfOneGivesOneDcBin) {
   session.send("ACQ:POIN 1;:SOUR1:FUNC DC;OFFS 0.5");
   instrument.advance(1);
 
-  const std::vector<float> spectrum = decode_float32_block(session.send("FFT:DATA?").value_or(""));
+  const std::vector<float> spectrum = float32_reply(session, "FFT:DATA?");
 
   ASSERT_EQ(spectrum.size(), 1);
   EXPECT_NEAR(spectrum[0], dbv(0.5), 1e-4);
@@ -187,7 +188,7 @@ TEST_F(FftCommandsTest, TheLongestRecordLengthGivesHalfAMillionBins) {
   session.send(std::format("ACQ:POIN {};:TRIG:LEV 2;POS 0", AcquisitionSettings::kMaxRecordLength));
   instrument.advance(AcquisitionSettings::kMaxRecordLength);
 
-  EXPECT_EQ(decode_float32_block(session.send("FFT:DATA?").value_or("")).size(),
+  EXPECT_EQ(float32_reply(session, "FFT:DATA?").size(),
             (AcquisitionSettings::kMaxRecordLength / 2) + 1);
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
@@ -196,8 +197,7 @@ TEST_F(FftCommandsTest, SilenceReadsTheFloorInEveryBin) {
   session.send("ACQ:POIN 8;:TRIG:POS 0;:SOUR1:FUNC DC");
   instrument.advance(8);
 
-  EXPECT_EQ(decode_float32_block(session.send("FFT:DATA?").value_or("")),
-            std::vector<float>(5, kSpectrumFloorDb));
+  EXPECT_EQ(float32_reply(session, "FFT:DATA?"), std::vector<float>(5, kSpectrumFloorDb));
 }
 
 TEST_F(FftCommandsTest, SpacingReportsTheSettingsTheCaptureWasTakenWith) {

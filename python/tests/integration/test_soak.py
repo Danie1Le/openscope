@@ -12,7 +12,14 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from engine_helpers import RECORD_LENGTH, SOCKET_ONLY, live_counters, resident_kib, take_capture
+from engine_helpers import (
+    RECORD_LENGTH,
+    SOCKET_ONLY,
+    TRANSFORM_LENGTH,
+    live_counters,
+    resident_kib,
+    take_capture,
+)
 from ground_truth import Signal, assert_measures
 
 from openscope_client import FaultKind, Function, Measurement, OpenScope, ScpiError
@@ -31,8 +38,8 @@ MEMORY_GROWTH_KIB = 32 * 1024
 #: sockets each leaves in TIME_WAIT for a minute hold a few thousand ephemeral ports, well short
 #: of the ~14,000 that connect() picks from (#65).
 CHURN_PAUSE = 0.01
-#: The levels `FFT:DATA?` replies for the `*RST` record, whose first 8192 samples it takes.
-SPECTRUM_LENGTH = 8192 // 2 + 1
+#: The levels `FFT:DATA?` replies for the `*RST` record.
+SPECTRUM_LENGTH = TRANSFORM_LENGTH // 2 + 1
 
 #: The signal of each channel; channel 1's is measured against its ground truth.
 SIGNALS = (

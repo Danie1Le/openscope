@@ -122,8 +122,7 @@ TEST_F(StatisticsTest, StatisticsMatchTheSamplesOfEveryCapture) {
   std::vector<double> means;
   for (std::size_t n = 0; n < 25; ++n) {
     capture(1);
-    const std::vector<float> samples =
-        test::decode_float32_block(session.send("WAV:DATA?").value_or(""));
+    const std::vector<float> samples = test::float32_reply(session, "WAV:DATA?");
     ASSERT_EQ(samples.size(), kRecord);
     maxima.push_back(*std::ranges::max_element(samples));
     means.push_back(std::accumulate(samples.begin(), samples.end(), 0.0) /

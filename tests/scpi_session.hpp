@@ -17,6 +17,7 @@ namespace openscope::test {
 
 /// `SYST:ERR?` replies that more than one test file expects, written out as a client sees them.
 inline constexpr auto kNoErrorReply = R"(0,"No error")";
+inline constexpr auto kSyntaxErrorReply = R"(-102,"Syntax error")";
 inline constexpr auto kDataTypeErrorReply = R"(-104,"Data type error")";
 inline constexpr auto kParameterNotAllowedReply = R"(-108,"Parameter not allowed")";
 inline constexpr auto kMissingParameterReply = R"(-109,"Missing parameter")";
@@ -31,6 +32,7 @@ inline constexpr auto kTooMuchDataReply = R"(-223,"Too much data")";
 inline constexpr auto kClippedReply = R"(-231,"Data questionable;Clipped")";
 inline constexpr auto kNoSignalReply = R"(-200,"Execution error;No signal")";
 inline constexpr auto kTooFewCyclesReply = R"(-200,"Execution error;Too few cycles")";
+inline constexpr auto kQueueOverflowReply = R"(-350,"Queue overflow")";
 inline constexpr auto kInputBufferOverrunReply = R"(-363,"Input buffer overrun")";
 
 /// `command` padded with trailing spaces to `length` bytes (white space before the terminator is

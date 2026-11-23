@@ -11,9 +11,10 @@ namespace openscope::test {
 /// machine.
 inline constexpr std::chrono::seconds kPatience{20};
 
-/// Polls `done` until it holds; false if it still does not after kPatience.
-inline bool eventually(const std::function<bool()>& done) {
-  const auto deadline = std::chrono::steady_clock::now() + kPatience;
+/// Polls `done` until it holds; false if it still does not after `patience`.
+inline bool eventually(const std::function<bool()>& done,
+                       std::chrono::steady_clock::duration patience = kPatience) {
+  const auto deadline = std::chrono::steady_clock::now() + patience;
   while (!done()) {
     if (std::chrono::steady_clock::now() > deadline) {
       return false;

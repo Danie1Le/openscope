@@ -1,12 +1,16 @@
-"""The log events the `engine` fixture keeps (conftest.Engine), and the memory reading the soak
-relies on (engine_helpers.resident_kib)."""
+"""The log events the `engine` fixture keeps (conftest.Engine), and the helpers in engine_helpers
+that need no engine: the memory reading the soak relies on (resident_kib), eventually and
+scpi_error."""
 
 import os
 import socket
 import subprocess
 
+import engine_helpers
 import pytest
-from engine_helpers import KEPT_EVENTS, resident_kib
+from engine_helpers import KEPT_EVENTS, NO_SIGNAL, eventually, resident_kib, scpi_error
+
+from openscope_client import ScpiError
 
 
 def connect_and_leave(port: int) -> str:
@@ -66,3 +70,32 @@ def test_resident_kib_fails_for_a_process_with_no_memory():
             resident_kib(child.pid)
     finally:
         child.wait()
+
+
+def test_eventually_polls_until_the_check_holds():
+    polls = iter(range(10))
+
+    eventually(lambda: next(polls) == 3)
+
+    assert next(polls) == 4
+
+
+def test_eventually_fails_after_the_patience(monkeypatch):
+    monkeypatch.setattr(engine_helpers, "PATIENCE", 0.05)
+
+    with pytest.raises(AssertionError, match="not within the patience"):
+        eventually(lambda: False)
+
+
+def test_scpi_error_is_what_the_call_raised():
+    error = ScpiError((NO_SIGNAL,), None)
+
+    def fail() -> None:
+        raise error
+
+    assert scpi_error(fail) is error
+
+
+def test_scpi_error_fails_when_the_call_raises_nothing():
+    with pytest.raises(pytest.fail.Exception, match="DID NOT RAISE"):
+        scpi_error(lambda: None)

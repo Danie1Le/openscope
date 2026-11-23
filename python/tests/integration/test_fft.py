@@ -9,14 +9,13 @@ import math
 import statistics
 
 import pytest
-from engine_helpers import take_capture
+from engine_helpers import TRANSFORM_LENGTH, take_capture
 from ground_truth import SAMPLE_RATE, Signal
 
 from openscope_client import Function, ScpiError, Window
 
-#: The samples the FFT takes: a power-of-two record length, so every sample, and the first 8192
+#: The tests transform TRANSFORM_LENGTH samples: every sample of a record that long, or the first
 #: of the `*RST` record of 10000. Bins of 1E6 / 8192 = 122.0703125 Hz.
-TRANSFORM_LENGTH = 8192
 SPACING = SAMPLE_RATE / TRANSFORM_LENGTH
 #: The bin the tones sit on or next to.
 BIN = 82

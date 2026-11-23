@@ -273,7 +273,7 @@ def test_every_measurement_has_its_mnemonic(connect):
     assert connected.commands() == [f"MEAS:{m}? CHAN1" for m in mnemonics]
 
 
-def test_waveform_times_count_from_the_trigger_position():
+def test_waveform_times_count_from_the_time_zero_sample():
     waveform = WaveformData(Preamble(1e3, 4, 1.0, 0.0, 1, False), (0.0,) * 4)
 
     assert waveform.times() == (-0.001, 0.0, 0.001, 0.002)

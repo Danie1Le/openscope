@@ -21,7 +21,7 @@
 namespace openscope {
 namespace {
 
-using test::decode_float32_block;
+using test::float32_reply;
 using test::kDataTypeErrorReply;
 using test::kIllegalParameterValueReply;
 using test::kInvalidSuffixReply;
@@ -32,6 +32,7 @@ using test::kParameterNotAllowedReply;
 using test::kSettingsConflictReply;
 using test::kSuffixOutOfRangeReply;
 using test::kUndefinedHeaderReply;
+using test::kUntriggeredCaptures;
 using test::ScpiSession;
 using testing::Each;
 using testing::ElementsAre;
@@ -40,19 +41,17 @@ using testing::Eq;
 /// The latest capture of `channel` (1 to 4) as `WAV:DATA?` reports it.
 std::vector<float> wave(ScpiSession& session, unsigned channel = 1) {
   session.send("WAV:SOUR CHAN" + std::to_string(channel) + ";FORM REAL");
-  return decode_float32_block(session.send("WAV:DATA?").value_or(""));
+  return float32_reply(session, "WAV:DATA?");
 }
 
 /// `count` copies of `value`.
 std::vector<float> flat(std::size_t count, float value) { return std::vector<float>(count, value); }
 
-/// Time zero on the first sample and a trigger level no test signal reaches: Auto takes each record
-/// as it fills, so these tests do not depend on trigger events (#6).
-constexpr auto kPlainAuto = "TRIG:LEV 50;POS 0";
-
+// Every test runs under kUntriggeredCaptures: Auto takes each record as it fills, so these tests do
+// not depend on trigger events (#6).
 class FaultCommandTest : public test::InstrumentFixture {
  protected:
-  void SetUp() override { session.send(kPlainAuto); }
+  void SetUp() override { session.send(kUntriggeredCaptures); }
 
   /// CH1 is a 0.5 V DC level, captured 8 samples at a time.
   void use_dc_level() { session.send("SOUR1:FUNC DC;OFFS 0.5;:ACQ:POIN 8"); }
@@ -337,7 +336,7 @@ TEST_F(FaultCommandTest, SameSeedAndCommandsPutTheFaultAtTheSameIndexWithTheSame
   const auto run = [](std::uint64_t seed) {
     Instrument device{seed};
     ScpiSession client{device};
-    client.send(kPlainAuto);
+    client.send(kUntriggeredCaptures);
     client.send("SOUR1:NOIS 0.1;:ACQ:POIN 1000");
     device.advance(123);
     client.send("SOUR1:FAUL GLIT,3,4");
@@ -368,21 +367,21 @@ TEST_F(FaultCommandTest, RstClearsFaultsStillInPlay) {
   Instrument faulted{kSeed};
   ScpiSession faulted_client{faulted};
   faulted_client.send(kSetup);
-  faulted_client.send(kPlainAuto);
+  faulted_client.send(kUntriggeredCaptures);
   faulted.advance(100);
   faulted_client.send(
       "SOUR1:FAUL DROP,0,100000;:SOUR1:FAUL FST,333,100000;:SOUR1:FAUL GLIT,5,100000");
   faulted.advance(50);
   faulted_client.send("*RST");
   faulted_client.send(kSetup);
-  faulted_client.send(kPlainAuto);
+  faulted_client.send(kUntriggeredCaptures);
   faulted.advance(1000);
 
   Instrument fresh{kSeed};
   ScpiSession fresh_client{fresh};
   fresh.advance(150);
   fresh_client.send(kSetup);
-  fresh_client.send(kPlainAuto);
+  fresh_client.send(kUntriggeredCaptures);
   fresh.advance(1000);
 
   EXPECT_EQ(wave(faulted_client), wave(fresh_client));

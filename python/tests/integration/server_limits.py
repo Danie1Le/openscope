@@ -8,5 +8,7 @@ TOO_MUCH_DATA = ErrorEntry(-223, "Too much data")
 
 #: The longest line the instrument runs, without its terminator.
 MAX_LINE = 4096
+#: What a longer line queues; nothing on it runs.
+INPUT_BUFFER_OVERRUN = ErrorEntry(-363, "Input buffer overrun")
 #: The most clients the engine serves at once.
 MAX_CLIENTS = 8

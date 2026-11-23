@@ -4,12 +4,10 @@ settings (ADR 0002), while instrument settings are shared."""
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from engine_helpers import REJECTED_LINES, take_capture
+from engine_helpers import REJECTED_LINES, UNDEFINED_HEADER, take_capture
 from server_limits import MAX_CLIENTS
 
-from openscope_client import NO_ERROR, ErrorEntry, Function, ScpiError, WaveformFormat
-
-UNDEFINED_HEADER = ErrorEntry(-113, "Undefined header")
+from openscope_client import NO_ERROR, Function, ScpiError, WaveformFormat
 
 
 def noisy_session(engine):

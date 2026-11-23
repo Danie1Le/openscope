@@ -76,7 +76,7 @@ The number of sample indexes in one capture.
 _Avoid_: Points (except as the SCPI keyword), buffer size
 
 **Capture**:
-One triggered record: the samples of every enabled channel over the same record-length span of sample indexes, positioned around a trigger point.
+One triggered record: the samples of every enabled channel over the same record-length span of sample indexes, positioned around its time-zero sample.
 _Avoid_: Acquisition, frame, record (alone), sweep
 
 **Latest capture**:
@@ -105,7 +105,13 @@ The sample index where the trigger channel crosses the trigger level in the chos
 _Avoid_: Trigger (alone, when the event is meant), crossing
 
 **Trigger position**:
-Where in a capture time zero sits, as a percentage of the way from its first sample to its last. The samples before time zero are the pre-trigger samples.
+Where in a capture time zero sits, as a percentage of the way from its first sample to its last (`TRIG:POS`). The samples before time zero are the pre-trigger samples.
+_Avoid_: Trigger position for the sample index of time zero (that is the Time-zero sample)
+
+**Time-zero sample**:
+The sample of a capture, counting from 0, where time zero sits: the trigger event, or in an untriggered capture the sample the trigger position names. It equals the number of pre-trigger samples. `WAV:PRE?` reports it.
+_Avoid_: Trigger position, trigger point, trigger index
+
 **Holdoff**:
 The least time, counted in samples on the sample clock, from the trigger event that placed one capture to the trigger event that may place the next.
 

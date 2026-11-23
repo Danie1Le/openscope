@@ -225,7 +225,7 @@ TEST_F(TriggerTest, DefaultPositionPutsTheTriggerEventHalfWayThroughTheCapture) 
   const std::shared_ptr<const Capture> capture = test::latest(instrument);
   EXPECT_FALSE(capture->untriggered);
   EXPECT_EQ(capture->first_index, 0U);
-  EXPECT_EQ(capture->trigger_position, 5000U);
+  EXPECT_EQ(capture->time_zero_sample, 5000U);
   const std::vector<float> samples = captured(instrument, 1).samples;
   EXPECT_LT(samples[4999], 0.0F);
   EXPECT_GE(samples[5000], 0.0F);
@@ -250,12 +250,12 @@ TEST_F(TriggerTest, PositionsAtEitherEndOfTheRecord) {
   session.send("TRIG:POS 0");
   instrument.advance(1000 + kResetRecordLength);
   EXPECT_EQ(test::first_index(instrument), 1000U);
-  EXPECT_EQ(test::latest(instrument)->trigger_position, 0U);
+  EXPECT_EQ(test::latest(instrument)->time_zero_sample, 0U);
 
   session.send("TRIG:POS 100");
   instrument.advance(10'001);  // The capture ends one sample after time zero.
   EXPECT_EQ(test::first_index(instrument), 21'000U - 9999U);
-  EXPECT_EQ(test::latest(instrument)->trigger_position, 9999U);
+  EXPECT_EQ(test::latest(instrument)->time_zero_sample, 9999U);
 }
 
 // At 300 Hz the sine rises through 0 V at multiples of 3333.3 samples; 6667 is the first event
@@ -315,7 +315,7 @@ TEST_P(NormalModeTest, WaitsAsLongAsItTakesForATriggerEvent) {
 
   const std::shared_ptr<const Capture> capture = test::latest(instrument);
   EXPECT_FALSE(capture->untriggered);
-  EXPECT_EQ(capture->first_index + capture->trigger_position, 125'000U);
+  EXPECT_EQ(capture->first_index + capture->time_zero_sample, 125'000U);
   const std::vector<float> samples = captured(instrument, 1).samples;
   for (std::size_t k = 0; k < samples.size(); k += 997) {
     const double t = static_cast<double>(capture->first_index + k) / 1e6;
@@ -359,7 +359,7 @@ TEST_F(TriggerTest, AutoTimeoutIsOneRecordLengthAfterThePreTriggerSamplesFill) {
   const std::shared_ptr<const Capture> capture = test::latest(longer);
   EXPECT_FALSE(capture->untriggered);
   EXPECT_EQ(capture->first_index, 10'000U);
-  EXPECT_EQ(capture->trigger_position, 10'000U);
+  EXPECT_EQ(capture->time_zero_sample, 10'000U);
 }
 
 // The 8 Hz sine's first event is at 125000. Until then Auto takes an untriggered capture every

@@ -112,7 +112,7 @@ std::size_t CaptureAssembler::collect(Capture& capture, const SampleBlock& block
 }
 
 void CaptureAssembler::complete(Capture& capture) {
-  capture.trigger_position = pre_trigger_;
+  capture.time_zero_sample = pre_trigger_;
   capture.untriggered = !placed_;
   completed_ = std::make_shared<const Capture>(std::move(capture));
   building_.reset();

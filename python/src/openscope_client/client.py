@@ -112,7 +112,8 @@ class Preamble(NamedTuple):
     record_length: int
     scale: float
     offset: float
-    #: The sample (from 0) where time zero sits.
+    #: The time-zero sample: the sample (from 0) where time zero sits. Not the trigger position,
+    #: which is the `TRIG:POS` percentage.
     time_zero: int
     untriggered: bool
 
@@ -137,9 +138,9 @@ class WaveformData:
     samples: tuple[float, ...]
 
     def times(self) -> tuple[float, ...]:
-        """The time of each sample in seconds, 0 at the trigger position."""
-        rate, position = self.preamble.sample_rate, self.preamble.time_zero
-        return tuple((index - position) / rate for index in range(len(self.samples)))
+        """The time of each sample in seconds, 0 at the time-zero sample."""
+        rate, time_zero = self.preamble.sample_rate, self.preamble.time_zero
+        return tuple((index - time_zero) / rate for index in range(len(self.samples)))
 
 
 def _number(text: str) -> float:

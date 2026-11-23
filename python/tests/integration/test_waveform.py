@@ -5,12 +5,12 @@ import array
 
 import pytest
 import pyvisa
-from engine_helpers import LONGEST_RECORD, RECORD_LENGTH, take_capture
+from engine_helpers import LONGEST_RECORD, RECORD_LENGTH, read_channel, take_capture
 
 from openscope_client import Function, Preamble, WaveformFormat
 
-#: The sample time zero sits at for the `*RST` 50% trigger position: round(0.5 x 9999), half away
-#: from zero.
+#: The time-zero sample for the `*RST` 50% trigger position: round(0.5 x 9999), half away from
+#: zero.
 TIME_ZERO = 5000
 
 
@@ -97,7 +97,6 @@ def test_each_channel_reads_its_own_generator(scope, channel):
     scope.generator(channel).offset = -0.5 * channel
     take_capture(scope)
 
-    scope.waveform.source = channel
-    waveform = scope.waveform.read()
+    waveform = read_channel(scope, channel)
 
     assert waveform.samples == (-0.5 * channel,) * RECORD_LENGTH

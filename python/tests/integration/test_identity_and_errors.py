@@ -4,9 +4,18 @@ instrument queues (docs/scpi-reference.md, Error codes)."""
 import re
 
 import pytest
-from engine_helpers import REJECTED_LINES, take_capture
+from engine_helpers import (
+    CLIPPED,
+    NO_SIGNAL,
+    NOT_A_NUMBER,
+    REJECTED_LINES,
+    STALE,
+    read_channel,
+    scpi_error,
+    take_capture,
+)
 
-from openscope_client import NO_ERROR, ErrorEntry, Function, Measurement, ScpiError, TriggerMode
+from openscope_client import NO_ERROR, Function, Measurement, ScpiError, TriggerMode
 
 
 def test_identify_names_the_instrument(scope):
@@ -21,10 +30,7 @@ def test_identify_names_the_instrument(scope):
     ("line", "error"), REJECTED_LINES, ids=[str(e.code) for _, e in REJECTED_LINES]
 )
 def test_a_rejected_command_raises_its_code_and_message(scope, line, error):
-    with pytest.raises(ScpiError) as raised:
-        scope.write(line)
-
-    assert raised.value.errors == (error,)
+    assert scpi_error(lambda: scope.write(line)).errors == (error,)
     assert scope.next_error() == NO_ERROR
 
 
@@ -42,33 +48,30 @@ def test_a_query_before_any_capture_raises_instead_of_waiting_for_a_reply(scope)
     # signal never reaches.
     scope.write("*RST;:TRIG:MODE NORM;LEV 100")
 
-    with pytest.raises(ScpiError) as raised:
-        scope.waveform.read()
+    raised = scpi_error(scope.waveform.read)
 
-    assert (raised.value.code, raised.value.message) == (-230, "Data corrupt or stale")
-    assert raised.value.reply is None
+    assert raised.errors == (STALE,)
+    assert raised.reply is None
     assert scope.trigger.mode == TriggerMode.NORMAL  # The client carries on.
 
 
 def test_a_query_of_a_channel_not_in_the_capture_raises_settings_conflict(scope):
     take_capture(scope)
-    scope.waveform.source = 2  # Channel 2 is off at *RST.
 
-    with pytest.raises(ScpiError, match="Settings conflict") as raised:
-        scope.waveform.read()
+    raised = scpi_error(lambda: read_channel(scope, 2))  # Channel 2 is off at *RST.
 
-    assert raised.value.code == -221
+    assert (raised.code, raised.message) == (-221, "Settings conflict")
 
 
 def test_a_measurement_with_no_signal_raises_its_status_and_carries_not_a_number(scope):
     scope.generator(1).function = Function.DC
     take_capture(scope)
 
-    with pytest.raises(ScpiError) as raised:
-        scope.measure(Measurement.FREQUENCY, 1)
+    raised = scpi_error(lambda: scope.measure(Measurement.FREQUENCY, 1))
 
-    assert raised.value.errors == (ErrorEntry(-200, "Execution error;No signal"),)
-    assert raised.value.reply == b"9.91E37"
+    assert raised.errors == (NO_SIGNAL,)
+    assert raised.reply is not None
+    assert float(raised.reply) == NOT_A_NUMBER
     assert scope.measure(Measurement.PEAK_TO_PEAK, 1) == 0.0
 
 
@@ -76,11 +79,10 @@ def test_every_error_of_a_line_is_raised_with_the_replies(scope):
     scope.channel(1).scale = 0.001  # A 2 Vpp sine clips at +/- 4 mV.
     take_capture(scope)
 
-    with pytest.raises(ScpiError) as raised:
-        scope.query("MEAS:VPP? CHAN1;VRMS? CHAN1")
+    raised = scpi_error(lambda: scope.query("MEAS:VPP? CHAN1;VRMS? CHAN1"))
 
-    assert raised.value.errors == (ErrorEntry(-231, "Data questionable;Clipped"),) * 2
-    assert raised.value.reply is not None
-    peak_to_peak, rms = (float(value) for value in raised.value.reply.split(b";"))
+    assert raised.errors == (CLIPPED,) * 2
+    assert raised.reply is not None
+    peak_to_peak, rms = (float(value) for value in raised.reply.split(b";"))
     assert peak_to_peak == pytest.approx(0.008)
     assert 0 < rms <= 0.004
