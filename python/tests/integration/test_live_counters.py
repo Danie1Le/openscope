@@ -12,13 +12,6 @@ def logged_at(event: dict[str, Any]) -> datetime:
     return datetime.fromisoformat(event["time"])
 
 
-def test_the_stopping_event_reports_the_counters(engine):
-    engine.stop()
-
-    counts = live_counters(engine.last("stopping")).values()
-    assert all(isinstance(count, int) and count >= 0 for count in counts)
-
-
 def test_skipped_samples_are_logged_at_most_once_a_second_and_when_stopping(engine):
     # Far more samples a second than acquisition keeps up with: it skips some every round.
     assert engine.raw_session().query("ACQ:SRAT 1E9;SRAT?") == "1E+09"
@@ -35,5 +28,6 @@ def test_skipped_samples_are_logged_at_most_once_a_second_and_when_stopping(engi
 
     assert (logged_at(second) - logged_at(first)).total_seconds() >= 0.99  # ms in the log.
     assert later["skipped_samples"] > first["skipped_samples"]
-    at_stop = live_counters(engine.last("stopping"))
+    at_stop = live_counters(engine.last("stopping"))  # The run's totals, never less.
+    assert all(isinstance(count, int) for count in at_stop.values())
     assert all(at_stop[name] >= count for name, count in live_counters(later).items())
