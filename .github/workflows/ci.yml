@@ -159,6 +159,13 @@ jobs:
               | tee "benchmark-results/$benchmark.txt"
             { echo "### $benchmark"; echo '```'; cat "benchmark-results/$benchmark.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           done
+      - name: Live mode at 4 channels x 1 MS/s with the longest record (NFR-1)
+        # Reported like the rest: dropped blocks show in the table, they do not fail the job.
+        shell: bash
+        run: |
+          { lscpu | grep -E '^(Model name|CPU\(s\)):'; build/benchmark/bench/live_run 20 1E6 1048576; } \
+            | tee benchmark-results/live_run.txt
+          { echo "### live_run (20 s, 4 x 1048576 points)"; echo '```'; cat benchmark-results/live_run.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: Publish benchmark results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

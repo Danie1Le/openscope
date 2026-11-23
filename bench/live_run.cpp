@@ -1,5 +1,6 @@
 // Runs the instrument live with all four channels on for a number of seconds (the first argument,
-// 10 by default) at a sample rate (the second, the *RST 1 MS/s by default). Once a second it prints
+// 10 by default) at a sample rate (the second, the *RST 1 MS/s by default) and a record length
+// (the third, the *RST 10 000 points by default). Once a second it prints
 // how far captures have got against the wall clock, how many samples acquisition skipped for
 // falling behind it, how many blocks were dropped and captures discarded, and the longest a
 // `*IDN?`, sent every 5 ms, took that second. Results are recorded in docs/benchmarks.md (NFR-1:
@@ -29,14 +30,16 @@ int run(std::span<char*> arguments) {
   using std::chrono::steady_clock;
   using Milliseconds = std::chrono::duration<double, std::milli>;
   const int seconds = arguments.size() > 1 ? std::stoi(arguments[1]) : 10;
-  // The *RST sample rate unless one is given.
+  // The *RST sample rate and record length unless they are given.
   const std::string rate_command =
       arguments.size() > 2 ? std::format("ACQ:SRAT {};:", arguments[2]) : std::string();
+  const std::string points_command =
+      arguments.size() > 3 ? std::format("ACQ:POIN {};:", arguments[3]) : std::string();
   openscope::Instrument instrument;
   const openscope::SessionId session = instrument.open_session(openscope::run_at_once);
   // Every channel on, each with noise.
   instrument.execute(session,
-                     rate_command +
+                     rate_command + points_command +
                          "CHAN2:DISP ON;:CHAN3:DISP ON;:CHAN4:DISP ON;:SOUR1:NOIS 0.01;:SOUR2:"
                          "NOIS 0.01;:SOUR3:NOIS 0.01;:SOUR4:NOIS 0.01;:SYST:ERR?",
                      [](const std::optional<std::string>& reply) {
