@@ -643,7 +643,8 @@ TEST_F(ScpiServerTest, LogsListeningConnectsRefusalsAndDisconnectsAsJsonLines) {
     }
   }
 
-  // The server logs an event before it closes the socket, so the clients have seen all of them.
+  // events() is posted to the I/O thread, so it runs after the closes the clients just saw and
+  // sees every event: the test is deterministic.
   const std::vector<nlohmann::json> events = server->events();
 
   ASSERT_FALSE(events.empty());
