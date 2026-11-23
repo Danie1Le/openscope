@@ -369,15 +369,19 @@ std::optional<ScpiError> convert_all(const std::vector<ParameterRule>& rules, st
   return std::nullopt;
 }
 
-/// Joins `answer`, a query's reply if it has one, to `replies`, the line's replies so far. Returns
-/// false, with -223 queued for `session`, when the joined replies would pass kMaxReplyLength.
-bool join_reply(Session& session, std::optional<std::string>& replies,
-                std::optional<std::string> answer) {
+/// Joins `answer`, a query's reply if it has one, to `replies`, the line's replies so far. When the
+/// joined replies would pass kMaxReplyLength it drops `answer`, puts `session` back to `before`
+/// (the Session as the query found it, if given) and queues -223, and returns false.
+bool join_reply(Session& session, std::optional<Session> before,
+                std::optional<std::string>& replies, std::optional<std::string> answer) {
   if (!answer) {
     return true;
   }
   const std::size_t joined = replies ? replies->size() + 1 : 0;
   if (joined + answer->size() > kMaxReplyLength) {
+    if (before) {
+      session = std::move(*before);
+    }
     session.push_error(kTooMuchData);
     return false;
   }
@@ -434,16 +438,13 @@ Execution CommandTree::execute(Session& session, std::string_view line) const {
 
 void CommandTree::resume(Session& session, Execution& execution) const {
   std::vector<ParsedCommand>& commands = execution.commands_;
-  const auto add_reply = [&](std::optional<std::string> answer) {
-    return join_reply(session, execution.reply_, std::move(answer));
-  };
-  bool fits = true;
+  bool room = true;
   if (execution.hold_) {
-    fits = add_reply(std::move(execution.hold_->reply));
+    room = join_reply(session, std::nullopt, execution.reply_, std::move(execution.hold_->reply));
     execution.hold_.reset();
     ++execution.next_;
   }
-  for (; fits && execution.next_ < commands.size(); ++execution.next_) {
+  for (; room && execution.next_ < commands.size(); ++execution.next_) {
     ParsedCommand& command = commands[execution.next_];
     // SCPI-99 compound headers: a header without a leading ':' continues from the path of the
     // previous command (all but its last node). Common commands leave the path alone.
@@ -468,6 +469,9 @@ void CommandTree::resume(Session& session, Execution& execution) const {
       session.push_error(std::move(*error));
       break;
     }
+    // A query whose reply is then dropped for -223 leaves the Session as it found it, so a
+    // `SYST:ERR?` that crosses the limit does not lose the entry it took off the queue.
+    std::optional<Session> before = command.query ? std::optional(session) : std::nullopt;
     HandlerResult result = entry->handler(session, arguments);
     if (auto* hold = std::get_if<Hold>(&result)) {
       execution.hold_ = std::move(*hold);
@@ -477,7 +481,8 @@ void CommandTree::resume(Session& session, Execution& execution) const {
       session.push_error(std::move(*error));
       break;
     }
-    if (!add_reply(std::move(std::get<std::optional<std::string>>(result)))) {
+    if (!join_reply(session, std::move(before), execution.reply_,
+                    std::move(std::get<std::optional<std::string>>(result)))) {
       break;
     }
   }
