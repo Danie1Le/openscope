@@ -2,8 +2,6 @@
 // register settings and apply their changes. How a command runs under the mutex, and how held
 // lines are carried on, is in instrument.cpp.
 
-#include "openscope/instrument.hpp"
-
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -25,6 +23,7 @@
 #include "openscope/fft.hpp"
 #include "openscope/fft_window.hpp"
 #include "openscope/generator.hpp"
+#include "openscope/instrument.hpp"
 #include "openscope/measurement.hpp"
 #include "openscope/measurement_statistics.hpp"
 #include "openscope/running_statistics.hpp"

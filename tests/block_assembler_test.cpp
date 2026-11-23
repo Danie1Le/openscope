@@ -144,7 +144,8 @@ TEST_F(BlockAssemblerTest, RunRestCapturesTheRestAsRunning) {
             std::nullopt);
 
   EXPECT_THAT(firsts(), ElementsAre(0U, 4U, 8U, 12U, 16U));
-  EXPECT_THAT(captured_channel(*handed_on.captures.at(2), 1).samples, ElementsAre(8.0F, 9.0F, 10.0F, 11.0F));
+  EXPECT_THAT(captured_channel(*handed_on.captures.at(2), 1).samples,
+              ElementsAre(8.0F, 9.0F, 10.0F, 11.0F));
 }
 
 TEST_F(BlockAssemblerTest, RunRestAtTheEndOfTheBlockCapturesFromTheNextBlock) {

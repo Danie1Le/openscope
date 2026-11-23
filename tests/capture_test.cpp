@@ -23,12 +23,12 @@
 namespace openscope {
 namespace {
 
-using testing::ElementsAre;
-using testing::FloatNear;
 using test::HandedOn;
 using test::kChannelOne;
 using test::kUntriggeredEveryRecord;
 using test::rising_block;
+using testing::ElementsAre;
+using testing::FloatNear;
 
 using CaptureTest = test::InstrumentFixture;
 
