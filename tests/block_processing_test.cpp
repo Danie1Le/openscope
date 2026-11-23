@@ -22,6 +22,7 @@
 #include "openscope/capture.hpp"
 #include "openscope/instrument.hpp"
 #include "openscope/measurement.hpp"
+#include "openscope/sample_clock.hpp"
 #include "reply_numbers.hpp"
 #include "scpi_session.hpp"
 
@@ -347,11 +348,12 @@ TEST_F(BlockProcessingTest, HandedOffCapturesArePublishedOnlyOnceMeasured) {
   EXPECT_EQ(instrument.latest_capture(), nullptr);
   session.send("MEAS:STAT? VAV,CHAN1");
   EXPECT_EQ(session.next_error(), test::kDataStaleReply);  // Nothing counted.
+  std::vector<SampleIndex> latest_first_indexes;
   for (const Instrument::CompletedCapture& capture : completed) {
     instrument.publish_measured(capture);
-    EXPECT_EQ(instrument.latest_capture(), capture.capture);
+    latest_first_indexes.push_back(first_index(instrument));
   }
-  EXPECT_EQ(first_index(instrument), 200U);
+  EXPECT_THAT(latest_first_indexes, testing::ElementsAre(0U, 100U, 200U));
   EXPECT_EQ(test::statistics_of(session.send("MEAS:STAT? VAV,CHAN1")).count, 3.0);
 }
 

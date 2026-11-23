@@ -135,7 +135,7 @@ TEST(MeasuringQueueTest, StopReleasesAPushWaitingForRoomWithoutAppending) {
   EXPECT_EQ(pushed.result(), false);
   EXPECT_EQ(front_capture(queue), queued.capture);
   queue.pop();
-  std::stop_source stopped;
+  const std::stop_source stopped;
   stopped.request_stop();
   EXPECT_EQ(queue.front(stopped.get_token()), std::nullopt);  // Nothing else was appended.
 }

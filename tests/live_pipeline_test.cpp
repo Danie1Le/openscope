@@ -21,6 +21,7 @@
 #include "instrument_fixture.hpp"
 #include "openscope/capture.hpp"
 #include "openscope/instrument.hpp"
+#include "openscope/sample_clock.hpp"
 #include "reply_numbers.hpp"
 #include "scpi_session.hpp"
 
@@ -34,11 +35,16 @@ using test::kResetRecordLength;
 using testing::Each;
 using testing::Eq;
 
-/// Waits for a latest capture other than `seen` and returns it, or null after kPatience.
+/// Waits for a latest capture other than `seen` and returns it, or null after kPatience. Runs
+/// `meanwhile`, if given, before each look.
 std::shared_ptr<const Capture> next_capture(const Instrument& instrument,
-                                            const std::shared_ptr<const Capture>& seen) {
+                                            const std::shared_ptr<const Capture>& seen,
+                                            const std::function<void()>& meanwhile = {}) {
   std::shared_ptr<const Capture> capture;
   const bool arrived = eventually([&] {
+    if (meanwhile) {
+      meanwhile();
+    }
     capture = instrument.latest_capture();
     return capture != seen;
   });
@@ -172,48 +178,57 @@ TEST_F(LivePipelineTest, StatisticsHoldTheChannelsOfTheCapturesTheyCount) {
 // With a client (the parameter), one more Session reads each capture's waveform, a measurement
 // and the statistics all the while.
 class LiveLongestRecordTest : public test::InstrumentFixture,
-                              public testing::WithParamInterface<bool> {};
+                              public testing::WithParamInterface<bool> {
+ protected:
+  static constexpr std::size_t kRecordLength = AcquisitionSettings::kMaxRecordLength;
+
+  void SetUp() override {
+#ifndef NDEBUG
+    GTEST_SKIP() << "release builds only";
+#endif
+    // Noisy sines on every channel, captured untriggered back to back from sample 0, so the
+    // latest capture's first sample tells how many captures came before it.
+    session.send(std::format(
+        "{};:{};:SOUR1:NOIS 0.01;:SOUR2:NOIS 0.01;:SOUR3:NOIS 0.01;:SOUR4:NOIS 0.01;:ACQ:POIN {}",
+        test::kUntriggeredCaptures, test::kEnableChannelsTwoToFour, kRecordLength));
+    ASSERT_EQ(session.next_error(), test::kNoErrorReply);
+  }
+
+  /// What the client does before each look for a new capture, if the test has one.
+  std::function<void()> client_queries() {
+    if (!GetParam()) {
+      return {};
+    }
+    return [this] {
+      (void)client_.send("WAV:FORM REAL;:WAV:DATA?;:MEAS:FREQ? CHAN1;:MEAS:STAT? VPP,CHAN4");
+    };
+  }
+
+ private:
+  test::ScpiSession client_{instrument};
+};
 
 TEST_P(LiveLongestRecordTest, RunningAtFourChannelsLosesNoBlockAndCountsEveryCapture) {
-#ifndef NDEBUG
-  GTEST_SKIP() << "release builds only";
-#endif
-  constexpr std::size_t kRecordLength = AcquisitionSettings::kMaxRecordLength;
-  // Noisy sines on every channel, captured untriggered back to back from sample 0, so the latest
-  // capture's first sample tells how many captures came before it.
-  session.send(std::format(
-      "{};:{};:SOUR1:NOIS 0.01;:SOUR2:NOIS 0.01;:SOUR3:NOIS 0.01;:SOUR4:NOIS 0.01;:ACQ:POIN {}",
-      test::kUntriggeredCaptures, test::kEnableChannelsTwoToFour, kRecordLength));
-  ASSERT_EQ(session.next_error(), test::kNoErrorReply);
   constexpr int kCaptures = 5;  // About five seconds.
-  test::ScpiSession client(instrument);
   std::shared_ptr<const Capture> latest;
   std::optional<std::string> reply;
   LiveCounters counters;
   {
     const LivePipeline live(instrument);
-    int published = 0;
-    const bool enough = eventually([&] {
-      if (GetParam()) {
-        (void)client.send("WAV:FORM REAL;:WAV:DATA?;:MEAS:FREQ? CHAN1;:MEAS:STAT? VPP,CHAN4");
-      }
-      const std::shared_ptr<const Capture> now = instrument.latest_capture();
-      published += now != latest ? 1 : 0;
-      latest = now;
-      return published >= kCaptures;
-    });
-    ASSERT_TRUE(enough) << published;
+    for (int published = 0; published < kCaptures; ++published) {
+      latest = next_capture(instrument, latest, client_queries());
+      ASSERT_NE(latest, nullptr) << published;
+    }
     // STOP freezes the latest capture and the statistics together.
     reply = session.send("STOP;:MEAS:STAT? VPP,CHAN4");
-    latest = instrument.latest_capture();
+    latest = test::latest(instrument);
     counters = live.counters();
   }
 
   EXPECT_EQ(counters.dropped_blocks, 0U);
   EXPECT_EQ(counters.discarded_captures, 0U);
-  ASSERT_NE(latest, nullptr);
-  EXPECT_EQ(test::statistics_of(reply).count,
-            static_cast<double>((latest->first_index / kRecordLength) + 1));
+  const SampleIndex captures_from_sample_zero = (latest->first_index / kRecordLength) + 1;
+  EXPECT_EQ(test::statistics_of(reply).count, static_cast<double>(captures_from_sample_zero));
 }
 
 INSTANTIATE_TEST_SUITE_P(Clients, LiveLongestRecordTest, testing::Bool(),
