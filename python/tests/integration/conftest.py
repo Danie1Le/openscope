@@ -91,6 +91,13 @@ class Engine:
                     raise AssertionError(f"no {event} event with {fields} in {self.newest()}")
                 self._logged.wait(left)
 
+    def last(self, event: str) -> dict[str, Any]:
+        """The newest event named `event` that is kept; fails if there is none."""
+        for logged in reversed(self.events):
+            if logged["event"] == event:
+                return logged
+        raise AssertionError(f"no {event} event in {self.newest()}")
+
     def newest(self) -> list[dict[str, Any]]:
         """The newest REPORTED_EVENTS events, for a failure message."""
         return self.events[-REPORTED_EVENTS:]

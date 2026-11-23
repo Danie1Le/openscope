@@ -1,6 +1,7 @@
 """The long stability test (spec story 79): the engine runs live for OPENSCOPE_SOAK_SECONDS
 (default 600) while several clients use every part of it at once, and must keep measuring right,
-keep its memory flat and exit cleanly; the test's own memory must stay flat too. It runs only on
+keep its memory flat, drop no sample block (NFR-1) and exit cleanly; the test's own memory must
+stay flat too. It runs only on
 demand: `pytest --soak -m soak`, or the Soak workflow (workflow_dispatch) in CI."""
 
 import functools
@@ -11,7 +12,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from engine_helpers import RECORD_LENGTH, SOCKET_ONLY, resident_kib, take_capture
+from engine_helpers import LIVE_COUNTERS, RECORD_LENGTH, SOCKET_ONLY, resident_kib, take_capture
 from ground_truth import Signal, assert_measures
 
 from openscope_client import FaultKind, Function, Measurement, OpenScope, ScpiError
@@ -130,3 +131,10 @@ def test_the_engine_holds_up_under_load(engine, open_client):
     for name, kib in memory.items():
         assert max(kib) - kib[0] < MEMORY_GROWTH_KIB, (name, kib)
     assert scope.identify().manufacturer == "OpenScope"
+    # NFR-1: nothing dropped in the whole run. The `stopping` event counts from the start and is
+    # among the newest events, so no amount of logging before it can push it out of the history.
+    engine.stop()
+    stopping = engine.last("stopping")
+    print("Live counters at stopping:", {name: stopping[name] for name in LIVE_COUNTERS})
+    assert stopping["dropped_blocks"] == 0, stopping
+    assert stopping["discarded_captures"] == 0, stopping

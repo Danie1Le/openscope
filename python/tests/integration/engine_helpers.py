@@ -31,6 +31,9 @@ TOO_FEW_CYCLES = ErrorEntry(-200, "Execution error;Too few cycles")
 CLIPPED = ErrorEntry(-231, "Data questionable;Clipped")
 STALE = ErrorEntry(-230, "Data corrupt or stale")
 
+#: The fields of the engine's `live` and `stopping` log events that count what live mode lost.
+LIVE_COUNTERS = ("dropped_blocks", "skipped_samples", "discarded_captures")
+
 #: The `*RST` record length, and the longest (`ACQ:POIN`).
 RECORD_LENGTH = 10000
 LONGEST_RECORD = 1048576

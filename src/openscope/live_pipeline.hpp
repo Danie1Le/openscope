@@ -13,6 +13,18 @@
 
 namespace openscope {
 
+/// What live mode has lost so far, as the engine reports it (spec #1 story 41, NFR-1).
+struct LiveCounters {
+  /// LivePipeline::dropped_blocks.
+  std::uint64_t dropped_blocks = 0;
+  /// LivePipeline::skipped_samples.
+  std::uint64_t skipped_samples = 0;
+  /// Instrument::discarded_captures: captures that would have spanned a dropped block.
+  std::uint64_t discarded_captures = 0;
+
+  bool operator==(const LiveCounters&) const = default;
+};
+
 /// Runs an Instrument in real time (live mode, spec #1). An acquisition thread acquires sample
 /// blocks as the Pacer releases them and pushes them through an SPSC ring buffer; a processing
 /// thread pops them and assembles captures, so a slow capture never holds up the sample clock.
@@ -39,6 +51,14 @@ class LivePipeline {
   /// fell behind it (Pacer::skipped). Any thread may read it.
   [[nodiscard]] std::uint64_t skipped_samples() const {
     return skipped_samples_.load(std::memory_order_relaxed);
+  }
+
+  /// The three counts of what live mode has lost, read one after another. Any thread may read
+  /// them.
+  [[nodiscard]] LiveCounters counters() const {
+    return {.dropped_blocks = dropped_blocks(),
+            .skipped_samples = skipped_samples(),
+            .discarded_captures = instrument_->discarded_captures()};
   }
 
  private:

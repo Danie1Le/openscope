@@ -46,7 +46,7 @@ build/release/src/openscope-engine --port 0   # a free port, named in the "liste
 | `--seed <n>` | `0` | Seed of the generators' noise: the same seed and the same commands give the same signals. |
 | `-h`, `--help` | | Print the options and exit. |
 
-Logs go to standard error, one JSON object per line with `time` and `event` (`listening`, `connect`, `refuse`, `disconnect`, `error`, `stopping`). An invalid option exits with status 2; a failure to start, such as a port in use, logs an `error` event and exits with status 1.
+Logs go to standard error, one JSON object per line with `time` and `event` (`listening`, `connect`, `refuse`, `disconnect`, `live`, `error`, `stopping`). `live` reports what live mode has lost so far, `dropped_blocks` (processing fell behind; NFR-1 asks for none), `skipped_samples` (acquisition fell behind the wall clock) and `discarded_captures` (captures that would have spanned a dropped block), once after each second in which any of them changed; `stopping` carries the same three counts along with the `signal` that stopped the engine. An invalid option exits with status 2; a failure to start, such as a port in use, logs an `error` event and exits with status 1.
 
 ```console
 $ printf '*IDN?\n' | nc -q 1 127.0.0.1 5025
