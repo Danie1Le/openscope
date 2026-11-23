@@ -892,11 +892,13 @@ void Instrument::process(const AcquiredBlock& block, const CaptureHandOff& hand_
   std::shared_ptr<const Capture> single_capture;
   CaptureResults single_results;
   const CaptureSink keep_measured = [&](const std::shared_ptr<const Capture>& capture) {
-    single_results = measure_all(*capture);
     single_capture = capture;
+    if (current(block.generation)) {
+      single_results = measure_all(*capture);
+    }
   };
-  const std::optional<std::size_t> single_end =
-      assemble(block, capture_limit(block) == CaptureLimit::kFirst ? keep_measured : hand_on_running);
+  const std::optional<std::size_t> single_end = assemble(
+      block, capture_limit(block) == CaptureLimit::kFirst ? keep_measured : hand_on_running);
   if (!single_end) {
     return;
   }
@@ -924,9 +926,17 @@ void Instrument::process(const AcquiredBlock& block, const CaptureHandOff& hand_
 }
 
 void Instrument::publish_measured(const CompletedCapture& completed) {
+  if (!current(completed.generation)) {
+    return;
+  }
   const CaptureResults results = measure_all(*completed.capture);
   const std::scoped_lock lock(mutex_);
   publish(completed, results);
+}
+
+bool Instrument::current(std::uint64_t generation) const {
+  const std::scoped_lock lock(mutex_);
+  return generation == generation_;
 }
 
 double Instrument::sample_rate() const {

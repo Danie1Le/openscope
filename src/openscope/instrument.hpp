@@ -160,8 +160,9 @@ class Instrument {
 
   /// Measures `completed`, from `process`'s hand-off, for the measurement statistics without the
   /// mutex, then counts and publishes it as `process` would have (#71: measuring a capture of
-  /// four 1M-sample channels takes longer than live mode's ring buffer holds blocks). Captures
-  /// must come from one thread at a time, in the order they were handed off.
+  /// four 1M-sample channels takes longer than live mode's ring buffer holds blocks). A capture a
+  /// command has discarded since is neither measured nor published. Captures must come from one
+  /// thread at a time, in the order they were handed off.
   void publish_measured(const CompletedCapture& completed);
 
   /// Samples per second on the sample clock (`ACQuire:SRATe`), which live mode paces against.
@@ -226,6 +227,11 @@ class Instrument {
   /// How many captures assembling `block` makes: its own limit, unless `RUN` has already ended
   /// the Single it was acquired for. Processing state only, so it needs no lock.
   [[nodiscard]] CaptureLimit capture_limit(const AcquiredBlock& block) const;
+  /// True until a command discards the capture in progress of `generation` (discard_capture), so
+  /// a capture completed in a block of it may still be published; once false, it stays false. A
+  /// capture that can never be published is not measured: measuring one long capture holds up the
+  /// thread that does it (#71). Takes mutex_.
+  [[nodiscard]] bool current(std::uint64_t generation) const;
   /// Counts `completed` in the measurement statistics with its `results` and makes it the latest
   /// capture, unless a command has discarded the capture in progress since the block it completed
   /// in was acquired. Needs mutex_.
