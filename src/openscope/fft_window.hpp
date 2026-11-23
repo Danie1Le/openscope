@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 namespace openscope {
@@ -15,5 +16,9 @@ enum class FftWindow : std::uint8_t {
   /// The periodic 4-term Blackman-Harris window with sidelobes below -92 dB (Harris 1978).
   kBlackmanHarris,
 };
+
+/// How many windows FftWindow names.
+inline constexpr std::size_t kFftWindowCount =
+    static_cast<std::size_t>(FftWindow::kBlackmanHarris) + 1;
 
 }  // namespace openscope

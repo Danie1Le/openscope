@@ -472,20 +472,14 @@ MeasurementResult MeasurementEngine::measure(const std::shared_ptr<const Capture
     throw std::out_of_range("no such measurement");
   }
   const CapturedChannel& captured = captured_channel(*capture, channel);
-  std::optional<ChannelResults>& cached = channels_.of(capture).at(channel - 1);
-  if (!cached) {
-    cached.emplace(ChannelResults{
-        .levels = find_levels(captured.samples),
-        .results = std::vector<std::optional<MeasurementResult>>(kMeasurements.size())});
-  }
-  std::optional<MeasurementResult>& result = cached->results.at(measurement);
-  if (!result) {
-    result = evaluate(kMeasurements.at(measurement), captured.settings,
-                      {.samples = captured.samples,
-                       .levels = cached->levels,
-                       .sample_rate = capture->sample_rate});
-  }
-  return *result;
+  const auto channels = channels_.of(capture);
+  ChannelResults& cached = channels->at(channel - 1);
+  return cached.results.at(measurement).get([&] {
+    return evaluate(kMeasurements.at(measurement), captured.settings,
+                    {.samples = captured.samples,
+                     .levels = cached.levels.get([&] { return find_levels(captured.samples); }),
+                     .sample_rate = capture->sample_rate});
+  });
 }
 
 }  // namespace openscope

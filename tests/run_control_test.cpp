@@ -290,8 +290,8 @@ TEST_F(RunControlTest, OpcRepliesWhenAnotherSessionSendsRunOrReset) {
 TEST_F(RunControlTest, StopFromAnotherSessionRepliesToItBeforeTheWaitingSession) {
   session.send("TRIG:MODE NORM");
   std::vector<std::string> order;
-  const SessionId waiting = instrument.open_session();
-  const SessionId stopper = instrument.open_session();
+  const SessionId waiting = instrument.open_session(run_at_once);
+  const SessionId stopper = instrument.open_session(run_at_once);
   instrument.execute(waiting, "SINGle;*OPC?", [&](const auto&) { order.emplace_back("waiting"); });
 
   instrument.execute(stopper, "STOP", [&](const auto&) { order.emplace_back("stopper"); });

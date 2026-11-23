@@ -3,6 +3,7 @@
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/steady_timer.hpp>
+#include <boost/asio/thread_pool.hpp>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -34,13 +35,23 @@ namespace openscope {
 /// including one that would send `STOP`, are then refused until one of them disconnects or the
 /// engine restarts, as on a bench instrument with a client limit.
 ///
-/// All of its work runs on the io_context's thread, which must be one thread, so connections need
-/// no locking. Replies that end on another thread (inside `Instrument::process` or `advance`) are
-/// posted back to it, so it never waits on a held line.
+/// Its socket work runs on the io_context's thread, which must be one thread, so connections need
+/// no locking. Lines run on a pool of at most kMaxExecutionThreads threads, each connection's on
+/// its own strand: Sessions run in parallel, so one client's bulk queries do not stall another's
+/// commands (see kMaxExecutionThreads for many at once), while one Session's lines, and the rest of
+/// a line `*OPC?` held, run one at a time in order (#67). Replies are posted back to the I/O
+/// thread, so it never waits on a line.
 class ScpiServer {
  public:
   /// Connections served at once (spec #1, story 82).
   static constexpr std::size_t kMaxClients = 8;
+
+  /// The most threads lines run on; fewer on a machine with fewer hardware threads.
+  ///
+  /// shortcut: while this many clients run bulk lines at once, another client's line waits for a
+  /// thread, up to one bulk line (0.64 s for seven clients each holding a 4 KB ASCII `WAV:DATA?`
+  /// line at 1M points, #68 review; 8 ms with 8 threads). Size it at kMaxClients if that matters.
+  static constexpr unsigned kMaxExecutionThreads = 4;
 
   /// TCP keepalive on every connection: after kKeepAliveIdle without traffic, kKeepAliveProbes
   /// probes kKeepAliveInterval apart. A peer that answers none fails the pending read and its
@@ -62,7 +73,9 @@ class ScpiServer {
   ScpiServer(boost::asio::io_context& io, Instrument& instrument, const ServerOptions& options,
              JsonLog& log);
 
-  /// Closes every connection and ends its Session. Call it only once `io` has stopped running.
+  /// Closes every connection and ends its Session, and waits for the lines still running. Call it
+  /// only once `io` has stopped running and the LivePipeline, which hands held lines to this
+  /// server's threads, has stopped.
   ~ScpiServer();
 
   // Connections keep a pointer to the server.
@@ -91,6 +104,8 @@ class ScpiServer {
   boost::asio::ip::tcp::acceptor acceptor_;
   boost::asio::steady_timer accept_retry_;
   std::uint16_t port_;
+  /// Where lines run.
+  boost::asio::thread_pool execution_;
   /// The connections accepted; closed ones are pruned when the next one arrives.
   std::vector<std::weak_ptr<Connection>> connections_;
 };
