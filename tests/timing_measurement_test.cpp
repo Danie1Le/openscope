@@ -632,11 +632,11 @@ TEST(MeasuredSignalTest, WholeCyclesRunFromTheFirstEdgeToTheLastThatEndsOne) {
   const std::vector<float> samples = pulse_train(350, 100, 30);
   const MeasuredSignal signal(samples);
 
-  const std::optional<WholeCycles>& cycles = signal.whole_cycles();
-  ASSERT_TRUE(cycles.has_value());
-  EXPECT_EQ(cycles->count, 2U);
-  EXPECT_EQ(cycles->length, 200.0);
-  EXPECT_EQ(cycles->high, 60.0);
+  ASSERT_TRUE(signal.whole_cycles().has_value());
+  const WholeCycles cycles = signal.whole_cycles().value_or(WholeCycles{});
+  EXPECT_EQ(cycles.count, 2U);
+  EXPECT_EQ(cycles.length, 200.0);
+  EXPECT_EQ(cycles.high, 60.0);
 }
 
 TEST(MeasuredSignalTest, UnderOneWholeCycleHasNone) {
