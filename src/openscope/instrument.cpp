@@ -413,9 +413,9 @@ std::optional<AcquiredBlock> Instrument::snapshot() {
                        .sequence = next_sequence_++};
 }
 
-std::optional<CompletedCapture> Instrument::publish(
-    const AcquiredBlock& block, const std::shared_ptr<const Capture>& capture,
-    const std::optional<CaptureResults>& results) {
+std::optional<CompletedCapture> Instrument::publish(const AcquiredBlock& block,
+                                                    const std::shared_ptr<const Capture>& capture,
+                                                    const std::optional<CaptureResults>& results) {
   // A command since the block was acquired has discarded what it belongs to: its capture would
   // show settings older than that command.
   if (block.generation != generation_) {

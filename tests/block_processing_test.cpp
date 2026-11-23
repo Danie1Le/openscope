@@ -327,12 +327,10 @@ TEST_F(BlockProcessingTest, RunDuringASinglesBlockCapturesTheRestOfTheBlock) {
 }
 
 /// Every capture `process` publishes from `block` and hands off for counting, in order.
-std::vector<CompletedCapture> handed_off(Instrument& instrument,
-                                                     const AcquiredBlock& block) {
+std::vector<CompletedCapture> handed_off(Instrument& instrument, const AcquiredBlock& block) {
   std::vector<CompletedCapture> completed;
-  instrument.process(block, [&](CompletedCapture capture) {
-    completed.push_back(std::move(capture));
-  });
+  instrument.process(block,
+                     [&](CompletedCapture capture) { completed.push_back(std::move(capture)); });
   return completed;
 }
 
@@ -348,8 +346,7 @@ void count_all(Instrument& instrument, const std::vector<CompletedCapture>& comp
 TEST_F(BlockProcessingTest, HandedOffCapturesArePublishedAtOnceAndCountedOnceMeasured) {
   session.send("ACQ:POIN 100");
 
-  const std::vector<CompletedCapture> completed =
-      handed_off(instrument, acquired(instrument, 300));
+  const std::vector<CompletedCapture> completed = handed_off(instrument, acquired(instrument, 300));
 
   ASSERT_EQ(completed.size(), 3U);
   EXPECT_EQ(first_index(instrument), 200U);
@@ -362,8 +359,7 @@ TEST_F(BlockProcessingTest, HandedOffCapturesArePublishedAtOnceAndCountedOnceMea
 // replies statistics that leave out the latest capture; other commands do not wait.
 TEST_F(BlockProcessingTest, StatisticsQueryWaitsForThePublishedCapturesToBeCounted) {
   session.send("ACQ:POIN 100");
-  const std::vector<CompletedCapture> completed =
-      handed_off(instrument, acquired(instrument, 200));
+  const std::vector<CompletedCapture> completed = handed_off(instrument, acquired(instrument, 200));
   ASSERT_EQ(completed.size(), 2U);
 
   const auto reply = session.start("MEAS:STAT? VAV,CHAN1");
@@ -380,11 +376,9 @@ TEST_F(BlockProcessingTest, StatisticsQueryWaitsForThePublishedCapturesToBeCount
 // a query that waited for all of them might never reply (it did not under TSan).
 TEST_F(BlockProcessingTest, StatisticsQueryDoesNotWaitForCapturesPublishedAfterIt) {
   session.send("ACQ:POIN 100");
-  const std::vector<CompletedCapture> before =
-      handed_off(instrument, acquired(instrument, 100));
+  const std::vector<CompletedCapture> before = handed_off(instrument, acquired(instrument, 100));
   const auto reply = session.start("MEAS:STAT? VAV,CHAN1");
-  const std::vector<CompletedCapture> after =
-      handed_off(instrument, acquired(instrument, 100));
+  const std::vector<CompletedCapture> after = handed_off(instrument, acquired(instrument, 100));
 
   count_all(instrument, before);
 
@@ -396,12 +390,10 @@ TEST_F(BlockProcessingTest, StatisticsQueryDoesNotWaitForCapturesPublishedAfterI
 // statistics start from the captures that complete after the reset.
 TEST_F(BlockProcessingTest, CapturesCompletedBeforeAStatisticsResetAreNotCounted) {
   session.send("ACQ:POIN 100");
-  const std::vector<CompletedCapture> before =
-      handed_off(instrument, acquired(instrument, 200));
+  const std::vector<CompletedCapture> before = handed_off(instrument, acquired(instrument, 200));
 
   session.send("MEAS:STAT:RES");
-  const std::vector<CompletedCapture> after =
-      handed_off(instrument, acquired(instrument, 100));
+  const std::vector<CompletedCapture> after = handed_off(instrument, acquired(instrument, 100));
   count_all(instrument, before);
   count_all(instrument, after);
 
@@ -430,8 +422,7 @@ class RunControlWithCapturesQueuedTest : public test::UntriggeredDcFixture,
 
 TEST_P(RunControlWithCapturesQueuedTest, CapturesCompletedBeforeItAreCountedAndKept) {
   session.send("ACQ:POIN 100");
-  const std::vector<CompletedCapture> completed =
-      handed_off(instrument, acquired(instrument, 300));
+  const std::vector<CompletedCapture> completed = handed_off(instrument, acquired(instrument, 300));
 
   session.send(GetParam());
   count_all(instrument, completed);
