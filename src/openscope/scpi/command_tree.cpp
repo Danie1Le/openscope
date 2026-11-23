@@ -438,13 +438,13 @@ Execution CommandTree::execute(Session& session, std::string_view line) const {
 
 void CommandTree::resume(Session& session, Execution& execution) const {
   std::vector<ParsedCommand>& commands = execution.commands_;
-  bool room = true;
+  bool fits = true;
   if (execution.hold_) {
-    room = join_reply(session, std::nullopt, execution.reply_, std::move(execution.hold_->reply));
+    fits = join_reply(session, std::nullopt, execution.reply_, std::move(execution.hold_->reply));
     execution.hold_.reset();
     ++execution.next_;
   }
-  for (; room && execution.next_ < commands.size(); ++execution.next_) {
+  for (; fits && execution.next_ < commands.size(); ++execution.next_) {
     ParsedCommand& command = commands[execution.next_];
     // SCPI-99 compound headers: a header without a leading ':' continues from the path of the
     // previous command (all but its last node). Common commands leave the path alone.

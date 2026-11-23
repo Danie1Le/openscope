@@ -87,9 +87,9 @@ TEST_F(LivePipelineTest, CapturesAfterASettingChangeHoldOnlyTheNewSignal) {
 }
 
 // Spec story 34 in live mode: the processing thread completes the Single, but never runs the held
-// line (#67). It hands the rest of the line to the Session's Scheduler, and the line ends, and
+// line (#67). It hands the rest of the line to the Session's Resumer, and the line ends, and
 // replies, where that work runs: here, on the test thread.
-TEST_F(LivePipelineTest, SingleOpcIsCarriedOnByTheSchedulerNotTheProcessingThread) {
+TEST_F(LivePipelineTest, SingleOpcIsCarriedOnByTheResumerNotTheProcessingThread) {
   std::promise<std::function<void()>> handed;
   std::thread::id handed_from;
   test::ScpiSession waiting(instrument, [&](std::function<void()> work) {

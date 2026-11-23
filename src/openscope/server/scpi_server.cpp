@@ -132,7 +132,8 @@ class ScpiServer::Connection : public std::enable_shared_from_this<Connection> {
       instrument->close_session(session);
     });
     // A strand must not outlive the server's thread pool, and the io_context may hold this
-    // connection longer; nothing posts to it once the connection is closed.
+    // connection longer. The Session's Resumer keeps its own copy until close_session runs, which
+    // `~ScpiServer` waits for when it joins the pool.
     strand_.reset();
     log("disconnect", {{"reason", reason}});
     error_code ignored;

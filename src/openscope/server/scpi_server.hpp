@@ -37,9 +37,10 @@ namespace openscope {
 ///
 /// Its socket work runs on the io_context's thread, which must be one thread, so connections need
 /// no locking. Lines run on a pool of at most kMaxExecutionThreads threads, each connection's on
-/// its own strand: Sessions run in parallel, so one client's bulk queries never stall another's
-/// commands, while one Session's lines, and the rest of a line `*OPC?` held, run one at a time in
-/// order (#67). Replies are posted back to the I/O thread, so it never waits on a line.
+/// its own strand: Sessions run in parallel, so one client's bulk queries do not stall another's
+/// commands (see kMaxExecutionThreads for many at once), while one Session's lines, and the rest of
+/// a line `*OPC?` held, run one at a time in order (#67). Replies are posted back to the I/O
+/// thread, so it never waits on a line.
 class ScpiServer {
  public:
   /// Connections served at once (spec #1, story 82).
@@ -73,7 +74,8 @@ class ScpiServer {
              JsonLog& log);
 
   /// Closes every connection and ends its Session, and waits for the lines still running. Call it
-  /// only once `io` has stopped running.
+  /// only once `io` has stopped running and the LivePipeline, which hands held lines to this
+  /// server's threads, has stopped.
   ~ScpiServer();
 
   // Connections keep a pointer to the server.

@@ -67,7 +67,7 @@ static_assert(kFormatKeywords.size() == static_cast<std::size_t>(WaveformFormat:
 
 /// The `FFT:WINDow` keywords, in FftWindow order.
 constexpr std::array<std::string_view, 3> kWindowKeywords{"RECTangular", "HANNing", "BHARris"};
-static_assert(kWindowKeywords.size() == static_cast<std::size_t>(FftWindow::kBlackmanHarris) + 1);
+static_assert(kWindowKeywords.size() == kFftWindowCount);
 
 /// The `TRIGger:SLOPe` keywords, in TriggerSlope order.
 constexpr std::array<std::string_view, 2> kSlopeKeywords{"POSitive", "NEGative"};
@@ -681,32 +681,33 @@ void Instrument::enter(RunState state) {
   }
 }
 
-void Instrument::finish(HeldLine line) {
-  while (true) {
-    std::vector<HeldLine> woken;
+void Instrument::finish(RunningLine line) {
+  while (line.execution.held()) {
     {
       const std::scoped_lock lock(mutex_);
-      if (line.execution.held() && pending()) {
+      // Checked again here, under the lock the operation ends under, so no end is missed. The
+      // holding command has no effect of its own, so a line held here waits as if `*OPC?` had run
+      // now: after a `STOP;SINGle` of another Session in between, for that new Single.
+      if (pending()) {
         line.state->holding = true;
         held_.push_back(std::move(line));
         return;
       }
-      if (!line.execution.held()) {
-        line.state->holding = false;
-        woken = take_woken();  // This line may have ended the operation (STOP, RUN, *RST).
-      }
-    }
-    if (!line.execution.held()) {
-      line.on_reply(line.execution.take_reply());
-      schedule(std::move(woken));
-      return;
     }
     // The operation ended between `*OPC?` seeing it pending and now: what it waited for is over.
     commands_.resume(line.state->session, line.execution);
   }
+  std::vector<RunningLine> woken;
+  {
+    const std::scoped_lock lock(mutex_);
+    line.state->holding = false;
+    woken = take_woken();  // This line may have ended the operation (STOP, RUN, *RST).
+  }
+  line.on_reply(line.execution.take_reply());
+  hand_on(std::move(woken));
 }
 
-void Instrument::resume(HeldLine line) {
+void Instrument::resume(RunningLine line) {
   {
     const std::scoped_lock lock(mutex_);
     if (!line.state->open) {
@@ -717,26 +718,26 @@ void Instrument::resume(HeldLine line) {
   finish(std::move(line));
 }
 
-std::vector<Instrument::HeldLine> Instrument::take_woken() {
+std::vector<Instrument::RunningLine> Instrument::take_woken() {
   // Every line held when the operation ended carries on, even after an earlier one arms another
   // Single: what each waited for is over. One that waits again is held again (finish).
-  return pending() ? std::vector<HeldLine>{} : std::exchange(held_, {});
+  return pending() ? std::vector<RunningLine>{} : std::exchange(held_, {});
 }
 
-void Instrument::schedule(std::vector<HeldLine> lines) {
-  for (HeldLine& line : lines) {
-    // A Scheduler takes copyable work, and a held line is move-only.
-    auto held = std::make_shared<HeldLine>(std::move(line));
-    const Scheduler& schedule = held->state->schedule;
-    schedule([this, held] { resume(std::move(*held)); });
+void Instrument::hand_on(std::vector<RunningLine> lines) {
+  for (RunningLine& line : lines) {
+    // A Resumer takes copyable work, and a held line is move-only.
+    auto held = std::make_shared<RunningLine>(std::move(line));
+    const Resumer& resumer = held->state->resumer;
+    resumer([this, held] { resume(std::move(*held)); });
   }
 }
 
-SessionId Instrument::open_session(Scheduler schedule) {
+SessionId Instrument::open_session(Resumer resumer) {
   const std::scoped_lock lock(mutex_);
   const SessionId id{next_session_id_++};
   sessions_.emplace(id, std::make_shared<SessionState>(
-                            SessionState{.session = {}, .schedule = std::move(schedule)}));
+                            SessionState{.session = {}, .resumer = std::move(resumer)}));
   return id;
 }
 
@@ -747,8 +748,8 @@ void Instrument::close_session(SessionId session) {
     throw std::out_of_range("unknown Session");
   }
   found->second->open = false;
+  std::erase_if(held_, [&](const RunningLine& held) { return held.state == found->second; });
   sessions_.erase(found);
-  std::erase_if(held_, [](const HeldLine& held) { return !held.state->open; });
 }
 
 void Instrument::execute(SessionId session, std::string_view line, ReplyHandler on_reply) {
@@ -773,7 +774,7 @@ void Instrument::execute(SessionId session, std::string_view line, ReplyHandler 
 
 void Instrument::advance(std::size_t samples) {
   while (samples > 0) {
-    std::vector<HeldLine> woken;
+    std::vector<RunningLine> woken;
     {
       const std::scoped_lock lock(mutex_);
       std::size_t count = std::min(samples, kMaxBlockLength);
@@ -798,7 +799,7 @@ void Instrument::advance(std::size_t samples) {
         woken = take_woken();
       }
     }
-    schedule(std::move(woken));
+    hand_on(std::move(woken));
   }
 }
 
@@ -846,16 +847,16 @@ void Instrument::process(const AcquiredBlock& block) {
     return;
   }
   bool rest_runs = false;
-  std::vector<HeldLine> woken;
+  std::vector<RunningLine> woken;
   {
     const std::scoped_lock lock(mutex_);
     publish(block, single_capture, single_results);
     rest_runs = conclude(block);
     woken = take_woken();
   }
-  // Handed to the Schedulers, which in live mode run them elsewhere: held bulk queries must not
+  // Handed to the Resumers, which in live mode run them elsewhere: held bulk queries must not
   // stop this thread draining the ring buffer, nor run back to back in one hold (#67).
-  schedule(std::move(woken));
+  hand_on(std::move(woken));
   // RUN came after the block was acquired for a Single. The Single still ends at its capture, and
   // the trigger restarts there as after any Single, but the instrument runs on: the samples after
   // that capture are captured, not lost.

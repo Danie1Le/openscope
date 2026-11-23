@@ -37,6 +37,11 @@ using BlockProcessingTest = test::UntriggeredDcFixture;
 /// placed by one trigger event.
 constexpr auto kNormalTenSamples = "TRIG:MODE NORM;POS 0;:ACQ:POIN 10";
 
+/// A Resumer that keeps the work it is handed in `handed`, for the test to run when it likes.
+Resumer keeping_in(std::vector<std::function<void()>>& handed) {
+  return [&handed](std::function<void()> work) { handed.push_back(std::move(work)); };
+}
+
 // The two halves together make the same captures as stepping the clock, whatever the block size.
 TEST(BlockProcessingStepTest, ProcessingAcquiredBlocksGivesTheCapturesAdvanceGives) {
   constexpr auto kSetup = "SOUR1:NOIS 0.05;:CHAN2:DISP ON;:TRIG:POS 30";
@@ -185,10 +190,10 @@ TEST_F(BlockProcessingTest, SingleCaptureEndsTheHeldLineAndStops) {
 }
 
 // #67: the processing thread runs no held line. Each Session's line is handed to its own
-// Scheduler as a piece of work of its own, so held bulk lines never run back to back in one call.
-TEST_F(BlockProcessingTest, SingleCaptureHandsEachHeldLineToItsSchedulerAsItsOwnWork) {
+// Resumer as a piece of work of its own, so held bulk lines never run back to back in one call.
+TEST_F(BlockProcessingTest, SingleCaptureHandsEachHeldLineToItsResumerAsItsOwnWork) {
   std::vector<std::function<void()>> handed;
-  const Scheduler queue = [&](std::function<void()> work) { handed.push_back(std::move(work)); };
+  const Resumer queue = keeping_in(handed);
   ScpiSession first(instrument, queue);
   ScpiSession second(instrument, queue);
   const auto first_reply = first.start("SINGle;*OPC?;:WAV:SOUR?");
@@ -204,6 +209,22 @@ TEST_F(BlockProcessingTest, SingleCaptureHandsEachHeldLineToItsSchedulerAsItsOwn
   EXPECT_EQ(second_reply->text, "1;CHAN2");
   handed.at(0)();
   EXPECT_EQ(first_reply->text, "1;CHAN1");
+}
+
+// A client that disconnects after its line was handed on, before the work ran, has gone: the
+// rest of its line does not run.
+TEST_F(BlockProcessingTest, HandedLineOfASessionClosedSinceDoesNotRun) {
+  std::vector<std::function<void()>> handed;
+  ScpiSession leaving(instrument, keeping_in(handed));
+  const auto reply = leaving.start("SINGle;*OPC?;:SOUR1:FREQ 2000");
+  instrument.process(acquired(instrument, kResetRecordLength));
+  ASSERT_EQ(handed.size(), 1U);
+
+  leaving.close();
+  handed.front()();
+
+  EXPECT_FALSE(reply->ended);
+  EXPECT_EQ(session.send("SOUR1:FREQ?"), "1000");
 }
 
 // The Single's capture ends inside the block: the rest of the block is not captured, since the
