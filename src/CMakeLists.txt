@@ -3,11 +3,13 @@ find_package(boost_asio CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 
 add_library(openscope
+  openscope/block_assembler.cpp
   openscope/capture.cpp
   openscope/fault.cpp
   openscope/fft.cpp
   openscope/generator.cpp
   openscope/instrument.cpp
+  openscope/instrument_commands.cpp
   openscope/live_pipeline.cpp
   openscope/measurement.cpp
   openscope/measurement_statistics.cpp

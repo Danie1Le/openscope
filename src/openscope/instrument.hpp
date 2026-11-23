@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "openscope/acquired_block.hpp"
+#include "openscope/block_assembler.hpp"
 #include "openscope/capture.hpp"
 #include "openscope/channel.hpp"
 #include "openscope/generator.hpp"
@@ -173,9 +174,7 @@ class Instrument {
   [[nodiscard]] std::shared_ptr<const Capture> latest_capture() const { return latest_.load(); }
 
   /// How many captures have been discarded because they would have spanned a dropped block.
-  [[nodiscard]] std::uint64_t discarded_captures() const {
-    return discarded_captures_.load(std::memory_order_relaxed);
-  }
+  [[nodiscard]] std::uint64_t discarded_captures() const { return blocks_.discarded_captures(); }
 
  private:
   /// The `*RST` timebase scale in seconds per division.
@@ -224,13 +223,6 @@ class Instrument {
   /// A block of no samples with the current settings and the next sequence number, to sample
   /// into; nullopt while Stopped. Needs mutex_.
   std::optional<AcquiredBlock> snapshot();
-  /// Feeds `block` to the capture assembler, which hands each capture to `on_completed` as it
-  /// completes. Returns, when the block's Single capture completed inside it, the offset just past
-  /// that capture. Touches the processing state only, so it needs no lock.
-  std::optional<std::size_t> assemble(const AcquiredBlock& block, const CaptureSink& on_completed);
-  /// How many captures assembling `block` makes: its own limit, unless `RUN` has already ended
-  /// the Single it was acquired for. Processing state only, so it needs no lock.
-  [[nodiscard]] CaptureLimit capture_limit(const AcquiredBlock& block) const;
   /// Makes `capture`, which completed in `block`, the latest capture, unless a command has
   /// discarded the capture in progress since `block` was acquired. With its `results` it counts
   /// it too; without, it returns it to be counted by `count_measured`. Needs mutex_.
@@ -261,6 +253,10 @@ class Instrument {
   /// (a block, ASCII text, a spectrum, a measurement) never stalls other Sessions.
   void add_lock_free_command(scpi::Command command) { commands_.add(std::move(command)); }
 
+  // The SCPI command catalogue (instrument_commands.cpp).
+
+  /// `*IDN?`, `*RST`, `*CLS` and `SYSTem:ERRor?`.
+  void add_system_commands();
   /// `RUN`, `STOP`, `SINGle`, and the `*OPC?` and `*WAI` that wait on a Single.
   void add_run_control_commands();
   void add_generator_commands();
@@ -342,6 +338,9 @@ class Instrument {
   /// two settings (spec #1, story 64). The timebase shapes no capture (ADR 0004), so it does
   /// neither.
   void capture_setting_changed();
+
+  // The run state and held lines (instrument.cpp).
+
   /// `*RST`: restores every instrument-wide setting and the Running run state, restarts every
   /// Generator as if it had run at its defaults since sample index 0 with no Faults, and drops the
   /// latest capture and the statistics. The sample clock keeps counting and Sessions keep their
@@ -431,20 +430,12 @@ class Instrument {
   /// The sequence number of the next block acquired.
   std::uint64_t next_sequence_ = 0;
 
-  // The processing state: only the thread that processes blocks (`advance`'s caller in test mode,
-  // `process`'s in live mode) touches it.
-  CaptureAssembler captures_;
-  /// The generation of the capture in progress, and the sequence number of the block expected
-  /// next.
-  std::uint64_t assembled_generation_ = 0;
-  std::uint64_t expected_sequence_ = 0;
-  /// The generation whose Single `RUN` ended before all its Armed-single blocks were processed;
-  /// the rest of them are captured as Running. Generations are never reused.
-  std::optional<std::uint64_t> run_generation_;
+  /// The processing state: only the thread that processes blocks (`advance`'s caller in test mode,
+  /// `process`'s in live mode) touches it, except its discarded-capture count.
+  BlockAssembler blocks_;
 
   // Read without the Instrument's mutex, so readers never wait on commands or capture processing.
   std::atomic<std::shared_ptr<const Capture>> latest_;
-  std::atomic<std::uint64_t> discarded_captures_ = 0;
 };
 
 }  // namespace openscope
