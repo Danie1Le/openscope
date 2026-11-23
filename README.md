@@ -105,11 +105,11 @@ python3 tools/coverage_gate.py   # needs llvm-cov-18 and llvm-profdata-18; write
 
 ## Benchmarks
 
-The `benchmark` preset (Release) installs the vcpkg `benchmarks` feature (Google Benchmark), fetches KissFFT as a reference only, and builds `fft_benchmark`, which times our FFT against KissFFT, compiled with the same compiler and flags, from 4K to 1M points, and `ring_buffer_benchmark`, which times the SPSC ring buffer between two threads. CI runs every `*_benchmark` on every pull request, reports the numbers and uploads them as JSON (the `benchmark-results` artifact) without gating on them; a crash fails the step. `docs/benchmarks.md` records measured results.
+The `benchmark` preset (Release) installs the vcpkg `benchmarks` feature (Google Benchmark), fetches KissFFT as a reference only, and builds `fft_benchmark`, which times our FFT against KissFFT, compiled with the same compiler and flags, from 4K to 1M points, and `ring_buffer_benchmark`, which times the SPSC ring buffer between two threads. CI runs every `*_benchmark` on every pull request, reports the numbers and uploads them as JSON (the `benchmark-results` artifact) without gating on them; a crash fails the step. The same job runs `live_run` for 20 s at 4 channels x 1M points and reports its drop counts the same way. `docs/benchmarks.md` records measured results.
 
 ```sh
 CC=gcc-14 CXX=g++-14 cmake --preset benchmark && cmake --build --preset benchmark
 build/benchmark/bench/fft_benchmark
 build/benchmark/bench/ring_buffer_benchmark
-build/benchmark/bench/live_run 60   # live mode at 4 channels x 1 MS/s for 60 s (a sample rate may follow): prints skipped samples, drop counts and *IDN? latency
+build/benchmark/bench/live_run 60   # live mode at 4 channels x 1 MS/s for 60 s (a sample rate, then a record length, may follow): prints skipped samples, drop counts and *IDN? latency
 ```
