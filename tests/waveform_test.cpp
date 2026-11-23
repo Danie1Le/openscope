@@ -37,7 +37,14 @@ using test::ScpiSession;
 using testing::Optional;
 using testing::StartsWith;
 
-using WaveformTest = test::InstrumentFixture;
+class WaveformTest : public test::InstrumentFixture {
+ protected:
+  /// Takes one untriggered capture of `points` points.
+  void take_capture(std::size_t points) {
+    session.send(std::format("ACQ:POIN {};:{}", points, test::kUntriggeredCaptures));
+    instrument.advance(points);
+  }
+};
 
 TEST_F(WaveformTest, NewSessionReadsChannelOneAsAscii) {
   EXPECT_EQ(session.send("WAV:SOUR?"), "CHAN1");
@@ -230,6 +237,11 @@ std::size_t real_block_bytes(std::size_t points) {
   return scpi::definite_length_header(data).size() + data;
 }
 
+/// The bytes of `blocks` REAL `WAV:DATA?` replies at `points` points joined with `;`.
+std::size_t joined_real_blocks(std::size_t blocks, std::size_t points) {
+  return (blocks * real_block_bytes(points)) + blocks - 1;
+}
+
 /// A line that sets REAL and then asks `WAV:DATA?` `queries` times.
 std::string real_data_queries(std::size_t queries) {
   std::string line = "WAV:FORM REAL;DATA?";
@@ -243,9 +255,8 @@ std::string real_data_queries(std::size_t queries) {
 TEST_F(WaveformTest, LineOfDataQueriesUpToTheReplyLimitIsReplied) {
   constexpr std::size_t kPoints = 106'859;
   constexpr std::size_t kQueries = 157;
-  ASSERT_EQ((kQueries * real_block_bytes(kPoints)) + kQueries - 1, scpi::kMaxReplyLength);
-  session.send(std::format("ACQ:POIN {};:{}", kPoints, test::kUntriggeredCaptures));
-  instrument.advance(kPoints);
+  ASSERT_EQ(joined_real_blocks(kQueries, kPoints), scpi::kMaxReplyLength);
+  take_capture(kPoints);
 
   EXPECT_EQ(session.send(real_data_queries(kQueries)).value_or("").size(), scpi::kMaxReplyLength);
   EXPECT_EQ(session.next_error(), kNoErrorReply);
@@ -256,12 +267,11 @@ TEST_F(WaveformTest, LineOfDataQueriesUpToTheReplyLimitIsReplied) {
 TEST_F(WaveformTest, LineOfDataQueriesOneByteOverTheReplyLimitIsTooMuchData) {
   constexpr std::size_t kPoints = 508'398;
   constexpr std::size_t kQueries = 33;
-  ASSERT_EQ((kQueries * real_block_bytes(kPoints)) + kQueries - 1, scpi::kMaxReplyLength + 1);
-  session.send(std::format("ACQ:POIN {};:{}", kPoints, test::kUntriggeredCaptures));
-  instrument.advance(kPoints);
+  ASSERT_EQ(joined_real_blocks(kQueries, kPoints), scpi::kMaxReplyLength + 1);
+  take_capture(kPoints);
 
   EXPECT_EQ(session.send(real_data_queries(kQueries)).value_or("").size(),
-            ((kQueries - 1) * real_block_bytes(kPoints)) + kQueries - 2);
+            joined_real_blocks(kQueries - 1, kPoints));
   EXPECT_EQ(session.next_error(), kTooMuchDataReply);
 }
 
