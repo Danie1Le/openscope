@@ -293,7 +293,7 @@ TEST(SpectrumCacheTest, IsTheMagnitudeSpectrumOfTheChannelUnderTheWindow) {
   const std::shared_ptr<const Capture> capture = channel_two_capture();
   for (const FftWindow window : kWindows) {
     EXPECT_EQ(*cache.spectrum(capture, 2, window),
-              magnitude_spectrum_db(capture->channels[1]->samples, window));
+              magnitude_spectrum_db(captured_channel(*capture, 2).samples, window));
   }
 }
 
