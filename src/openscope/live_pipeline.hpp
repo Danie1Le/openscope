@@ -30,17 +30,16 @@ struct LiveCounters {
 
 /// Runs an Instrument in real time (live mode, spec #1). An acquisition thread acquires sample
 /// blocks as the Pacer releases them and pushes them through an SPSC ring buffer; a processing
-/// thread pops them and assembles captures, so a slow capture never holds up the sample clock.
-/// A measuring thread measures and publishes the Running captures processing completes, so
-/// measuring a long capture, which takes longer than the ring buffer holds blocks, never holds up
-/// processing (#71); a Single's capture is still measured by processing (Instrument::process).
-/// When processing falls behind and the buffer is full, the block is dropped and counted; when
-/// acquisition falls behind the wall clock, the samples it skips are counted too.
-/// When measuring falls behind, processing waits for it, so its captures are never lost unseen:
-/// the blocks that then overflow the ring buffer are counted as dropped. The threads start when
-/// the pipeline is built and stop when it is destroyed; blocks still in the buffer are dropped
-/// then, and so is a capture processing is still waiting to queue, but captures already queued
-/// are measured and published first; lines held on a Single stay held until a command ends it.
+/// thread pops them, assembles captures and publishes each as it completes, so a slow capture
+/// never holds up the sample clock. A measuring thread measures every capture processing
+/// publishes and counts it in the measurement statistics, so measuring a long capture, which takes
+/// longer than the ring buffer holds blocks (#71), never holds up processing. When processing
+/// falls behind and the buffer is full, the block is dropped and counted; when acquisition falls
+/// behind the wall clock, the samples it skips are counted too. When measuring falls behind,
+/// processing waits for it rather than leave a capture uncounted: the blocks that then overflow
+/// the ring buffer are counted as dropped. The threads start when the pipeline is built and stop
+/// when it is destroyed; blocks still in the buffer are dropped then, every capture already
+/// published is counted first, and lines held on a Single stay held until a command ends it.
 class LivePipeline {
  public:
   /// Blocks the ring buffer holds before it drops one: at least kQueueCapacity ticks of samples.

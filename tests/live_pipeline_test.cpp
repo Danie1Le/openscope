@@ -16,6 +16,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include "eventually.hpp"
 #include "instrument_fixture.hpp"
@@ -138,7 +139,7 @@ TEST_F(LivePipelineTest, StatisticsCountOnlyTheNewSignalAfterASettingChange) {
     test::Statistics statistics;
 
     const bool counted = eventually([&] {
-      const std::optional<std::string> reply = session.send("MEAS:STAT? VAV,CHAN1");
+      const std::optional<std::string> reply = session.send_live("MEAS:STAT? VAV,CHAN1");
       statistics = reply ? test::statistics_of(reply) : test::Statistics{};
       return statistics.count >= 2;
     });
@@ -161,7 +162,7 @@ TEST_F(LivePipelineTest, StatisticsHoldTheChannelsOfTheCapturesTheyCount) {
     std::string error;
 
     const bool counted = eventually([&] {
-      session.send("MEAS:STAT? VPP,CHAN2");
+      session.send_live("MEAS:STAT? VPP,CHAN2");
       error = session.next_error();
       return error != test::kDataStaleReply;
     });
@@ -200,7 +201,7 @@ class LiveLongestRecordTest : public test::InstrumentFixture,
       return {};
     }
     return [this] {
-      (void)client_.send("WAV:FORM REAL;:WAV:DATA?;:MEAS:FREQ? CHAN1;:MEAS:STAT? VPP,CHAN4");
+      (void)client_.send_live("WAV:FORM REAL;:WAV:DATA?;:MEAS:FREQ? CHAN1;:MEAS:STAT? VPP,CHAN4");
     };
   }
 
@@ -220,7 +221,7 @@ TEST_P(LiveLongestRecordTest, RunningAtFourChannelsLosesNoBlockAndCountsEveryCap
       ASSERT_NE(latest, nullptr) << published;
     }
     // STOP freezes the latest capture and the statistics together.
-    reply = session.send("STOP;:MEAS:STAT? VPP,CHAN4");
+    reply = session.send_live("STOP;:MEAS:STAT? VPP,CHAN4");
     latest = test::latest(instrument);
     counters = live.counters();
   }
@@ -229,6 +230,40 @@ TEST_P(LiveLongestRecordTest, RunningAtFourChannelsLosesNoBlockAndCountsEveryCap
   EXPECT_EQ(counters.discarded_captures, 0U);
   const SampleIndex captures_from_sample_zero = (latest->first_index / kRecordLength) + 1;
   EXPECT_EQ(test::statistics_of(reply).count, static_cast<double>(captures_from_sample_zero));
+}
+
+// The same for Singles (#71 review): a Single's capture is measured off the processing thread
+// too, so taking Singles of the longest record drops no block, and the statistics a held line
+// reads after a reset count that Single's capture alone.
+TEST_P(LiveLongestRecordTest, SinglesLoseNoBlockAndEachCountsItsCapture) {
+  const SessionId single_taker = instrument.open_session(run_at_once);
+  std::vector<std::optional<std::string>> replies;
+  LiveCounters counters;
+  {
+    const LivePipeline live(instrument);
+    for (int single = 0; single < 3; ++single) {
+      // Shared, since the line ends on a pipeline thread.
+      const auto replied = std::make_shared<std::promise<std::optional<std::string>>>();
+      std::future<std::optional<std::string>> reply = replied->get_future();
+      instrument.execute(
+          single_taker, "MEAS:STAT:RES;:SING;*OPC?;:MEAS:STAT? VPP,CHAN4",
+          [replied](std::optional<std::string> text) { replied->set_value(std::move(text)); });
+      const std::function<void()> meanwhile = client_queries();
+      const bool ended = eventually([&] {
+        if (meanwhile) {
+          meanwhile();
+        }
+        return reply.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+      });
+      ASSERT_TRUE(ended) << single;
+      replies.push_back(reply.get());
+    }
+    counters = live.counters();
+  }
+
+  EXPECT_EQ(counters.dropped_blocks, 0U);
+  EXPECT_EQ(counters.discarded_captures, 0U);
+  EXPECT_THAT(replies, Each(testing::Optional(testing::EndsWith(",1"))));  // A count of one.
 }
 
 INSTANTIATE_TEST_SUITE_P(Clients, LiveLongestRecordTest, testing::Bool(),

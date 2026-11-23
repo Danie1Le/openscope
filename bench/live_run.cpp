@@ -1,12 +1,14 @@
 // Runs the instrument live with all four channels on for a number of seconds (the first argument,
-// 10 by default) at a sample rate (the second, the *RST 1 MS/s by default) and a record length
-// (the third, the *RST 10 000 points by default). Once a second it prints
-// how far captures have got against the wall clock, how many samples acquisition skipped for
-// falling behind it, how many blocks were dropped and captures discarded, and the longest a
-// `*IDN?`, sent every 5 ms, took that second. Results are recorded in docs/benchmarks.md (NFR-1:
-// zero dropped blocks at 4 channels x 1 MS/s).
+// 1 to 86400, 10 by default) at a sample rate (the second, 1 to 1E9 samples per second, the *RST
+// 1 MS/s by default) and a record length (the third, 1 to 1048576 points, the *RST 10 000 by
+// default). Once a second it prints how far captures have got against the wall clock, how many
+// samples acquisition skipped for falling behind it, how many blocks were dropped and captures
+// discarded, and the longest a `*IDN?`, sent every 5 ms, took that second. Results are recorded in
+// docs/benchmarks.md (NFR-1: zero dropped blocks at 4 channels x 1 MS/s). A malformed or
+// out-of-range argument exits 2 with the usage; a setup the instrument rejects exits 1.
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <exception>
@@ -17,6 +19,8 @@
 #include <ratio>
 #include <span>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <thread>
 
 #include "openscope/capture.hpp"
@@ -26,25 +30,95 @@
 
 namespace {
 
+constexpr auto kUsage =
+    "usage: live_run [seconds 1-86400 [sample rate 1-1E9 [record length 1-1048576]]]\n";
+
+/// What the command line asks for; the defaults are the *RST settings, for 10 s.
+struct Options {
+  int seconds = 10;
+  double sample_rate = openscope::AcquisitionSettings{}.sample_rate;
+  std::size_t record_length = openscope::AcquisitionSettings{}.record_length;
+};
+
+/// `text` as a number in [low, high], all of it; nullopt for anything else (a sign, a suffix, a
+/// second value). Only numbers parsed this way reach the SCPI line, never the argument's text.
+template <typename Number>
+std::optional<Number> number_in(std::string_view text, Number low, Number high) {
+  Number value{};
+  const char* const end = std::to_address(text.cend());
+  const auto [stop, error] = std::from_chars(text.data(), end, value);
+  const bool whole = error == std::errc{} && stop == end;
+  if (!whole || !(value >= low && value <= high)) {  // NaN fails both comparisons.
+    return std::nullopt;
+  }
+  return value;
+}
+
+/// The options in `arguments`, or nullopt when there are too many or one is not valid.
+std::optional<Options> options_from(std::span<char*> arguments) {
+  Options options;
+  if (arguments.size() > 4) {
+    return std::nullopt;
+  }
+  if (arguments.size() > 1) {
+    const std::optional<int> seconds = number_in(arguments[1], 1, 86'400);
+    if (!seconds) {
+      return std::nullopt;
+    }
+    options.seconds = *seconds;
+  }
+  if (arguments.size() > 2) {
+    const std::optional<double> rate = number_in(arguments[2], 1.0, 1e9);
+    if (!rate) {
+      return std::nullopt;
+    }
+    options.sample_rate = *rate;
+  }
+  if (arguments.size() > 3) {
+    const std::optional<std::size_t> points =
+        number_in(arguments[3], std::size_t{1}, openscope::AcquisitionSettings::kMaxRecordLength);
+    if (!points) {
+      return std::nullopt;
+    }
+    options.record_length = *points;
+  }
+  return options;
+}
+
+/// Runs `line` and returns the error queue's first entry after it.
+std::string first_error(openscope::Instrument& instrument, openscope::SessionId session,
+                        const std::string& line) {
+  instrument.execute(session, line, [](const std::optional<std::string>& /*reply*/) {});
+  std::string error;
+  instrument.execute(session, "SYST:ERR?",
+                     [&](const std::optional<std::string>& reply) { error = reply.value_or(""); });
+  return error;
+}
+
 int run(std::span<char*> arguments) {
   using std::chrono::steady_clock;
   using Milliseconds = std::chrono::duration<double, std::milli>;
-  const int seconds = arguments.size() > 1 ? std::stoi(arguments[1]) : 10;
-  // The *RST sample rate and record length unless they are given.
-  const std::string rate_command =
-      arguments.size() > 2 ? std::format("ACQ:SRAT {};:", arguments[2]) : std::string();
-  const std::string points_command =
-      arguments.size() > 3 ? std::format("ACQ:POIN {};:", arguments[3]) : std::string();
+  const std::optional<Options> parsed = options_from(arguments);
+  if (!parsed) {
+    std::cerr << kUsage;
+    return 2;
+  }
+  const Options& options = *parsed;
+  const int seconds = options.seconds;
   openscope::Instrument instrument;
   const openscope::SessionId session = instrument.open_session(openscope::run_at_once);
-  // Every channel on, each with noise.
-  instrument.execute(session,
-                     rate_command + points_command +
-                         "CHAN2:DISP ON;:CHAN3:DISP ON;:CHAN4:DISP ON;:SOUR1:NOIS 0.01;:SOUR2:"
-                         "NOIS 0.01;:SOUR3:NOIS 0.01;:SOUR4:NOIS 0.01;:SYST:ERR?",
-                     [](const std::optional<std::string>& reply) {
-                       std::cout << "setup errors: " << reply.value_or("") << '\n';
-                     });
+  // Every channel on, each with noise. An error ends the line, so the queue's first entry says
+  // whether all of it ran.
+  const std::string error = first_error(
+      instrument, session,
+      std::format("ACQ:SRAT {};POIN {};:CHAN2:DISP ON;:CHAN3:DISP ON;:CHAN4:DISP ON;:SOUR1:NOIS "
+                  "0.01;:SOUR2:NOIS 0.01;:SOUR3:NOIS 0.01;:SOUR4:NOIS 0.01",
+                  options.sample_rate, options.record_length));
+  std::cout << "setup errors: " << error << '\n';
+  if (error != R"(0,"No error")") {
+    std::cerr << "live_run: the instrument rejected the setup\n";
+    return 1;
+  }
 
   const auto start = steady_clock::now();
   const openscope::LivePipeline live(instrument);

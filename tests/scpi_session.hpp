@@ -2,8 +2,10 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstddef>
 #include <functional>
+#include <future>
 #include <memory>
 #include <optional>
 #include <string>
@@ -11,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "eventually.hpp"
 #include "openscope/instrument.hpp"
 
 namespace openscope::test {
@@ -85,6 +88,25 @@ class ScpiSession {
       reply->text = std::move(text);
     });
     return reply;
+  }
+
+  /// Executes one SCPI line that may end on another thread, as in live mode, where a held line
+  /// (`*OPC?` on a Single, `MEAS:STAT?` while captures are being measured) is carried on by a
+  /// pipeline thread, and waits for its reply. Fails the test and returns nullopt when it has not
+  /// ended after `patience`.
+  std::optional<std::string> send_live(std::string_view line,
+                                       std::chrono::steady_clock::duration patience = kPatience) {
+    // Shared with the handler, which may run after a test that gave up has moved on.
+    auto replied = std::make_shared<std::promise<std::optional<std::string>>>();
+    std::future<std::optional<std::string>> reply = replied->get_future();
+    instrument_->execute(id_, line, [replied](std::optional<std::string> text) {
+      replied->set_value(std::move(text));
+    });
+    if (reply.wait_for(patience) != std::future_status::ready) {
+      ADD_FAILURE() << "'" << line << "' has not ended";
+      return std::nullopt;
+    }
+    return reply.get();
   }
 
   /// Pops this Session's oldest error with `SYST:ERR?`.

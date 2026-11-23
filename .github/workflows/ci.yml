@@ -159,6 +159,17 @@ jobs:
               | tee "benchmark-results/$benchmark.txt"
             { echo "### $benchmark"; echo '```'; cat "benchmark-results/$benchmark.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           done
+      - name: live_run rejects a bad argument
+        # Each must exit 2 with the usage, never run on defaults under the wrong heading. Unquoted
+        # on purpose: each case splits into its arguments, and `;` stays part of the text.
+        shell: bash
+        run: |
+          for bad in "0" "1 0" "1 1E6 abc" "1 1E6 0" "1 1E6 -5" "1 1E6 1048577" "1 1E6 99999999999" \
+                     "1 1E6 1000;:*RST" "1 nan" "1 1E6 10 extra"; do
+            status=0
+            build/benchmark/bench/live_run $bad > /dev/null 2>&1 || status=$?
+            if [ "$status" -ne 2 ]; then echo "::error::live_run $bad exited $status, not 2"; exit 1; fi
+          done
       - name: Live mode at 4 channels x 1 MS/s with the longest record (NFR-1)
         # Reported like the rest: dropped blocks show in the table, they do not fail the job.
         shell: bash
