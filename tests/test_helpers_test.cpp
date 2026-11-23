@@ -5,7 +5,6 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
-#include <cstddef>
 #include <vector>
 
 #include "binary_block.hpp"

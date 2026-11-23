@@ -197,8 +197,7 @@ TEST_F(FftCommandsTest, SilenceReadsTheFloorInEveryBin) {
   session.send("ACQ:POIN 8;:TRIG:POS 0;:SOUR1:FUNC DC");
   instrument.advance(8);
 
-  EXPECT_EQ(float32_reply(session, "FFT:DATA?"),
-            std::vector<float>(5, kSpectrumFloorDb));
+  EXPECT_EQ(float32_reply(session, "FFT:DATA?"), std::vector<float>(5, kSpectrumFloorDb));
 }
 
 TEST_F(FftCommandsTest, SpacingReportsTheSettingsTheCaptureWasTakenWith) {

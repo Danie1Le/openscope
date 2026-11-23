@@ -103,8 +103,7 @@ TEST_F(WaveformTest, SourceAndFormatBelongToEachSession) {
   EXPECT_EQ(session.send("WAV:SOUR?;FORM?"), "CHAN1;ASC");
   EXPECT_EQ(other.send("WAV:SOUR?;FORM?"), "CHAN2;REAL");
   EXPECT_EQ(test::numbers<float>(session.send("WAV:DATA?")), captured(instrument, 1).samples);
-  EXPECT_EQ(float32_reply(other, "WAV:DATA?"),
-            (std::vector<float>{0.5F, 0.5F}));
+  EXPECT_EQ(float32_reply(other, "WAV:DATA?"), (std::vector<float>{0.5F, 0.5F}));
 }
 
 TEST_F(WaveformTest, RstLeavesTheSessionsWaveformSettingsAlone) {
