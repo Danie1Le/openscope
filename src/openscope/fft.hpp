@@ -2,9 +2,13 @@
 
 #include <complex>
 #include <cstddef>
+#include <map>
+#include <memory>
 #include <span>
+#include <utility>
 #include <vector>
 
+#include "openscope/capture.hpp"
 #include "openscope/fft_window.hpp"
 
 namespace openscope {
@@ -49,5 +53,23 @@ std::size_t spectrum_length(std::size_t record_length);
 /// 20 log10 of its voltage. Below kMinWindowedLength samples `window` is ignored. Levels below
 /// kSpectrumFloorDb read kSpectrumFloorDb. Throws std::invalid_argument when `samples` is empty.
 std::vector<float> magnitude_spectrum_db(std::span<const float> samples, FftWindow window);
+
+/// The spectra `FFT:DATA?` replies, computed once per capture, channel and window, as
+/// MeasurementEngine computes measurements once per capture: a line of many `FFT:DATA?` on a
+/// 1M-sample capture would otherwise transform it each time, about 0.1 s apiece (#67).
+class SpectrumCache {
+ public:
+  /// magnitude_spectrum_db of channel `channel` (1 to 4) of `capture` under `window`. Asking
+  /// about a different capture drops every cached spectrum. Throws std::out_of_range when
+  /// `channel` is not in `capture`.
+  std::shared_ptr<const std::vector<float>> spectrum(const std::shared_ptr<const Capture>& capture,
+                                                     std::size_t channel, FftWindow window);
+
+ private:
+  /// The capture the cached spectra belong to; a weak pointer, as in MeasurementEngine, so the
+  /// cache never keeps a capture alive or mistakes a new capture at the same address for it.
+  std::weak_ptr<const Capture> capture_;
+  std::map<std::pair<std::size_t, FftWindow>, std::shared_ptr<const std::vector<float>>> spectra_;
+};
 
 }  // namespace openscope

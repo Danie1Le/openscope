@@ -17,6 +17,7 @@
 #include "openscope/acquired_block.hpp"
 #include "openscope/capture.hpp"
 #include "openscope/channel.hpp"
+#include "openscope/fft.hpp"
 #include "openscope/generator.hpp"
 #include "openscope/measurement.hpp"
 #include "openscope/measurement_statistics.hpp"
@@ -40,8 +41,9 @@ using ReplyHandler = std::function<void(std::optional<std::string> reply)>;
 
 /// The single entry point for instrument behaviour. It owns every Session and the instrument-wide
 /// state (generators, channels, acquisition and trigger settings, the run state, the sample clock,
-/// the latest capture and its measurements, the measurement statistics), and executes SCPI text
-/// on a Session's behalf, so transports and tests all reach the instrument through the same path.
+/// the latest capture and its measurements and spectra, the measurement statistics), and executes
+/// SCPI text on a Session's behalf, so transports and tests all reach the instrument through the
+/// same path.
 ///
 /// The sample clock runs in one of two ways, never both on one Instrument. In test mode one thread
 /// steps it with `advance`. In live mode an acquisition thread calls `acquire` and a processing
@@ -293,6 +295,7 @@ class Instrument {
   TriggerSettings trigger_;
   RunState run_state_ = RunState::kRunning;
   MeasurementEngine measurements_;
+  SpectrumCache spectra_;
   /// Every capture completed since the last capture_setting_changed(), `*RST` or `MEAS:STAT:RES`.
   MeasurementStatistics statistics_;
   /// At most one per Session: a Session with a held line sends no other.

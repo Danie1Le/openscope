@@ -404,15 +404,17 @@ void Instrument::add_fft_commands() {
       [](Session& caller, const Arguments&) {
         return static_cast<std::size_t>(caller.fft().window);
       });
-  commands_.add(
-      {.header = "FFT:DATA?",
-       .parameters = {},
-       .handler = [this](Session& caller, const Arguments&) {
-         return reply_with_source(caller.fft().source, [&caller](const Capture&,
-                                                                 const CapturedChannel& channel) {
-           return scpi::float32_block(magnitude_spectrum_db(channel.samples, caller.fft().window));
-         });
-       }});
+  commands_.add({.header = "FFT:DATA?",
+                 .parameters = {},
+                 .handler = [this](Session& caller, const Arguments&) {
+                   const std::size_t source = caller.fft().source;
+                   return reply_with_source(source, [&](const Capture&, const CapturedChannel&) {
+                     // The capture reply_with_source checked, as for measurements: none is
+                     // published while this handler holds the mutex.
+                     return scpi::float32_block(
+                         *spectra_.spectrum(latest_capture(), source, caller.fft().window));
+                   });
+                 }});
   commands_.add(
       {.header = "FFT:SPACing?",
        .parameters = {},

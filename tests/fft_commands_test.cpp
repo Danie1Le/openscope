@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "binary_block.hpp"
@@ -18,11 +19,13 @@
 #include "instrument_fixture.hpp"
 #include "openscope/capture.hpp"
 #include "openscope/fft.hpp"
+#include "openscope/fft_window.hpp"
 #include "scpi_session.hpp"
 
 namespace openscope {
 namespace {
 
+using test::captured;
 using test::dbv;
 using test::decode_float32_block;
 using test::kDataStaleReply;
@@ -136,6 +139,26 @@ TEST_F(FftCommandsTest, ReadsTheSourceChannelOnly) {
   EXPECT_EQ(peak_bin(channel2), 300);
   EXPECT_NEAR(channel2[300], kOneVoltPeakSineDb, 1e-3);
   EXPECT_LT(channel2[100], -100.0);
+}
+
+// Spectra are computed once per capture (#67), so each source and window of one capture, asked
+// in turn and from two Sessions, must still read its own.
+TEST_F(FftCommandsTest, EachSourceAndWindowOfOneCaptureReadsItsOwnSpectrum) {
+  session.send("CHAN2:DISP ON;:SOUR2:FREQ 300.5KHZ");
+  spectrum_of_sine("100.5KHZ", "RECT");
+  ScpiSession other(instrument);
+
+  for (ScpiSession* reader : {&session, &other, &session}) {
+    for (const std::size_t channel : {std::size_t{1}, std::size_t{2}}) {
+      for (const auto& [keyword, window] : {std::pair{"RECT", FftWindow::kRectangular},
+                                            std::pair{"BHAR", FftWindow::kBlackmanHarris}}) {
+        reader->send(std::format("FFT:SOUR CHAN{};WIND {}", channel, keyword));
+        EXPECT_EQ(decode_float32_block(reader->send("FFT:DATA?").value_or("")),
+                  magnitude_spectrum_db(captured(instrument, channel).samples, window))
+            << channel << keyword;
+      }
+    }
+  }
 }
 
 TEST_F(FftCommandsTest, TheResetRecordLengthUsesTheFirst8192Samples) {
