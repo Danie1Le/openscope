@@ -960,20 +960,13 @@ void Instrument::process(const AcquiredBlock& block, const CaptureHandOff& hand_
 }
 
 void Instrument::count_measured(const CompletedCapture& completed) {
-  // A reset since the capture completed leaves it out, so it is not even measured.
-  const auto counts = [&] { return completed.statistics_epoch == statistics_epoch_; };
-  bool measure = false;
-  {
-    const std::scoped_lock lock(mutex_);
-    measure = counts();
-  }
-  const std::optional<CaptureResults> results =
-      measure ? std::optional(measure_all(*completed.capture)) : std::nullopt;
+  const CaptureResults results = measure_all(*completed.capture);
   std::vector<RunningLine> counted;
   {
     const std::scoped_lock lock(mutex_);
-    if (results && counts()) {
-      statistics_.add(*results);
+    // A reset since the capture completed leaves it out: the statistics start after the reset.
+    if (completed.statistics_epoch == statistics_epoch_) {
+      statistics_.add(results);
     }
     if (--uncounted_ == 0) {
       counted = std::exchange(awaiting_count_, {});
