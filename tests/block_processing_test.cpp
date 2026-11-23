@@ -20,6 +20,7 @@
 #include "instrument_fixture.hpp"
 #include "openscope/acquired_block.hpp"
 #include "openscope/capture.hpp"
+#include "openscope/completed_capture.hpp"
 #include "openscope/instrument.hpp"
 #include "openscope/measurement.hpp"
 #include "reply_numbers.hpp"
@@ -326,18 +327,18 @@ TEST_F(BlockProcessingTest, RunDuringASinglesBlockCapturesTheRestOfTheBlock) {
 }
 
 /// Every capture `process` publishes from `block` and hands off for counting, in order.
-std::vector<Instrument::CompletedCapture> handed_off(Instrument& instrument,
+std::vector<CompletedCapture> handed_off(Instrument& instrument,
                                                      const AcquiredBlock& block) {
-  std::vector<Instrument::CompletedCapture> completed;
-  instrument.process(block, [&](Instrument::CompletedCapture capture) {
+  std::vector<CompletedCapture> completed;
+  instrument.process(block, [&](CompletedCapture capture) {
     completed.push_back(std::move(capture));
   });
   return completed;
 }
 
 /// Counts every capture in `completed`, oldest first, as live mode's measuring thread does.
-void count_all(Instrument& instrument, const std::vector<Instrument::CompletedCapture>& completed) {
-  for (const Instrument::CompletedCapture& capture : completed) {
+void count_all(Instrument& instrument, const std::vector<CompletedCapture>& completed) {
+  for (const CompletedCapture& capture : completed) {
     instrument.count_measured(capture);
   }
 }
@@ -347,7 +348,7 @@ void count_all(Instrument& instrument, const std::vector<Instrument::CompletedCa
 TEST_F(BlockProcessingTest, HandedOffCapturesArePublishedAtOnceAndCountedOnceMeasured) {
   session.send("ACQ:POIN 100");
 
-  const std::vector<Instrument::CompletedCapture> completed =
+  const std::vector<CompletedCapture> completed =
       handed_off(instrument, acquired(instrument, 300));
 
   ASSERT_EQ(completed.size(), 3U);
@@ -361,7 +362,7 @@ TEST_F(BlockProcessingTest, HandedOffCapturesArePublishedAtOnceAndCountedOnceMea
 // replies statistics that leave out the latest capture; other commands do not wait.
 TEST_F(BlockProcessingTest, StatisticsQueryWaitsForThePublishedCapturesToBeCounted) {
   session.send("ACQ:POIN 100");
-  const std::vector<Instrument::CompletedCapture> completed =
+  const std::vector<CompletedCapture> completed =
       handed_off(instrument, acquired(instrument, 200));
   ASSERT_EQ(completed.size(), 2U);
 
@@ -379,10 +380,10 @@ TEST_F(BlockProcessingTest, StatisticsQueryWaitsForThePublishedCapturesToBeCount
 // a query that waited for all of them might never reply (it did not under TSan).
 TEST_F(BlockProcessingTest, StatisticsQueryDoesNotWaitForCapturesPublishedAfterIt) {
   session.send("ACQ:POIN 100");
-  const std::vector<Instrument::CompletedCapture> before =
+  const std::vector<CompletedCapture> before =
       handed_off(instrument, acquired(instrument, 100));
   const auto reply = session.start("MEAS:STAT? VAV,CHAN1");
-  const std::vector<Instrument::CompletedCapture> after =
+  const std::vector<CompletedCapture> after =
       handed_off(instrument, acquired(instrument, 100));
 
   count_all(instrument, before);
@@ -395,11 +396,11 @@ TEST_F(BlockProcessingTest, StatisticsQueryDoesNotWaitForCapturesPublishedAfterI
 // statistics start from the captures that complete after the reset.
 TEST_F(BlockProcessingTest, CapturesCompletedBeforeAStatisticsResetAreNotCounted) {
   session.send("ACQ:POIN 100");
-  const std::vector<Instrument::CompletedCapture> before =
+  const std::vector<CompletedCapture> before =
       handed_off(instrument, acquired(instrument, 200));
 
   session.send("MEAS:STAT:RES");
-  const std::vector<Instrument::CompletedCapture> after =
+  const std::vector<CompletedCapture> after =
       handed_off(instrument, acquired(instrument, 100));
   count_all(instrument, before);
   count_all(instrument, after);
@@ -410,7 +411,7 @@ TEST_F(BlockProcessingTest, CapturesCompletedBeforeAStatisticsResetAreNotCounted
 // The same for a setting change, which resets the statistics too: the capture that completed
 // before it stays the latest until the next one, but is not counted.
 TEST_F(BlockProcessingTest, CapturesCompletedBeforeASettingChangeAreNotCounted) {
-  const std::vector<Instrument::CompletedCapture> before =
+  const std::vector<CompletedCapture> before =
       handed_off(instrument, acquired(instrument, kResetRecordLength));
   ASSERT_EQ(before.size(), 1U);
 
@@ -429,7 +430,7 @@ class RunControlWithCapturesQueuedTest : public test::UntriggeredDcFixture,
 
 TEST_P(RunControlWithCapturesQueuedTest, CapturesCompletedBeforeItAreCountedAndKept) {
   session.send("ACQ:POIN 100");
-  const std::vector<Instrument::CompletedCapture> completed =
+  const std::vector<CompletedCapture> completed =
       handed_off(instrument, acquired(instrument, 300));
 
   session.send(GetParam());
@@ -450,7 +451,7 @@ TEST_F(BlockProcessingTest, LinesHeldOnASingleReadItsCountedStatistics) {
   ScpiSession waiting(instrument, test::keeping_in(handed));
   const auto reply = waiting.start("MEAS:STAT:RES;:SING;*OPC?;:MEAS:STAT? VAV,CHAN1");
 
-  const std::vector<Instrument::CompletedCapture> completed =
+  const std::vector<CompletedCapture> completed =
       handed_off(instrument, acquired(instrument, kResetRecordLength));
   ASSERT_EQ(completed.size(), 1U);
   EXPECT_EQ(first_index(instrument), 0U);
@@ -472,7 +473,7 @@ TEST_F(BlockProcessingTest, ClosingASessionWaitingForTheCountLetsTheOthersCarryO
   std::vector<std::function<void()>> handed;
   ScpiSession waiting(instrument, test::keeping_in(handed));
   (void)waiting.start("SING;*OPC?;:MEAS:STAT? VAV,CHAN1");
-  const std::vector<Instrument::CompletedCapture> completed =
+  const std::vector<CompletedCapture> completed =
       handed_off(instrument, acquired(instrument, kResetRecordLength));
   ASSERT_EQ(handed.size(), 1U);
   handed.front()();
@@ -492,7 +493,7 @@ TEST_F(BlockProcessingTest, RunningCapturesAfterASinglesCaptureAreHandedOffInOrd
   const AcquiredBlock armed = acquired(instrument, 25);
   session.send("RUN");
 
-  const std::vector<Instrument::CompletedCapture> completed = handed_off(instrument, armed);
+  const std::vector<CompletedCapture> completed = handed_off(instrument, armed);
 
   ASSERT_EQ(completed.size(), 2U);
   EXPECT_EQ(completed.front().capture->first_index, 0U);  // The Single's.

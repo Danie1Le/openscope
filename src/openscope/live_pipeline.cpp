@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "openscope/acquired_block.hpp"
+#include "openscope/completed_capture.hpp"
 #include "openscope/instrument.hpp"
 #include "openscope/pacer.hpp"
 
@@ -47,8 +48,8 @@ void LivePipeline::process_blocks(const std::stop_token& stop) {
   // Waiting for the measuring thread to make room stalls this thread, so the ring buffer fills
   // and drops blocks, counted, rather than a capture going uncounted. When the pipeline stops
   // first, the capture is counted here instead, so no MEAS:STAT? waits for it for ever.
-  const Instrument::CaptureHandOff to_measuring =
-      [&](const Instrument::CompletedCapture& completed) {
+  const CaptureHandOff to_measuring =
+      [&](const CompletedCapture& completed) {
         if (!captures_.push(completed, stop)) {
           instrument_->count_measured(completed);
         }
@@ -63,7 +64,7 @@ void LivePipeline::process_blocks(const std::stop_token& stop) {
 }
 
 void LivePipeline::measure_captures(const std::stop_token& stop) {
-  while (const std::optional<Instrument::CompletedCapture> next = captures_.front(stop)) {
+  while (const std::optional<CompletedCapture> next = captures_.front(stop)) {
     instrument_->count_measured(*next);
     captures_.pop();
   }

@@ -7,7 +7,7 @@
 #include <optional>
 #include <stop_token>
 
-#include "openscope/instrument.hpp"
+#include "openscope/completed_capture.hpp"
 
 namespace openscope {
 
@@ -24,12 +24,12 @@ class MeasuringQueue {
 
   /// Producer only: appends `completed`, first waiting until there is room for it. Returns false,
   /// without appending, when `stop` is requested while it waits.
-  [[nodiscard]] bool push(Instrument::CompletedCapture completed, const std::stop_token& stop);
+  [[nodiscard]] bool push(CompletedCapture completed, const std::stop_token& stop);
 
   /// Consumer only: the oldest capture, first waiting until there is one; nullopt when `stop` is
   /// requested while it waits. The capture stays in the queue, and counts against its limits,
   /// until `pop`, so one being measured takes room too.
-  std::optional<Instrument::CompletedCapture> front(const std::stop_token& stop);
+  std::optional<CompletedCapture> front(const std::stop_token& stop);
 
   /// Consumer only: removes the oldest capture, the one `front` returned.
   void pop();
@@ -41,7 +41,7 @@ class MeasuringQueue {
   /// Notified when a capture joins an empty queue and whenever one leaves.
   std::condition_variable_any changed_;
   /// The captures, oldest first, and their samples summed. Both need mutex_.
-  std::deque<Instrument::CompletedCapture> captures_;
+  std::deque<CompletedCapture> captures_;
   std::size_t samples_ = 0;
 };
 

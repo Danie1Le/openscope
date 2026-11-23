@@ -16,12 +16,12 @@
 
 #include "eventually.hpp"
 #include "openscope/capture.hpp"
-#include "openscope/instrument.hpp"
+#include "openscope/completed_capture.hpp"
 
 namespace openscope {
 namespace {
 
-using Completed = Instrument::CompletedCapture;
+using Completed = CompletedCapture;
 
 /// A completed capture of `samples` samples, spread over two channels.
 Completed capture_of(std::size_t samples) {

@@ -17,6 +17,7 @@
 #include "openscope/acquired_block.hpp"
 #include "openscope/capture.hpp"
 #include "openscope/channel.hpp"
+#include "openscope/completed_capture.hpp"
 #include "openscope/generator.hpp"
 #include "openscope/measurement.hpp"
 #include "openscope/measurement_statistics.hpp"
@@ -412,7 +413,7 @@ std::optional<AcquiredBlock> Instrument::snapshot() {
                        .sequence = next_sequence_++};
 }
 
-std::optional<Instrument::CompletedCapture> Instrument::publish(
+std::optional<CompletedCapture> Instrument::publish(
     const AcquiredBlock& block, const std::shared_ptr<const Capture>& capture,
     const std::optional<CaptureResults>& results) {
   // A command since the block was acquired has discarded what it belongs to: its capture would
