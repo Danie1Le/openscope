@@ -32,11 +32,13 @@
 #include <nlohmann/json.hpp>  // IWYU pragma: keep (the definition of json)
 #include <nlohmann/json_fwd.hpp>
 #include <optional>
+#include <ostream>
 #include <random>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #include "eventually.hpp"
@@ -77,6 +79,67 @@ nlohmann::json first_event(const std::vector<nlohmann::json>& events, std::strin
   return named.empty() ? nlohmann::json() : named.front();
 }
 
+/// The descriptors this process could have open: more than any test opens.
+constexpr int kMostDescriptors = 4096;
+
+/// The server's socket for the connection from the client at `client_port`: the descriptor of
+/// this process bound to `server_port` whose peer is at `client_port`, or -1.
+int server_socket(std::uint16_t server_port, std::uint16_t client_port) {
+  const auto port_of = [](int descriptor, auto name) -> std::uint16_t {
+    boost::asio::ip::tcp::endpoint endpoint;
+    auto size = static_cast<socklen_t>(endpoint.capacity());
+    return name(descriptor, endpoint.data(), &size) == 0 ? endpoint.port() : 0;
+  };
+  for (int descriptor = 0; descriptor < kMostDescriptors; ++descriptor) {
+    if (port_of(descriptor, ::getsockname) == server_port &&
+        port_of(descriptor, ::getpeername) == client_port) {
+      return descriptor;
+    }
+  }
+  return -1;
+}
+
+/// A log's text that also notes, for every `refuse` and `disconnect` line, whether the server's
+/// socket for its peer was still open as the line was written. A client may act on an event at
+/// once, so the socket must be closed before the event is logged (#72); a test that looks only
+/// after the fact cannot see a close that comes just behind the log line.
+class SocketWatchingBuffer : public std::stringbuf {
+ public:
+  /// The events logged while the socket they report on was still open.
+  [[nodiscard]] const std::vector<std::string>& logged_while_open() const { return open_; }
+
+ protected:
+  /// Looks at each line the log has flushed since the last call.
+  int sync() override {
+    const std::string_view text = view();
+    for (std::size_t end = text.find('\n', checked_); end != std::string_view::npos;
+         end = text.find('\n', checked_)) {
+      note(nlohmann::json::parse(text.substr(checked_, end - checked_)));
+      checked_ = end + 1;
+    }
+    return 0;
+  }
+
+ private:
+  void note(const nlohmann::json& event) {
+    const std::string name = event["event"];
+    if (name == "listening") {
+      port_ = event["port"];
+    } else if (name == "refuse" || name == "disconnect") {
+      const std::string peer = event["peer"];  // `host:port`, the port after the last colon.
+      const auto client_port =
+          static_cast<std::uint16_t>(std::stoi(peer.substr(peer.rfind(':') + 1)));
+      if (server_socket(port_, client_port) != -1) {
+        open_.push_back(name);
+      }
+    }
+  }
+
+  std::size_t checked_ = 0;
+  std::uint16_t port_ = 0;
+  std::vector<std::string> open_;
+};
+
 /// A ScpiServer on a free loopback port, run on its own I/O thread like the engine's.
 class RunningServer {
  public:
@@ -93,14 +156,18 @@ class RunningServer {
 
   /// Every event logged so far, parsed. The log is read on the I/O thread, which writes it.
   std::vector<nlohmann::json> events() {
-    std::promise<std::string> text;
-    boost::asio::post(io_, [&] { text.set_value(log_text_.str()); });
     std::vector<nlohmann::json> parsed;
-    std::istringstream lines(text.get_future().get());
+    std::istringstream lines(on_io_thread([&] { return log_buffer_.str(); }));
     for (std::string line; std::getline(lines, line);) {
       parsed.push_back(nlohmann::json::parse(line));
     }
     return parsed;
+  }
+
+  /// The `refuse` and `disconnect` events logged while their socket was still open: none, when
+  /// the server closes a socket before it logs it.
+  std::vector<std::string> events_logged_while_socket_open() {
+    return on_io_thread([&] { return log_buffer_.logged_while_open(); });
   }
 
   /// Every event logged, once one named `name` has been; fails the test if none is within
@@ -124,7 +191,16 @@ class RunningServer {
     }
   }
 
-  std::ostringstream log_text_;
+  /// What `read` returns when run on the I/O thread, which owns the log.
+  template <typename Read>
+  std::invoke_result_t<Read> on_io_thread(Read read) {
+    std::promise<std::invoke_result_t<Read>> result;
+    boost::asio::post(io_, [&] { result.set_value(read()); });
+    return result.get_future().get();
+  }
+
+  SocketWatchingBuffer log_buffer_;
+  std::ostream log_text_{&log_buffer_};
   JsonLog log_{log_text_};
   boost::asio::io_context io_;
   ScpiServer server_;
@@ -217,26 +293,6 @@ std::vector<std::unique_ptr<Client>> all_clients(std::uint16_t port) {
 
 /// Matches the reply to `*IDN?`, which shows that a line ran and the connection works.
 auto idn_reply() { return testing::Optional(StartsWith("OpenScope,")); }
-
-/// The descriptors this process could have open: more than any test opens.
-constexpr int kMostDescriptors = 4096;
-
-/// The server's socket for the connection from the client at `client_port`: the descriptor of
-/// this process bound to `server_port` whose peer is at `client_port`, or -1.
-int server_socket(std::uint16_t server_port, std::uint16_t client_port) {
-  const auto port_of = [](int descriptor, auto name) -> std::uint16_t {
-    boost::asio::ip::tcp::endpoint endpoint;
-    auto size = static_cast<socklen_t>(endpoint.capacity());
-    return name(descriptor, endpoint.data(), &size) == 0 ? endpoint.port() : 0;
-  };
-  for (int descriptor = 0; descriptor < kMostDescriptors; ++descriptor) {
-    if (port_of(descriptor, ::getsockname) == server_port &&
-        port_of(descriptor, ::getpeername) == client_port) {
-      return descriptor;
-    }
-  }
-  return -1;
-}
 
 /// The int socket option `name` at `level` of `descriptor`, or -1.
 int socket_option(int descriptor, int level, int name) {
@@ -370,6 +426,27 @@ TEST_F(ScpiServerTest, ClosesAConnectionThatStaysIdle) {
   Client client(port());
 
   EXPECT_TRUE(client.closed_by_server());
+}
+
+// A client acts on `refuse` the moment it sees it, and bytes that reach a socket the server has
+// yet to close are answered with a reset instead of the close (#72).
+TEST_F(ScpiServerTest, ClosesARefusedConnectionBeforeLoggingTheRefusal) {
+  std::vector<std::unique_ptr<Client>> clients = all_clients(port());
+  Client refused(port());
+
+  server->events_once_logged("refuse");
+
+  EXPECT_THAT(server->events_logged_while_socket_open(), testing::IsEmpty());
+}
+
+// The same holds when the server ends a connection that was admitted (#72).
+TEST_F(ScpiServerTest, ClosesAnIdleConnectionBeforeLoggingTheDisconnect) {
+  restart(milliseconds(100));
+  Client client(port());
+
+  server->events_once_logged("disconnect");
+
+  EXPECT_THAT(server->events_logged_while_socket_open(), testing::IsEmpty());
 }
 
 TEST_F(ScpiServerTest, IdleTimeoutCountsFromTheLastCommandOrReply) {
