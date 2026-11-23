@@ -35,7 +35,9 @@ jobs:
   build-test:
     name: ${{ matrix.name }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # 20 minutes unless the entry sets timeout. The tidy entry sets 40: its build alone took 11 to 18
+    # minutes on runners of varying speed (Ninja already uses every core), so 20 left no headroom.
+    timeout-minutes: ${{ matrix.timeout || 20 }}
     strategy:
       fail-fast: false
       matrix:
@@ -49,6 +51,7 @@ jobs:
             preset: debug
             cxx: clang++-18
             configure-args: -DCMAKE_CXX_CLANG_TIDY=clang-tidy-18
+            timeout: 40
           - { name: ASan + UBSan, preset: asan, cxx: clang++-18, pytest: true }
           - { name: TSan, preset: tsan, cxx: clang++-18 }
           - { name: Coverage (gate), preset: coverage, cxx: clang++-18, coverage: true }
