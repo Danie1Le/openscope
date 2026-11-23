@@ -219,10 +219,11 @@ TEST_F(WaveformTest, RealDataIsAFloat32BlockOfTheCapturedSamples) {
 }
 
 TEST_F(WaveformTest, RealDataOfTheLongestRecordFitsOneBlock) {
-  // The ramp never reaches the 2 V level, and time zero on the first sample means no pre-trigger
-  // samples to wait for: Auto takes the first record as it fills.
-  session.send("ACQ:POIN 1048576;:WAV:FORM REAL;:SOUR1:FUNC RAMP;FREQ 1;:TRIG:LEV 2;POS 0");
-  instrument.advance(1'048'576);
+  // The ramp never reaches the trigger level, and time zero on the first sample means no
+  // pre-trigger samples to wait for: Auto takes the first record as it fills.
+  session.send(std::format("ACQ:POIN {};:WAV:FORM REAL;:SOUR1:FUNC RAMP;FREQ 1;:{}",
+                           AcquisitionSettings::kMaxRecordLength, test::kUntriggeredCaptures));
+  instrument.advance(AcquisitionSettings::kMaxRecordLength);
 
   const std::string reply = session.send("WAV:DATA?").value_or("");
 

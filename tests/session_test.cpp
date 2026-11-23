@@ -25,5 +25,10 @@ TEST(SessionTest, QueuedErrorOwnsItsMessageText) {
   EXPECT_EQ(error.message, "Parameter error; value out of range for this channel");
 }
 
+TEST(ErrorReplyTest, IsTheCodeThenTheQuotedMessage) {
+  EXPECT_EQ(error_reply(kNoError), R"(0,"No error")");
+  EXPECT_EQ(error_reply(kSettingsConflict), R"(-221,"Settings conflict")");
+}
+
 }  // namespace
 }  // namespace openscope

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <format>
 #include <string>
 
 namespace openscope {
@@ -10,6 +11,11 @@ struct ScpiError {
   int code;
   std::string message;
 };
+
+/// `error` as `SYSTem:ERRor?` replies it: the code, a comma, then the message in double quotes.
+inline std::string error_reply(const ScpiError& error) {
+  return std::format(R"({},"{}")", error.code, error.message);
+}
 
 /// What `SYST:ERR?` reports when the error queue is empty.
 inline const ScpiError kNoError{.code = 0, .message = "No error"};

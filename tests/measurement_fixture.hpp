@@ -36,11 +36,7 @@ inline std::vector<float> pulse_train(std::size_t length, std::size_t period, st
   return samples;
 }
 
-/// An Instrument at its `*RST` settings taking untriggered captures back to back
-/// (kUntriggeredCaptures): the starting point of measurement facade tests.
-class MeasurementTest : public InstrumentFixture {
- protected:
-  void SetUp() override { session.send(kUntriggeredCaptures); }
-};
+/// The starting point of measurement facade tests.
+using MeasurementTest = UntriggeredCapturesFixture;
 
 }  // namespace openscope::test

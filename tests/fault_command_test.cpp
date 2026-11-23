@@ -49,10 +49,8 @@ std::vector<float> flat(std::size_t count, float value) { return std::vector<flo
 
 // Every test runs under kUntriggeredCaptures: Auto takes each record as it fills, so these tests do
 // not depend on trigger events (#6).
-class FaultCommandTest : public test::InstrumentFixture {
+class FaultCommandTest : public test::UntriggeredCapturesFixture {
  protected:
-  void SetUp() override { session.send(kUntriggeredCaptures); }
-
   /// CH1 is a 0.5 V DC level, captured 8 samples at a time.
   void use_dc_level() { session.send("SOUR1:FUNC DC;OFFS 0.5;:ACQ:POIN 8"); }
 

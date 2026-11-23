@@ -301,9 +301,9 @@ TEST_F(RunControlTest, StopFromAnotherSessionCarriesTheWaitingSessionOnAtTheStop
   EXPECT_THAT(order, ElementsAre("waiting", "stopper"));
 }
 
-// The reviewer's three Sessions (#68 review): a `STOP` ends A's wait at once, before the rest of
-// B's line, so C's `SINGle` meanwhile waits for A instead of arming a Single A would wait on
-// again (and never see if it never triggers). B's own later command waits for A too.
+// Three Sessions (#68): a `STOP` from B ends A's wait at once, before the rest of B's line, so
+// C's `SINGle` meanwhile waits for A instead of arming a Single A would wait on again (and never
+// see if it never triggers). B's own later command waits for A too.
 TEST_F(RunControlTest, StopEndsTheWaitBeforeTheRestOfItsLineAndAnotherSessionsSingle) {
   session.send("TRIG:MODE NORM;LEV 50");  // The DC signal never triggers: no Single completes.
   std::vector<std::function<void()>> handed;

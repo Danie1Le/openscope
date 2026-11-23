@@ -57,6 +57,7 @@ std::vector<float> sine(std::size_t count, double cycles) {
   return samples;
 }
 
+/// Every FFT window.
 constexpr std::array<FftWindow, 3> kAllWindows{FftWindow::kRectangular, FftWindow::kHann,
                                                FftWindow::kBlackmanHarris};
 
@@ -285,13 +286,10 @@ std::shared_ptr<const Capture> channel_two_capture() {
   return capture;
 }
 
-constexpr std::array kWindows{FftWindow::kRectangular, FftWindow::kHann,
-                              FftWindow::kBlackmanHarris};
-
 TEST(SpectrumCacheTest, IsTheMagnitudeSpectrumOfTheChannelUnderTheWindow) {
   SpectrumCache cache;
   const std::shared_ptr<const Capture> capture = channel_two_capture();
-  for (const FftWindow window : kWindows) {
+  for (const FftWindow window : kAllWindows) {
     EXPECT_EQ(*cache.spectrum(capture, 2, window),
               magnitude_spectrum_db(captured_channel(*capture, 2).samples, window));
   }

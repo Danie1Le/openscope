@@ -132,7 +132,8 @@ INSTANTIATE_TEST_SUITE_P(CleanSines, CleanSineTimingTest,
                          testing::Values(SineTiming{1e3, 1e6, 10'000}, SineTiming{1e5, 1e6, 100},
                                          SineTiming{33.3e3, 333e3, 100}, SineTiming{73e3, 1e6, 137},
                                          SineTiming{1234.5, 1e6, 10'000},
-                                         SineTiming{10.0, 1e6, 1'048'576}));
+                                         SineTiming{10.0, 1e6,
+                                                    AcquisitionSettings::kMaxRecordLength}));
 
 // Each shape's 50% crossings fall half a cycle apart, so each one's duty cycle is 50%.
 TEST_F(TimingMeasurementTest, EveryShapeHasTheGeneratorsFrequency) {

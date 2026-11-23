@@ -445,12 +445,11 @@ TEST_F(CommandTreeTest, ErrorDiscardsTheRestOfTheLineButNotWhatAlreadyRan) {
 }
 
 TEST_F(CommandTreeTest, ExecutionErrorFromAHandlerDiscardsTheRestOfTheLine) {
-  const ScpiError conflict{.code = -221, .message = "Settings conflict"};
   tree.add({.header = "TEST:FAIL",
             .parameters = {},
-            .handler = [this, conflict](Session&, const Arguments& arguments) -> HandlerResult {
+            .handler = [this](Session&, const Arguments& arguments) -> HandlerResult {
               calls.push_back({.header = "TEST:FAIL", .arguments = arguments});
-              return conflict;
+              return kSettingsConflict;
             }});
 
   EXPECT_EQ(send("*TST?;:TEST:FAIL;*TST?;:CHAN:DISP ON"), "0");
@@ -458,8 +457,8 @@ TEST_F(CommandTreeTest, ExecutionErrorFromAHandlerDiscardsTheRestOfTheLine) {
   ASSERT_EQ(calls.size(), 2U);
   EXPECT_EQ(calls[1].header, "TEST:FAIL");
   const ScpiError queued = session.pop_error();
-  EXPECT_EQ(queued.code, conflict.code);
-  EXPECT_EQ(queued.message, conflict.message);
+  EXPECT_EQ(queued.code, kSettingsConflict.code);
+  EXPECT_EQ(queued.message, kSettingsConflict.message);
   EXPECT_EQ(next_error_code(), 0);
 }
 

@@ -155,8 +155,7 @@ void Instrument::add_system_commands() {
       {.header = "SYSTem:ERRor[:NEXT]?",
        .parameters = {},
        .handler = [](Session& caller, const Arguments&) -> std::optional<std::string> {
-         const ScpiError error = caller.pop_error();
-         return std::format(R"({},"{}")", error.code, error.message);
+         return error_reply(caller.pop_error());
        }});
 }
 
