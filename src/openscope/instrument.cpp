@@ -502,9 +502,11 @@ void Instrument::add_statistics_commands() {
          }
          const std::size_t measurement = value_of<scpi::Choice>(arguments, 0).index;
          const std::size_t channel = value_of<scpi::Choice>(arguments, 1).suffix;
-         // Every capture published since the reset is counted by now, so the latest capture is
-         // the most recent one they hold and has the channels of every capture they hold (a
-         // channel change resets them).
+         // Every capture published before this query is counted by now, so `current` is the
+         // newest counted capture's result. While Running it can be older than the latest
+         // capture: one completed while the query waited may not be counted yet. The latest
+         // capture still has the channels of every capture they hold (a channel change resets
+         // them).
          return reply_with_source(
              channel, [&](const std::shared_ptr<const Capture>&, const CapturedChannel&) {
                const MeasurementSeries& series = statistics_.at(channel, measurement);

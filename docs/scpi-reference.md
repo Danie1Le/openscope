@@ -335,7 +335,7 @@ The statistics reset on `MEAS:STAT:RES`, on `*RST` and on every setting command 
 
 The fields:
 
-- **current**: the result of the latest capture.
+- **current**: the result of the newest capture counted. While Running it can be older than the latest capture: a `MEAS:STAT?` replies once the captures published before it are counted, and one that completed while it waited may not be counted yet.
 - **mean**, **minimum**, **maximum**: over the values counted.
 - **standard deviation**: the population standard deviation of the values counted (the root of their mean squared deviation from the mean), so one value has a standard deviation of 0.
 - **count**: how many values were counted.
