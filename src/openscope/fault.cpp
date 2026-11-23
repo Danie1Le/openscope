@@ -51,3 +51,9 @@ double Fault::apply(SampleIndex index, double volts) const {
 }
 
 }  // namespace openscope
+
+int tidy_violation_probe() {
+    int uninitialised;
+    uninitialised = 1;
+    return uninitialised;
+}
