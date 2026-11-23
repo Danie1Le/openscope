@@ -625,20 +625,18 @@ TEST(MeasuredSignalTest, ViewsItsSamplesAndFindsTheirLevels) {
   EXPECT_EQ(signal.levels().base, 0.0);
 }
 
-// Low for 50 samples, then high for 50: 50% crossings at 49.5, 99.5, ... 299.5. Six edges bound
-// two whole cycles from the first rising edge; the falling edge at 299.5 ends no whole cycle.
+// Low for 70 samples, then high for 30: 50% crossings at 69.5 (rising), 99.5, 169.5, ... 299.5.
+// The whole cycles run from the first rising edge to the one at 269.5; the falling edge at 299.5
+// ends no whole cycle, so its high time is left out.
 TEST(MeasuredSignalTest, WholeCyclesRunFromTheFirstEdgeToTheLastThatEndsOne) {
-  const std::vector<float> samples = pulse_train(350, 100, 50);
+  const std::vector<float> samples = pulse_train(350, 100, 30);
   const MeasuredSignal signal(samples);
 
   const std::optional<WholeCycles>& cycles = signal.whole_cycles();
   ASSERT_TRUE(cycles.has_value());
   EXPECT_EQ(cycles->count, 2U);
   EXPECT_EQ(cycles->length, 200.0);
-  ASSERT_EQ(cycles->edges.size(), 5U);
-  EXPECT_EQ(cycles->edges.front().direction, Edge::Direction::kRising);
-  EXPECT_EQ(cycles->edges.front().middle, 49.5);
-  EXPECT_EQ(cycles->edges.back().middle, 249.5);
+  EXPECT_EQ(cycles->high, 60.0);
 }
 
 TEST(MeasuredSignalTest, UnderOneWholeCycleHasNone) {
@@ -647,19 +645,18 @@ TEST(MeasuredSignalTest, UnderOneWholeCycleHasNone) {
   EXPECT_EQ(MeasuredSignal(samples).whole_cycles(), std::nullopt);
 }
 
-// Each step edge takes 0.8 sample periods from 10% to 90%, and the edges alternate.
-TEST(MeasuredSignalTest, RiseFallEdgesAreEveryCompleteEdgeInOrder) {
-  const std::vector<float> samples = pulse_train(350, 100, 50);
+// Three rising and three falling step edges, each 0.8 sample periods from 10% to 90%. The final
+// rise stops at 50%, inside the band, so it is no edge.
+TEST(MeasuredSignalTest, RiseFallCountsAndSumsTheCompleteEdgesOfEachDirection) {
+  std::vector<float> samples = pulse_train(350, 100, 30);
+  samples.push_back(0.5F);
   const MeasuredSignal signal(samples);
 
-  const std::span<const Edge> edges = signal.rise_fall_edges();
-  ASSERT_EQ(edges.size(), 6U);
-  for (std::size_t index = 0; index < edges.size(); ++index) {
-    EXPECT_EQ(edges[index].direction,
-              index % 2 == 0 ? Edge::Direction::kRising : Edge::Direction::kFalling);
-    EXPECT_DOUBLE_EQ(edges[index].middle, 49.5 + (50.0 * static_cast<double>(index)));
-    EXPECT_NEAR(edges[index].duration, 0.8, 1e-9);
-  }
+  const RiseFallDurations& edges = signal.rise_fall();
+  EXPECT_EQ(edges.rising.count, 3U);
+  EXPECT_NEAR(edges.rising.total, 2.4, 1e-9);
+  EXPECT_EQ(edges.falling.count, 3U);
+  EXPECT_NEAR(edges.falling.total, 2.4, 1e-9);
 }
 
 TEST(MeasuredSignalTest, FindsTheEdgesOnceForEveryMeasurement) {
@@ -667,7 +664,7 @@ TEST(MeasuredSignalTest, FindsTheEdgesOnceForEveryMeasurement) {
   const MeasuredSignal signal(samples);
 
   EXPECT_EQ(&signal.whole_cycles(), &signal.whole_cycles());
-  EXPECT_EQ(signal.rise_fall_edges().data(), signal.rise_fall_edges().data());
+  EXPECT_EQ(&signal.rise_fall(), &signal.rise_fall());
 }
 
 // Measurements that share one signal's edges reply exactly what each replies on a signal of its

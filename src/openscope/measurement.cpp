@@ -242,6 +242,18 @@ constexpr double kDoubtfulCycleShare = 0.125;
 /// The band rise and fall time are measured across: the 10% and 90% reference levels.
 constexpr Band kRiseFallBand{.lower = 0.1, .upper = 0.9};
 
+/// One move of the signal from beyond one level of a band to beyond the other. Its times are in
+/// sample periods.
+struct Edge {
+  enum class Direction : std::uint8_t { kRising, kFalling };
+  Direction direction;
+  /// When the edge last crossed the 50% level, from the first sample.
+  double middle;
+  /// How long the edge took from last leaving the band level it started from (the lower one when
+  /// rising, the upper one when falling) to reaching the other one.
+  double duration;
+};
+
 /// When `samples` last reached `level` going up (`sign` 1) or down (-1) at or before sample
 /// `reached`, which is past `level`, in sample periods from the first sample: linear interpolation
 /// between the last sample short of `level` and the next one. A sample short of `level` must come
@@ -338,7 +350,25 @@ std::optional<WholeCycles> find_whole_cycles(const MeasuredSignal& signal) {
                                   kDoubtfulCycleShare * length / static_cast<double>(count))) {
     return std::nullopt;
   }
-  return WholeCycles{.edges = std::move(edges), .count = count, .length = length};
+  double high = 0.0;
+  for (std::size_t edge = 0; edge + 1 < edges.size(); ++edge) {
+    if (edges[edge].direction == Edge::Direction::kRising) {
+      high += edges[edge + 1].middle - edges[edge].middle;
+    }
+  }
+  return WholeCycles{.count = count, .length = length, .high = high};
+}
+
+/// The complete edges of `signal` across kRiseFallBand, by direction.
+RiseFallDurations find_rise_fall(const MeasuredSignal& signal) {
+  RiseFallDurations durations;
+  for (const Edge& edge : find_edges(signal, kRiseFallBand)) {
+    EdgeDurations& same_direction =
+        edge.direction == Edge::Direction::kRising ? durations.rising : durations.falling;
+    same_direction.total += edge.duration;
+    ++same_direction.count;
+  }
+  return durations;
 }
 
 /// The mean period of the whole cycles in `signal`, in seconds, or nullopt under one whole cycle.
@@ -357,32 +387,16 @@ std::optional<double> positive_duty_cycle(const MeasuredSignal& signal) {
   if (!cycles) {
     return std::nullopt;
   }
-  const std::vector<Edge>& edges = cycles->edges;
-  double high = 0.0;
-  for (std::size_t edge = 0; edge + 1 < edges.size(); ++edge) {
-    if (edges[edge].direction == Edge::Direction::kRising) {
-      high += edges[edge + 1].middle - edges[edge].middle;
-    }
-  }
-  return 100.0 * high / cycles->length;
+  return 100.0 * cycles->high / cycles->length;
 }
 
-/// The mean time the edges in `kDirection` in `signal` take from one outer reference level to the
-/// other, in seconds, or nullopt when there is no such edge.
-template <Edge::Direction kDirection>
-std::optional<double> mean_edge_duration(const MeasuredSignal& signal) {
-  double total = 0.0;
-  std::size_t count = 0;
-  for (const Edge& edge : signal.rise_fall_edges()) {
-    if (edge.direction == kDirection) {
-      total += edge.duration;
-      ++count;
-    }
-  }
-  if (count == 0) {
+/// The mean time `edges` take from one outer reference level to the other, in seconds at
+/// `sample_rate`, or nullopt when there is no such edge.
+std::optional<double> mean_edge_duration(const EdgeDurations& edges, double sample_rate) {
+  if (edges.count == 0) {
     return std::nullopt;
   }
-  return total / static_cast<double>(count) / signal.sample_rate();
+  return edges.total / static_cast<double>(edges.count) / sample_rate;
 }
 
 constexpr std::array kMeasurements{
@@ -415,10 +429,14 @@ constexpr std::array kMeasurements{
     Measurement{.mnemonic = "PERiod", .measure = period, .needs_signal = true},
     Measurement{.mnemonic = "DUTYcycle", .measure = positive_duty_cycle, .needs_signal = true},
     Measurement{.mnemonic = "RISetime",
-                .measure = mean_edge_duration<Edge::Direction::kRising>,
+                .measure = [](const MeasuredSignal& signal) -> std::optional<double> {
+                  return mean_edge_duration(signal.rise_fall().rising, signal.sample_rate());
+                },
                 .needs_signal = true},
     Measurement{.mnemonic = "FALLtime",
-                .measure = mean_edge_duration<Edge::Direction::kFalling>,
+                .measure = [](const MeasuredSignal& signal) -> std::optional<double> {
+                  return mean_edge_duration(signal.rise_fall().falling, signal.sample_rate());
+                },
                 .needs_signal = true},
 };
 
@@ -431,8 +449,8 @@ const std::optional<WholeCycles>& MeasuredSignal::whole_cycles() const {
   return whole_cycles_.get([this] { return find_whole_cycles(*this); });
 }
 
-std::span<const Edge> MeasuredSignal::rise_fall_edges() const {
-  return rise_fall_edges_.get([this] { return find_edges(*this, kRiseFallBand); });
+const RiseFallDurations& MeasuredSignal::rise_fall() const {
+  return rise_fall_.get([this] { return find_rise_fall(*this); });
 }
 
 // No signal comes first, since a flat signal has no edges or cycles even when it is clipped flat

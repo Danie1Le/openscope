@@ -56,33 +56,35 @@ struct SignalLevels {
 /// so samples that stray from the rest briefly (a spike, a short glitch) do not move them.
 SignalLevels find_levels(std::span<const float> samples);
 
-/// One move of the signal from beyond one level of a hysteresis band to beyond the other (GLOSSARY:
-/// Edge). Its times are in sample periods.
-struct Edge {
-  enum class Direction : std::uint8_t { kRising, kFalling };
-  Direction direction = Direction::kRising;
-  /// When the edge last crossed the 50% level, from the first sample.
-  double middle = 0.0;
-  /// How long the edge took from last leaving the band level it started from (the lower one when
-  /// rising, the upper one when falling) to reaching the other one.
-  double duration = 0.0;
-};
-
 /// The whole cycles of a signal, each from one edge's 50% crossing to the next crossing in the same
-/// direction, counted with edges across 30% and 70%.
+/// direction, counted with edges (GLOSSARY) across 30% and 70%. Times are in sample periods.
 struct WholeCycles {
-  /// The edges from the first one to the last that ends a whole cycle.
-  std::vector<Edge> edges;
-  /// How many whole cycles they bound.
+  /// How many whole cycles there are.
   std::size_t count = 0;
-  /// Sample periods from the first edge's 50% crossing to the last one's.
+  /// From the first edge's 50% crossing to that of the last edge that ends a whole cycle.
   double length = 0.0;
+  /// How much of `length` the signal spent above the 50% level.
+  double high = 0.0;
 };
 
-/// What a measurement reads: one channel's samples from a capture, their levels, and the edges the
+/// The complete edges (GLOSSARY) in one direction across the 10% and 90% reference levels: how
+/// many, and how long they took from one level to the other, summed, in sample periods.
+struct EdgeDurations {
+  std::size_t count = 0;
+  double total = 0.0;
+};
+
+/// The rising edges, which rise time averages, and the falling ones, which fall time averages.
+struct RiseFallDurations {
+  EdgeDurations rising;
+  EdgeDurations falling;
+};
+
+/// What a measurement reads: one channel's samples from a capture, their levels, and what the
 /// timing measurements share. The levels are found when it is made; the whole cycles and the
 /// rise/fall edges on first use, once however many measurements read them (FREQ, PER and DUTY share
-/// one search for whole cycles, RIS and FALL one for edges). Any thread may read it.
+/// one search for whole cycles, RIS and FALL one for edges). Only those few figures are kept, not
+/// the edges. Any thread may read it.
 class MeasuredSignal {
  public:
   /// The signal of `samples` (at least one, in volts), taken at `sample_rate` samples per second.
@@ -99,15 +101,15 @@ class MeasuredSignal {
   /// across 30% and 70%, the signal crossed 40% and 60% and back for long enough to be a cycle
   /// (GLOSSARY: Doubtful cycle).
   [[nodiscard]] const std::optional<WholeCycles>& whole_cycles() const;
-  /// The edges across the 10% and 90% reference levels, in order: what rise and fall time average.
-  [[nodiscard]] std::span<const Edge> rise_fall_edges() const;
+  /// The complete edges across the 10% and 90% reference levels, rising and falling.
+  [[nodiscard]] const RiseFallDurations& rise_fall() const;
 
  private:
   std::span<const float> samples_;
   SignalLevels levels_;
   double sample_rate_;
   mutable ComputedOnce<std::optional<WholeCycles>> whole_cycles_;
-  mutable ComputedOnce<std::vector<Edge>> rise_fall_edges_;
+  mutable ComputedOnce<RiseFallDurations> rise_fall_;
 };
 
 /// One automatic measurement: the SCPI mnemonic it is queried by and how it is computed. The
