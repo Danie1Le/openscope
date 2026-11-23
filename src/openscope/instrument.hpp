@@ -324,6 +324,10 @@ class Instrument {
   /// its handler and hands on the lines it set going (it ended an operation, or was the last
   /// released line to settle). Takes mutex_ itself.
   void finish(RunningLine line);
+  /// For finish: keeps the held `line` (moving it into held_ or waiting_) while what it waits for
+  /// lasts, and returns the released lines that keeping it settled; nullopt when it is already
+  /// over, so the line carries on now. Takes mutex_ itself.
+  std::optional<std::vector<RunningLine>> keep(RunningLine& line);
   /// Carries on `line`, handed to its Session's Resumer, unless the Session has closed since.
   void resume(RunningLine line);
   /// When no operation is pending, takes every held line, in the order they were held, for
