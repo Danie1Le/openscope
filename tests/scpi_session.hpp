@@ -3,11 +3,13 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "openscope/instrument.hpp"
 
@@ -39,6 +41,12 @@ inline std::string padded(std::string_view command, std::size_t length) {
   std::string line(command);
   line.resize(length, ' ');
   return line;
+}
+
+/// A Resumer that keeps the work it is handed in `handed`, for the test to run when it likes, so a
+/// test controls when a held line carries on.
+inline Resumer keeping_in(std::vector<std::function<void()>>& handed) {
+  return [&handed](std::function<void()> work) { handed.push_back(std::move(work)); };
 }
 
 /// The reply to one line, as the Instrument delivers it.
