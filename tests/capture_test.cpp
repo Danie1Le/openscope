@@ -4,10 +4,12 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <thread>
 #include <vector>
 
 #include "instrument_fixture.hpp"
@@ -228,20 +230,20 @@ TEST(CaptureCacheTest, KeepsValuesWhileTheSameCaptureIsAskedAbout) {
   CaptureCache<int> cache;
   const auto capture = std::make_shared<const Capture>();
 
-  cache.of(capture) = 7;
+  *cache.of(capture) = 7;
 
-  EXPECT_EQ(cache.of(capture), 7);
+  EXPECT_EQ(*cache.of(capture), 7);
 }
 
 TEST(CaptureCacheTest, StartsAfreshForAnotherCapture) {
   CaptureCache<int> cache;
   const auto first = std::make_shared<const Capture>();
-  cache.of(first) = 7;
+  *cache.of(first) = 7;
 
   const auto second = std::make_shared<const Capture>();
 
-  EXPECT_EQ(cache.of(second), 0);
-  EXPECT_EQ(cache.of(first), 0);  // Asking about the first again starts afresh too.
+  EXPECT_EQ(*cache.of(second), 0);
+  EXPECT_EQ(*cache.of(first), 0);  // Asking about the first again starts afresh too.
 }
 
 // A weak pointer: the cache does not keep a capture alive, and a capture that takes the old
@@ -250,12 +252,45 @@ TEST(CaptureCacheTest, DoesNotKeepTheCaptureAlive) {
   CaptureCache<int> cache;
   auto capture = std::make_shared<const Capture>();
   const std::weak_ptr<const Capture> watched = capture;
-  cache.of(capture) = 7;
+  *cache.of(capture) = 7;
 
   capture = std::make_shared<const Capture>();
 
   EXPECT_TRUE(watched.expired());
-  EXPECT_EQ(cache.of(capture), 0);
+  EXPECT_EQ(*cache.of(capture), 0);
+}
+
+// A query still using the values of an older capture keeps them when another capture resets the
+// cache: Sessions query at the same time (#67).
+TEST(CaptureCacheTest, ValuesOfAnOlderCaptureOutliveTheReset) {
+  CaptureCache<int> cache;
+  const auto first = std::make_shared<const Capture>();
+  const std::shared_ptr<int> held = cache.of(first);
+  *held = 7;
+
+  (void)cache.of(std::make_shared<const Capture>());
+
+  EXPECT_EQ(*held, 7);
+}
+
+TEST(ComputedOnceTest, ComputesOnceForCallersOnSeveralThreads) {
+  ComputedOnce<int> value;
+  std::atomic<int> computations = 0;
+  const auto compute = [&] {
+    ++computations;
+    return 42;
+  };
+  std::vector<std::thread> callers;
+  std::array<int, 4> seen{};
+  for (int& result : seen) {
+    callers.emplace_back([&] { result = value.get(compute); });
+  }
+  for (std::thread& caller : callers) {
+    caller.join();
+  }
+
+  EXPECT_EQ(computations.load(), 1);
+  EXPECT_THAT(seen, testing::Each(42));
 }
 
 }  // namespace

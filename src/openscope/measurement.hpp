@@ -94,7 +94,8 @@ MeasurementResult evaluate(const Measurement& measurement, const ChannelSettings
 
 /// The measurement engine: measures channels of a capture on demand and caches each result for as
 /// long as that capture is the one asked about, so repeated queries of the latest capture cost
-/// nothing after the first.
+/// nothing after the first. Any thread may use it: Sessions measure at the same time, and two
+/// asking for the same result share one computation.
 class MeasurementEngine {
  public:
   /// Measurement `measurement` (a position in measurements()) of channel `channel` (1 to 4) of
@@ -105,14 +106,15 @@ class MeasurementEngine {
                             std::size_t measurement);
 
  private:
-  /// One channel's levels and the results asked for so far, by measurement position.
+  /// One channel's levels and its results, by measurement position.
   struct ChannelResults {
-    SignalLevels levels;
-    std::vector<std::optional<MeasurementResult>> results;
+    ComputedOnce<SignalLevels> levels;
+    std::vector<ComputedOnce<MeasurementResult>> results =
+        std::vector<ComputedOnce<MeasurementResult>>(measurements().size());
   };
 
   /// Each channel's results for the capture last asked about, by channel number - 1.
-  CaptureCache<std::array<std::optional<ChannelResults>, kChannelCount>> channels_;
+  CaptureCache<std::array<ChannelResults, kChannelCount>> channels_;
 };
 
 }  // namespace openscope
