@@ -106,7 +106,7 @@ def test_normal_mode_captures_only_on_a_trigger_event(scope):
 
 
 def capture_spacing(scope, captures: int = 5) -> list[int]:
-    """Sample indexes between the trigger positions of consecutive distinct captures while
+    """Sample indexes between the time-zero samples of consecutive distinct captures while
     Running, read from the index clock; a capture completed between two polls doubles one."""
     readings: list[float] = []
 

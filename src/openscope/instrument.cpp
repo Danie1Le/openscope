@@ -387,7 +387,7 @@ void Instrument::add_waveform_commands() {
                return std::format("{},{},{},{},{},{}", scpi::format_real(capture->sample_rate),
                                   capture->record_length, scpi::format_real(channel.settings.scale),
                                   scpi::format_real(channel.settings.offset),
-                                  capture->trigger_position, capture->untriggered ? 1 : 0);
+                                  capture->time_zero_sample, capture->untriggered ? 1 : 0);
              });
        }});
 }

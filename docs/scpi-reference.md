@@ -259,7 +259,7 @@ The holdoff and the Auto timeout are counted on the sample clock, not the wall c
 | `WAVeform:SOURce` | `CHANnel<n>` | `CHAN1` | The channel `WAV:DATA?` and `WAV:PRE?` read. The query replies `CHAN<n>` |
 | `WAVeform:FORMat` | `ASCii`, `REAL` | `ASC` | How `WAV:DATA?` writes samples |
 | `WAVeform:DATA?` | | | The source channel's samples in the latest capture, in volts |
-| `WAVeform:PREamble?` | | | `<sample rate>,<points>,<scale>,<offset>,<trigger position>,<untriggered>` |
+| `WAVeform:PREamble?` | | | `<sample rate>,<points>,<scale>,<offset>,<time-zero sample>,<untriggered>` |
 
 `WAV:SOUR` and `WAV:FORM` belong to each Session (ADR 0002): another client's settings never change what this Session reads. A new Session starts at `CHAN1` and `ASC`, and `*RST` leaves both alone, as it leaves the error queue.
 
@@ -278,7 +278,7 @@ The holdoff and the Auto timeout are counted on the sample clock, not the wall c
 | points | The record length: values `WAV:DATA?` returns |
 | scale | The source channel's vertical scale in volts per division |
 | offset | The source channel's offset in volts |
-| trigger position | The sample (counting from 0) where time zero sits: the trigger event, or for an untriggered capture the pre-trigger position. Sample k is at (k - trigger position) / sample rate seconds |
+| time-zero sample | The sample (counting from 0) where time zero sits: the trigger event, or for an untriggered capture the sample the trigger position (`TRIG:POS`, a percentage) names. Sample k is at (k - time-zero sample) / sample rate seconds |
 | untriggered | `1` for an untriggered capture (Auto mode, no trigger event), `0` for one placed by a trigger event |
 
 ### Measurements
