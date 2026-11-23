@@ -6,14 +6,12 @@
 #include <cmath>
 #include <complex>
 #include <cstddef>
-#include <memory>
 #include <numbers>
 #include <span>
 #include <stdexcept>
 #include <utility>
 #include <vector>
 
-#include "openscope/capture.hpp"
 #include "openscope/fft_window.hpp"
 
 namespace openscope {
@@ -132,17 +130,6 @@ std::vector<float> magnitude_spectrum_db(std::span<const float> samples, FftWind
     levels[k] = std::max(static_cast<float>(10.0 * std::log10(power)), kSpectrumFloorDb);
   }
   return levels;
-}
-
-std::shared_ptr<const std::vector<float>> SpectrumCache::spectrum(
-    const std::shared_ptr<const Capture>& capture, std::size_t channel, FftWindow window) {
-  const CapturedChannel& captured = captured_channel(*capture, channel);
-  std::shared_ptr<const std::vector<float>>& cached = spectra_.of(capture)[{channel, window}];
-  if (!cached) {
-    cached =
-        std::make_shared<const std::vector<float>>(magnitude_spectrum_db(captured.samples, window));
-  }
-  return cached;
 }
 
 }  // namespace openscope

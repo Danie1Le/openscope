@@ -17,13 +17,13 @@
 #include "openscope/acquired_block.hpp"
 #include "openscope/capture.hpp"
 #include "openscope/channel.hpp"
-#include "openscope/fft.hpp"
 #include "openscope/generator.hpp"
 #include "openscope/measurement.hpp"
 #include "openscope/measurement_statistics.hpp"
 #include "openscope/sample_clock.hpp"
 #include "openscope/scpi/command_tree.hpp"
 #include "openscope/session.hpp"
+#include "openscope/spectrum_cache.hpp"
 #include "openscope/trigger.hpp"
 
 namespace openscope {

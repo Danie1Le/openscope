@@ -9,13 +9,11 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <vector>
 
 #include "binary_block.hpp"
 #include "instrument_fixture.hpp"
 #include "openscope/capture.hpp"
-#include "openscope/instrument.hpp"
 #include "openscope/scpi/command_tree.hpp"
 #include "openscope/scpi/response.hpp"
 #include "reply_numbers.hpp"
@@ -241,35 +239,30 @@ std::string real_data_queries(std::size_t queries) {
   return line;
 }
 
-/// The size of the reply to `line` and the first error it queued, on a capture of `points` points.
-std::pair<std::size_t, std::string> bulk_reply(std::size_t points, const std::string& line) {
-  Instrument instrument;
-  ScpiSession session(instrument);
-  session.send(std::format("ACQ:POIN {};:{}", points, test::kUntriggeredCaptures));
-  instrument.advance(points);
-  const std::size_t size = session.send(line).value_or("").size();
-  return {size, session.next_error()};
-}
-
 // 157 blocks of 427 444 bytes and their 156 joining ';' make exactly kMaxReplyLength.
-TEST(ReplyLimitTest, LineOfDataQueriesUpToTheLimitIsReplied) {
+TEST_F(WaveformTest, LineOfDataQueriesUpToTheReplyLimitIsReplied) {
   constexpr std::size_t kPoints = 106'859;
   constexpr std::size_t kQueries = 157;
   ASSERT_EQ((kQueries * real_block_bytes(kPoints)) + kQueries - 1, scpi::kMaxReplyLength);
+  session.send(std::format("ACQ:POIN {};:{}", kPoints, test::kUntriggeredCaptures));
+  instrument.advance(kPoints);
 
-  EXPECT_EQ(bulk_reply(kPoints, real_data_queries(kQueries)),
-            std::pair(scpi::kMaxReplyLength, std::string(kNoErrorReply)));
+  EXPECT_EQ(session.send(real_data_queries(kQueries)).value_or("").size(), scpi::kMaxReplyLength);
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 
-// 33 blocks of 2 033 601 bytes and their 32 joining ';' are one byte over kMaxReplyLength: the 32
+// 33 blocks of 2 033 601 bytes and their 32 joining ';' are one byte over kMaxReplyLength: the
 // blocks before the last are replied.
-TEST(ReplyLimitTest, LineOfDataQueriesOneByteOverTheLimitIsTooMuchData) {
+TEST_F(WaveformTest, LineOfDataQueriesOneByteOverTheReplyLimitIsTooMuchData) {
   constexpr std::size_t kPoints = 508'398;
   constexpr std::size_t kQueries = 33;
   ASSERT_EQ((kQueries * real_block_bytes(kPoints)) + kQueries - 1, scpi::kMaxReplyLength + 1);
+  session.send(std::format("ACQ:POIN {};:{}", kPoints, test::kUntriggeredCaptures));
+  instrument.advance(kPoints);
 
-  EXPECT_EQ(bulk_reply(kPoints, real_data_queries(kQueries)),
-            std::pair((32 * real_block_bytes(kPoints)) + 31, std::string(kTooMuchDataReply)));
+  EXPECT_EQ(session.send(real_data_queries(kQueries)).value_or("").size(),
+            ((kQueries - 1) * real_block_bytes(kPoints)) + kQueries - 2);
+  EXPECT_EQ(session.next_error(), kTooMuchDataReply);
 }
 
 // Time zero on the first sample: Auto takes the first 2 samples, and the ramp's trigger event at

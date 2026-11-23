@@ -21,6 +21,7 @@
 #include "decibels.hpp"
 #include "openscope/capture.hpp"
 #include "openscope/fft_window.hpp"
+#include "openscope/spectrum_cache.hpp"
 
 namespace openscope {
 namespace {

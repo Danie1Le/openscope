@@ -75,7 +75,7 @@ class CommandTreeTest : public testing::Test {
   }
 
   std::optional<std::string> send(std::string_view line) {
-    return tree.execute(session, line).reply();
+    return tree.execute(session, line).take_reply();
   }
 
   int next_error_code() { return session.pop_error().code; }
@@ -643,7 +643,7 @@ TEST_F(HeldLineTest, HoldReplyOverTheLimitQueuesTooMuchData) {
   tree.resume(session, execution);
 
   EXPECT_FALSE(execution.held());
-  EXPECT_EQ(execution.reply().value_or("").size(), kMaxReplyLength - 4);
+  EXPECT_EQ(execution.take_reply().value_or("").size(), kMaxReplyLength - 4);
   EXPECT_THAT(headers(), ElementsAre("*HOLD?"));  // *TST? never ran.
   EXPECT_EQ(next_error_code(), kTooMuchData.code);
   EXPECT_EQ(next_error_code(), 0);

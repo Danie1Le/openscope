@@ -13,6 +13,7 @@ add_library(openscope
   openscope/measurement_statistics.cpp
   openscope/pacer.cpp
   openscope/sample_block.cpp
+  openscope/spectrum_cache.cpp
   openscope/scpi/command_tree.cpp
   openscope/scpi/parser.cpp
   openscope/scpi/response.cpp
