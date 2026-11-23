@@ -12,6 +12,7 @@
 #include <span>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "binary_block.hpp"
@@ -22,6 +23,7 @@
 #include "openscope/capture.hpp"
 #include "openscope/measurement.hpp"
 #include "openscope/sample_block.hpp"
+#include "openscope/sample_clock.hpp"
 #include "scpi_session.hpp"
 
 namespace openscope::test {
@@ -108,8 +110,13 @@ TEST(RisingBlockTest, CarriesEachSampleIndexOnChannelOne) {
 TEST(HandedOnTest, KeepsEveryCaptureInOrder) {
   HandedOn handed_on;
   const CaptureSink sink = handed_on.sink();
-  const auto first = std::make_shared<const Capture>(Capture{.first_index = 8});
-  const auto second = std::make_shared<const Capture>(Capture{.first_index = 2});
+  const auto capture_at = [](SampleIndex first_index) {
+    Capture capture;
+    capture.first_index = first_index;
+    return std::make_shared<const Capture>(std::move(capture));
+  };
+  const std::shared_ptr<const Capture> first = capture_at(8);
+  const std::shared_ptr<const Capture> second = capture_at(2);
 
   sink(first);
   sink(second);
