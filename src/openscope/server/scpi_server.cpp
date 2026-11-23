@@ -28,7 +28,6 @@
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -296,7 +295,7 @@ ScpiServer::ScpiServer(asio::io_context& io, Instrument& instrument, const Serve
       acceptor_(listening_acceptor(io, options)),
       accept_retry_(io),
       port_(acceptor_.local_endpoint().port()),
-      execution_(std::clamp(std::thread::hardware_concurrency(), 1U, kMaxExecutionThreads)) {
+      execution_(kMaxExecutionThreads) {
   log_->write("listening", {{"address", options.address}, {"port", port_}});
   accept();
 }

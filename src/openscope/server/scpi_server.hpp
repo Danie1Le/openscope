@@ -36,22 +36,20 @@ namespace openscope {
 /// engine restarts, as on a bench instrument with a client limit.
 ///
 /// Its socket work runs on the io_context's thread, which must be one thread, so connections need
-/// no locking. Lines run on a pool of at most kMaxExecutionThreads threads, each connection's on
-/// its own strand: Sessions run in parallel, so one client's bulk queries do not stall another's
-/// commands (see kMaxExecutionThreads for many at once), while one Session's lines, and the rest of
-/// a line `*OPC?` held, run one at a time in order (#67). Replies are posted back to the I/O
-/// thread, so it never waits on a line.
+/// no locking. Lines run on a pool of kMaxExecutionThreads threads, each connection's on its own
+/// strand: Sessions run in parallel, so one client's bulk queries never stall another's commands,
+/// while one Session's lines, and the rest of a line `*OPC?` held, run one at a time in order
+/// (#67). Replies are posted back to the I/O thread, so it never waits on a line.
 class ScpiServer {
  public:
   /// Connections served at once (spec #1, story 82).
   static constexpr std::size_t kMaxClients = 8;
 
-  /// The most threads lines run on; fewer on a machine with fewer hardware threads.
-  ///
-  /// shortcut: while this many clients run bulk lines at once, another client's line waits for a
-  /// thread, up to one bulk line (0.64 s for seven clients each holding a 4 KB ASCII `WAV:DATA?`
-  /// line at 1M points, #68 review; 8 ms with 8 threads). Size it at kMaxClients if that matters.
-  static constexpr unsigned kMaxExecutionThreads = 4;
+  /// The threads lines run on: one per connection, so every Session can always make progress and
+  /// no client's lines wait for a thread behind other clients' bulk lines. With fewer cores the OS
+  /// time-slices them (#68 review: 7 clients holding 4 KB ASCII lines stalled an 8th for 0.66 s
+  /// on 4 threads).
+  static constexpr std::size_t kMaxExecutionThreads = kMaxClients;
 
   /// TCP keepalive on every connection: after kKeepAliveIdle without traffic, kKeepAliveProbes
   /// probes kKeepAliveInterval apart. A peer that answers none fails the pending read and its
