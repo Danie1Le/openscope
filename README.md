@@ -53,7 +53,7 @@ $ printf '*IDN?\n' | nc -q 1 127.0.0.1 5025
 OpenScope,OS-4,000001,0.1.0
 ```
 
-See `docs/scpi-reference.md` for the connection rules (one Session per connection, 4 KB lines, 8 clients) and the commands.
+See `docs/scpi-reference.md` for the connection rules (one Session per connection, 4 KB lines, 64 MiB replies, 8 clients) and the commands.
 
 ## Python client
 

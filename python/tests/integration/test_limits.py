@@ -1,13 +1,21 @@
-"""The server's protection limits: 4 KB lines, 8 clients and the idle timeout
+"""The server's protection limits: 4 KB lines, 64 MiB replies, 8 clients and the idle timeout
 (docs/scpi-reference.md, Connecting and Lines)."""
 
 import threading
 import time
 
 import pytest
-from server_limits import MAX_CLIENTS, MAX_LINE
+from engine_helpers import LONGEST_RECORD, PATIENCE
+from server_limits import MAX_CLIENTS, MAX_LINE, TOO_MUCH_DATA
 
-from openscope_client import ErrorEntry, ScpiError, TriggerMode
+from openscope_client import ErrorEntry, ScpiError, SocketStream, TriggerMode
+from openscope_client.errors import parse_error_entry
+from openscope_client.transport import MAX_RESPONSE_BYTES
+
+#: How long another client's `*IDN?` may take while a line of bulk queries runs. Generous for a
+#: loaded runner and an ASan engine; a line of as many `FFT:DATA?` as fit used to hold every
+#: client for about a minute (#67).
+OTHER_CLIENT_CEILING = 10.0
 
 
 def test_a_line_of_4096_bytes_runs(scope):
@@ -24,6 +32,50 @@ def test_a_longer_line_is_rejected_and_the_session_carries_on(scope, length):
     assert raised.value.errors == (ErrorEntry(-363, "Input buffer overrun"),)
     assert raised.value.reply is None
     assert scope.identify().manufacturer == "OpenScope"
+
+
+def test_a_line_of_bulk_queries_stops_at_the_reply_limit_and_others_are_served(engine):
+    bulk, other = (SocketStream("127.0.0.1", engine.port, PATIENCE) for _ in range(2))
+
+    def query(stream: SocketStream, line: str) -> bytes:
+        stream.write(f"{line}\n".encode())
+        return stream.read_response()
+
+    assert query(bulk, f"ACQ:POIN {LONGEST_RECORD};:SING;*OPC?") == b"1"
+    spectrum = len(query(bulk, "FFT:DATA?"))  # 2 MiB at the longest record.
+    line = "FFT:DATA?" + ";DATA?" * ((MAX_LINE - len("FFT:DATA?")) // len(";DATA?"))
+    waits: list[float] = []  # Each *IDN? the other client asked while the line ran.
+    failures: list[BaseException] = []
+    done = threading.Event()
+
+    def ask_others() -> None:
+        try:
+            while not done.is_set():
+                sent = time.monotonic()
+                assert query(other, "*IDN?").startswith(b"OpenScope,")
+                waits.append(time.monotonic() - sent)
+                time.sleep(0.005)
+        except BaseException as error:  # Checked in the test's thread.
+            failures.append(error)
+
+    asking = threading.Thread(target=ask_others)
+    asking.start()
+    try:
+        reply = query(bulk, line)
+    finally:
+        done.set()
+        asking.join(PATIENCE)
+
+    fitting = (MAX_RESPONSE_BYTES + 1) // (spectrum + 1)  # Blocks joined with ';' that fit.
+    assert fitting < line.count("DATA?")
+    assert len(reply) == fitting * (spectrum + 1) - 1
+    assert parse_error_entry(query(bulk, "SYST:ERR?")) == TOO_MUCH_DATA
+    assert not asking.is_alive()
+    assert failures == []
+    assert waits
+    assert max(waits) < OTHER_CLIENT_CEILING
+    bulk.close()
+    other.close()
 
 
 def test_a_ninth_client_is_refused_until_one_leaves(engine, open_client, transport):

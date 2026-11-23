@@ -13,8 +13,9 @@ from openscope_client.errors import ProtocolError
 #: `Capture::kMaxRecordLength` in src/openscope/capture.hpp), each at most 16 bytes with its
 #: comma (the shortest float32 form is at most 9 digits, a sign, a point and `E-38`): 16 MiB.
 #: REAL blocks take 4 bytes per point (4 MiB), `FFT:DATA?` 4 bytes per bin, at most half a
-#: record plus one (2 MiB). Four times the longest leaves room; a line of several such queries
-#: can exceed it.
+#: record plus one (2 MiB). Four times the longest leaves room. The engine never sends more:
+#: a line whose joined replies would pass it gets `-223,"Too much data"` instead
+#: (`scpi::kMaxReplyLength` in src/openscope/scpi/command_tree.hpp; the two must stay equal).
 MAX_RESPONSE_BYTES = 64 * 2**20
 
 _NEWLINE = ord("\n")
