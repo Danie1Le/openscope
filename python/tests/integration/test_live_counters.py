@@ -2,6 +2,7 @@
 samples and discarded captures as a `live` event after each second in which they changed, and in
 its `stopping` event."""
 
+import time
 from datetime import datetime
 from typing import Any
 
@@ -10,6 +11,17 @@ from engine_helpers import live_counters
 
 def logged_at(event: dict[str, Any]) -> datetime:
     return datetime.fromisoformat(event["time"])
+
+
+def test_nothing_is_logged_while_nothing_is_lost(engine):
+    # A thousand samples a second: nothing to drop or skip on any machine.
+    assert engine.raw_session().query("ACQ:SRAT 1E3;SRAT?") == "1000"
+    time.sleep(1.5)  # A loss before the setter, on a slow machine, is logged by now.
+    logged = len([event for event in engine.events if event["event"] == "live"])
+
+    time.sleep(2.5)
+
+    assert len([event for event in engine.events if event["event"] == "live"]) == logged
 
 
 def test_skipped_samples_are_logged_at_most_once_a_second_and_when_stopping(engine):
