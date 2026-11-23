@@ -1,6 +1,6 @@
-"""The log events the `engine` fixture keeps (conftest.Engine), and the helpers in engine_helpers
-that need no engine: the memory reading the soak relies on (resident_kib), eventually and
-scpi_error."""
+"""The log events the `engine` fixture keeps (conftest.Engine), and the helpers in engine_helpers:
+the memory reading the soak relies on (resident_kib), eventually, scpi_error, spectrum_length
+and longest_capture_connection."""
 
 import os
 import socket
@@ -8,7 +8,18 @@ import subprocess
 
 import engine_helpers
 import pytest
-from engine_helpers import KEPT_EVENTS, NO_SIGNAL, eventually, resident_kib, scpi_error
+from engine_helpers import (
+    KEPT_EVENTS,
+    LONGEST_RECORD,
+    NO_SIGNAL,
+    TRANSFORM_LENGTH,
+    eventually,
+    longest_capture_connection,
+    plain_query,
+    resident_kib,
+    scpi_error,
+    spectrum_length,
+)
 
 from openscope_client import ScpiError
 
@@ -99,3 +110,16 @@ def test_scpi_error_is_what_the_call_raised():
 def test_scpi_error_fails_when_the_call_raises_nothing():
     with pytest.raises(pytest.fail.Exception, match="DID NOT RAISE"):
         scpi_error(lambda: None)
+
+
+def test_a_spectrum_has_a_level_per_bin_from_dc_to_nyquist():
+    assert spectrum_length(1) == 1
+    assert spectrum_length(2) == 2
+    assert spectrum_length(TRANSFORM_LENGTH) == 4097
+
+
+def test_the_longest_capture_connection_has_taken_a_longest_record(engine):
+    with longest_capture_connection(engine.port) as connection:
+        points = plain_query(connection, "WAV:PRE?").split(b",")[1]
+
+    assert int(points) == LONGEST_RECORD

@@ -13,8 +13,8 @@ from engine_helpers import (
     PATIENCE,
     RECORD_LENGTH,
     STALE,
+    clock_at_time_zero,
     eventually,
-    read_channel,
     scpi_error,
     take_capture,
     take_fault_capture,
@@ -99,8 +99,7 @@ def start_slow_clock(scope: OpenScope) -> None:
         SLOW_CLOCK.apply(scope, CLOCK_CHANNEL)
         scope.write(f"CHAN{CLOCK_CHANNEL}:DISP ON;:SOUR1:FUNC DC;:TRIG:POS 0")
         take_capture(scope)
-        clock = read_channel(scope, CLOCK_CHANNEL)
-        if clock.samples[clock.preamble.time_zero] < LATEST_CLOCK_START:
+        if clock_at_time_zero(scope) < LATEST_CLOCK_START:
             return
     pytest.fail(
         f"the clock started within {LONGEST_CLOCKED_TEST} s of its wrap {CLOCK_STARTS} times"
@@ -150,7 +149,7 @@ def stat_errors(
     """The entries `MEAS:STAT?` of `measurement` on channel 1 queued, and its reply (None when
     it replied nothing)."""
     error = scpi_error(lambda: scope.statistics(measurement, 1))
-    counted = None if error.reply is None else Statistics(*map(float, error.reply.split(b",")))
+    counted = None if error.reply is None else Statistics.parse(error.reply.decode("ascii"))
     return error.errors, counted
 
 

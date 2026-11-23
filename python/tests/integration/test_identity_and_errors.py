@@ -9,6 +9,7 @@ from engine_helpers import (
     NO_SIGNAL,
     NOT_A_NUMBER,
     REJECTED_LINES,
+    SETTINGS_CONFLICT,
     STALE,
     read_channel,
     scpi_error,
@@ -60,7 +61,7 @@ def test_a_query_of_a_channel_not_in_the_capture_raises_settings_conflict(scope)
 
     raised = scpi_error(lambda: read_channel(scope, 2))  # Channel 2 is off at *RST.
 
-    assert (raised.code, raised.message) == (-221, "Settings conflict")
+    assert (raised.code, raised.message) == SETTINGS_CONFLICT
 
 
 def test_a_measurement_with_no_signal_raises_its_status_and_carries_not_a_number(scope):

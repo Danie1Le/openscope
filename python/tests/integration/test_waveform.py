@@ -7,7 +7,8 @@ import pytest
 import pyvisa
 from engine_helpers import LONGEST_RECORD, RECORD_LENGTH, read_channel, take_capture
 
-from openscope_client import Function, Preamble, WaveformFormat
+from openscope_client import NO_ERROR, Function, Preamble, WaveformFormat
+from openscope_client.errors import parse_error_entry
 
 #: The time-zero sample for the `*RST` 50% trigger position: round(0.5 x 9999), half away from
 #: zero.
@@ -73,7 +74,7 @@ def test_pyvisa_query_binary_values_reads_the_block_with_its_defaults(engine, sc
     ) as resource:
         resource.write("WAV:FORM REAL")
         values = resource.query_binary_values("WAV:DATA?")
-        assert resource.query("SYST:ERR?") == '0,"No error"'
+        assert parse_error_entry(resource.query("SYST:ERR?").encode()) == NO_ERROR
 
     assert tuple(values) == expected
 

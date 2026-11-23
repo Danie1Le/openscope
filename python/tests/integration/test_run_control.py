@@ -2,22 +2,21 @@
 `STOP`, `RUN` or `*RST` from another Session end an `*OPC?` wait (docs/scpi-reference.md, Run
 control and Consistency model)."""
 
-import socket
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from engine_helpers import (
-    BULK_PATIENCE,
-    LONGEST_RECORD,
     PATIENCE,
     eventually,
+    longest_capture_connection,
     plain_query,
     plain_reply,
     take_capture,
 )
 
-from openscope_client import Measurement
+from openscope_client import NO_ERROR, Measurement
+from openscope_client.errors import parse_error_entry
 
 #: Seconds a waiting Session is given to show that it still waits.
 WAIT = 0.2
@@ -99,9 +98,8 @@ def test_a_stop_ends_the_wait_even_if_another_client_arms_a_single_before_its_li
 ):
     # The STOP itself ends A's wait (#68 review): a SINGle from C, sent while the rest of B's
     # line (bulk ASCII) still runs, waits for A instead of arming a Single A would wait on again.
-    with socket.create_connection(("127.0.0.1", engine.port), timeout=BULK_PATIENCE) as b:
-        assert plain_query(b, f"ACQ:POIN {LONGEST_RECORD};:SING;*OPC?") == b"1"
-        assert plain_query(b, "TRIG:MODE NORM;LEV 1.5;:SYST:ERR?") == b'0,"No error"'
+    with longest_capture_connection(engine.port) as b:
+        assert parse_error_entry(plain_query(b, "TRIG:MODE NORM;LEV 1.5;:SYST:ERR?")) == NO_ERROR
         a, c = open_client(engine.port), open_client(engine.port)
         a.single()
         a.timeout = PATIENCE

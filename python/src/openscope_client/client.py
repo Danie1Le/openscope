@@ -128,6 +128,12 @@ class Statistics(NamedTuple):
     standard_deviation: float
     count: int
 
+    @classmethod
+    def parse(cls, reply: str) -> Self:
+        """The `MEAS:STAT?` reply `reply`, read. Raises ProtocolError when it is not five numbers
+        and a whole count."""
+        return cls(*_fields(reply, (_number,) * 5 + (_whole,)))
+
 
 @dataclass(frozen=True)
 class WaveformData:
@@ -499,8 +505,7 @@ class OpenScope:
 
     def statistics(self, measurement: Measurement, channel: int) -> Statistics:
         """The statistics of `measurement` of `channel` since the last reset."""
-        reply = self.query(f"MEAS:STAT? {measurement},CHAN{channel}")
-        return Statistics(*_fields(reply, (_number,) * 5 + (_whole,)))
+        return Statistics.parse(self.query(f"MEAS:STAT? {measurement},CHAN{channel}"))
 
     def reset_statistics(self) -> None:
         """Resets the statistics of every measurement (`MEAS:STAT:RES`)."""

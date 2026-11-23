@@ -18,6 +18,7 @@ from engine_helpers import (
     TRANSFORM_LENGTH,
     live_counters,
     resident_kib,
+    spectrum_length,
     take_capture,
 )
 from ground_truth import Signal, assert_measures
@@ -39,7 +40,7 @@ MEMORY_GROWTH_KIB = 32 * 1024
 #: of the ~14,000 that connect() picks from (#65).
 CHURN_PAUSE = 0.01
 #: The levels `FFT:DATA?` replies for the `*RST` record.
-SPECTRUM_LENGTH = TRANSFORM_LENGTH // 2 + 1
+SPECTRUM_LENGTH = spectrum_length(TRANSFORM_LENGTH)
 
 #: The signal of each channel; channel 1's is measured against its ground truth.
 SIGNALS = (

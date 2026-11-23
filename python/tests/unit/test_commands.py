@@ -328,3 +328,18 @@ def test_a_reply_of_the_wrong_form_is_a_protocol_error(connect, action, replies)
 
     with pytest.raises(ProtocolError):
         action(connected.scope)
+
+
+def test_statistics_parse_reads_five_numbers_and_a_whole_count():
+    parsed = Statistics.parse("2,1.5,1,2,0.5,2")
+
+    assert parsed == Statistics(2.0, 1.5, 1.0, 2.0, 0.5, 2)
+    assert type(parsed.count) is int
+
+
+@pytest.mark.parametrize(
+    "reply", ["2,1.5,1,2,0.5", "2,1.5,1,2,0.5,2,2", "2,1.5,1,2,0.5,2.5", "x,1.5,1,2,0.5,2", ""]
+)
+def test_statistics_parse_refuses_any_other_reply(reply):
+    with pytest.raises(ProtocolError):
+        Statistics.parse(reply)

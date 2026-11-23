@@ -2,7 +2,8 @@
 
 import socket
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import pytest
@@ -35,6 +36,8 @@ TOO_FEW_CYCLES = ErrorEntry(-200, "Execution error;Too few cycles")
 #: (or `MEAS:STAT?` before any since the last reset).
 CLIPPED = ErrorEntry(-231, "Data questionable;Clipped")
 STALE = ErrorEntry(-230, "Data corrupt or stale")
+#: What a query of a channel that is not in the latest capture queues.
+SETTINGS_CONFLICT = ErrorEntry(-221, "Settings conflict")
 
 #: The fields of the engine's `live` and `stopping` log events that count what live mode lost.
 LIVE_COUNTERS = ("dropped_blocks", "skipped_samples", "discarded_captures")
@@ -49,8 +52,15 @@ def live_counters(event: dict[str, Any]) -> dict[str, int]:
 RECORD_LENGTH = 10000
 LONGEST_RECORD = 1048576
 #: The samples `FFT:DATA?` transforms at the `*RST` record length: the largest power of two not
-#: over it. A spectrum holds TRANSFORM_LENGTH // 2 + 1 levels.
+#: over it.
 TRANSFORM_LENGTH = 8192
+
+
+def spectrum_length(transformed: int) -> int:
+    """How many levels `FFT:DATA?` replies for a transform of `transformed` samples (a power of
+    two): one per bin from DC to the Nyquist frequency."""
+    return transformed // 2 + 1
+
 
 #: Seconds to wait for the engine to start, stop, log an event or reach a state.
 PATIENCE = 20.0
@@ -94,6 +104,15 @@ def plain_query(connection: socket.socket, line: str) -> bytes:
     """Sends `line` and returns its reply as plain_reply reads it."""
     connection.sendall(f"{line}\n".encode())
     return plain_reply(connection)
+
+
+@contextmanager
+def longest_capture_connection(port: int) -> Iterator[socket.socket]:
+    """A raw connection to the engine on `port`, waiting up to BULK_PATIENCE for each reply,
+    whose Session has taken a Single at LONGEST_RECORD points: the start of a bulk-data test."""
+    with socket.create_connection(("127.0.0.1", port), timeout=BULK_PATIENCE) as connection:
+        assert plain_query(connection, f"ACQ:POIN {LONGEST_RECORD};:SING;*OPC?") == b"1"
+        yield connection
 
 
 def eventually(check: Callable[[], bool]) -> None:
