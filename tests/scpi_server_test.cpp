@@ -431,8 +431,8 @@ TEST_F(ScpiServerTest, ClosesAConnectionThatStaysIdle) {
 // A client acts on `refuse` the moment it sees it, and bytes that reach a socket the server has
 // yet to close are answered with a reset instead of the close (#72).
 TEST_F(ScpiServerTest, ClosesARefusedConnectionBeforeLoggingTheRefusal) {
-  std::vector<std::unique_ptr<Client>> clients = all_clients(port());
-  Client refused(port());
+  const std::vector<std::unique_ptr<Client>> clients = all_clients(port());
+  const Client refused(port());
 
   server->events_once_logged("refuse");
 
@@ -442,7 +442,7 @@ TEST_F(ScpiServerTest, ClosesARefusedConnectionBeforeLoggingTheRefusal) {
 // The same holds when the server ends a connection that was admitted (#72).
 TEST_F(ScpiServerTest, ClosesAnIdleConnectionBeforeLoggingTheDisconnect) {
   restart(milliseconds(100));
-  Client client(port());
+  const Client client(port());
 
   server->events_once_logged("disconnect");
 
