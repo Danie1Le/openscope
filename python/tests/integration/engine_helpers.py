@@ -3,6 +3,7 @@
 import socket
 import time
 from collections.abc import Callable
+from typing import Any
 
 import pytest
 from ground_truth import SAMPLE_RATE, Signal
@@ -31,6 +32,15 @@ TOO_FEW_CYCLES = ErrorEntry(-200, "Execution error;Too few cycles")
 #: (or `MEAS:STAT?` before any since the last reset).
 CLIPPED = ErrorEntry(-231, "Data questionable;Clipped")
 STALE = ErrorEntry(-230, "Data corrupt or stale")
+
+#: The fields of the engine's `live` and `stopping` log events that count what live mode lost.
+LIVE_COUNTERS = ("dropped_blocks", "skipped_samples", "discarded_captures")
+
+
+def live_counters(event: dict[str, Any]) -> dict[str, int]:
+    """The LIVE_COUNTERS fields of a `live` or `stopping` log event."""
+    return {name: event[name] for name in LIVE_COUNTERS}
+
 
 #: The `*RST` record length, and the longest (`ACQ:POIN`).
 RECORD_LENGTH = 10000

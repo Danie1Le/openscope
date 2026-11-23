@@ -22,8 +22,11 @@ def test_the_engine_keeps_its_newest_events_and_waits_past_the_dropped_ones(engi
         peers.append(connect_and_leave(engine.port))
         assert engine.wait_for("disconnect", reason="closed by client")["peer"] == peers[-1]
 
-    events = engine.events
-    newest_peers = peers[-KEPT_EVENTS // 2 :]
+    # A `live` event, logged should the engine lose samples meanwhile, takes an older one's place.
+    events = [event for event in engine.events if event["event"] != "live"]
+    events = events[len(events) % 2 :]  # Whole connect and disconnect pairs.
+    assert len(events) > KEPT_EVENTS // 2  # Mostly connections still.
+    newest_peers = peers[-(len(events) // 2) :]
     assert [event["event"] for event in events] == ["connect", "disconnect"] * len(newest_peers)
     assert [event["peer"] for event in events] == [peer for peer in newest_peers for _ in range(2)]
 
@@ -34,6 +37,17 @@ def test_a_wait_fails_when_events_it_has_not_looked_at_were_dropped(engine):
 
     with pytest.raises(AssertionError, match=r"events dropped before a wait for refuse"):
         engine.wait_for("refuse", reason="never logged")
+
+
+def test_last_is_the_newest_kept_event_of_its_name(engine):
+    peers = [connect_and_leave(engine.port) for _ in range(2)]
+    for peer in peers:
+        engine.wait_for("disconnect", peer=peer)
+
+    assert engine.last("disconnect")["peer"] == peers[1]
+    assert engine.last("listening")["port"] == engine.port
+    with pytest.raises(AssertionError, match="no refuse event"):
+        engine.last("refuse")
 
 
 def test_resident_kib_reads_a_process_resident_memory():

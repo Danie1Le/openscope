@@ -3,12 +3,17 @@
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/signal_set.hpp>
+#include <boost/asio/steady_timer.hpp>
+#include <boost/system/detail/error_code.hpp>
 #include <boost/system/system_error.hpp>
+#include <chrono>
 #include <csignal>
 #include <cstddef>
 #include <exception>
 #include <format>
 #include <iostream>
+#include <nlohmann/json.hpp>  // IWYU pragma: keep (the definition of ordered_json)
+#include <nlohmann/json_fwd.hpp>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -26,6 +31,51 @@ namespace {
 
 /// Exit status for a command line that cannot be parsed.
 constexpr int kUsageError = 2;
+
+/// How often the engine looks at the live counters, and so the most often it logs them.
+constexpr std::chrono::seconds kCounterInterval{1};
+
+/// The live counters as log fields, in the `live` and `stopping` events.
+nlohmann::ordered_json counter_fields(const openscope::LiveCounters& counters) {
+  return {{"dropped_blocks", counters.dropped_blocks},
+          {"skipped_samples", counters.skipped_samples},
+          {"discarded_captures", counters.discarded_captures}};
+}
+
+/// Logs a `live` event with the live pipeline's counters after each kCounterInterval in which they
+/// changed, so a dropped block, skipped samples or a discarded capture is never silent (spec #1
+/// story 41, NFR-1), and an engine that keeps losing samples logs once a second, not once a block.
+class CounterLog {
+ public:
+  /// Looks at the counters of `live` and writes to `log`, which must both outlive it, on `io`'s
+  /// thread.
+  CounterLog(boost::asio::io_context& io, const openscope::LivePipeline& live,
+             openscope::JsonLog& log)
+      : timer_(io), live_(&live), log_(&log) {}
+
+  /// Looks every kCounterInterval from now on, until it is destroyed or `io` stops.
+  void start() {
+    timer_.expires_after(kCounterInterval);
+    timer_.async_wait([this](const boost::system::error_code& error) {
+      if (error) {
+        return;  // Cancelled: the timer is being destroyed.
+      }
+      const openscope::LiveCounters now = live_->counters();
+      if (now != logged_) {
+        log_->write("live", counter_fields(now));
+        logged_ = now;
+      }
+      start();
+    });
+  }
+
+ private:
+  boost::asio::steady_timer timer_;
+  const openscope::LivePipeline* live_;
+  openscope::JsonLog* log_;
+  /// The counters last logged; all zero until something is lost.
+  openscope::LiveCounters logged_;
+};
 
 /// Runs the engine with the command-line `arguments` that follow the program name.
 int run(std::span<char*> arguments, openscope::JsonLog& log) {
@@ -45,17 +95,22 @@ int run(std::span<char*> arguments, openscope::JsonLog& log) {
   // Destroyed in reverse: the pipeline's threads stop first, so no reply is posted while the server
   // ends its Sessions, and both go before the io_context replies are posted to.
   boost::asio::io_context io;
+  openscope::Instrument instrument(options.seed);
+  std::optional<openscope::ScpiServer> server;
+  std::optional<openscope::LivePipeline> live;
   // Caught from here on, so a signal while the engine starts still stops it cleanly: io.run()
-  // handles it at once.
+  // handles it at once, and only once the pipeline below runs, so `stopping` always has its counts.
   boost::asio::signal_set signals(io, SIGINT, SIGTERM);
   signals.async_wait([&](const auto& error, int signal) {
     if (!error) {
-      log.write("stopping", {{"signal", signal}});
+      nlohmann::ordered_json fields = {{"signal", signal}};
+      if (live) {
+        fields.update(counter_fields(live->counters()));
+      }
+      log.write("stopping", fields);
       io.stop();
     }
   });
-  openscope::Instrument instrument(options.seed);
-  std::optional<openscope::ScpiServer> server;
   try {
     server.emplace(io, instrument, options.server, log);
   } catch (const boost::system::system_error& error) {
@@ -65,7 +120,9 @@ int run(std::span<char*> arguments, openscope::JsonLog& log) {
     log.write("error", {{"error", message}});
     return 1;
   }
-  const openscope::LivePipeline live(instrument);
+  live.emplace(instrument);
+  CounterLog counter_log(io, *live, log);
+  counter_log.start();
   io.run();
   return 0;
 }
