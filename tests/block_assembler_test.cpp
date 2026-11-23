@@ -136,10 +136,10 @@ TEST_F(BlockAssemblerTest, CaptureLimitIsTheBlocksOwnUntilRunEndsItsSingle) {
 // the generation's later Armed-single blocks, are captured as Running.
 TEST_F(BlockAssemblerTest, RunRestCapturesTheRestAsRunning) {
   const AcquiredBlock armed = block_of(0, 10, {.limit = CaptureLimit::kFirst});
-  const std::optional<std::size_t> single_end = assemble(armed);
+  const std::size_t single_end = assemble(armed).value_or(0);
   ASSERT_EQ(single_end, kRecordLength);
 
-  blocks.run_rest(armed, *single_end, handed_on.sink());
+  blocks.run_rest(armed, single_end, handed_on.sink());
   EXPECT_EQ(assemble(block_of(10, 10, {.sequence = 1, .limit = CaptureLimit::kFirst})),
             std::nullopt);
 
