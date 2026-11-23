@@ -1,11 +1,13 @@
 // The shared test helpers that are not tested where they are used: eventually, padded, send_live,
-// advance_in_steps, float32_reply and measurement_index.
+// advance_in_steps, float32_reply, measurement_index, rising_block and HandedOn.
 
+#include <gmock/gmock.h>
 #include <gtest/gtest-spi.h>
 #include <gtest/gtest.h>
 
 #include <chrono>
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -13,10 +15,13 @@
 #include <vector>
 
 #include "binary_block.hpp"
+#include "capture_blocks.hpp"
 #include "eventually.hpp"
 #include "instrument_fixture.hpp"
 #include "measurement_fixture.hpp"
+#include "openscope/capture.hpp"
 #include "openscope/measurement.hpp"
+#include "openscope/sample_block.hpp"
 #include "scpi_session.hpp"
 
 namespace openscope::test {
@@ -89,6 +94,28 @@ TEST_F(UntriggeredDcFixture, SendLiveFailsALineThatNeverEnds) {
                           "has not ended");
   EXPECT_EQ(reply, std::nullopt);
   session.close();  // Drops the held line.
+}
+
+TEST(RisingBlockTest, CarriesEachSampleIndexOnChannelOne) {
+  const SampleBlock block = rising_block(5, 3);
+
+  EXPECT_EQ(block.first_index, 5U);
+  EXPECT_EQ(block.count, 3U);
+  EXPECT_THAT(block.channels[0], testing::ElementsAre(5.0F, 6.0F, 7.0F));
+  EXPECT_TRUE(block.channels[1].empty());
+}
+
+TEST(HandedOnTest, KeepsEveryCaptureInOrder) {
+  HandedOn handed_on;
+  const CaptureSink sink = handed_on.sink();
+  const auto first = std::make_shared<const Capture>(Capture{.first_index = 8});
+  const auto second = std::make_shared<const Capture>(Capture{.first_index = 2});
+
+  sink(first);
+  sink(second);
+
+  EXPECT_THAT(handed_on.captures, testing::ElementsAre(first, second));
+  EXPECT_THAT(handed_on.first_indexes(), testing::ElementsAre(8U, 2U));
 }
 
 TEST(MeasurementIndexTest, IsThePositionOfTheMnemonicInMeasurements) {
