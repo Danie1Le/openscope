@@ -28,7 +28,7 @@ Completed capture_of(std::size_t samples) {
   Capture capture;
   capture.channels.at(0).emplace().samples.resize(samples / 2);
   capture.channels.at(2).emplace().samples.resize(samples - (samples / 2));
-  return {.capture = std::make_shared<const Capture>(std::move(capture)), .generation = 0};
+  return {.capture = std::make_shared<const Capture>(std::move(capture)), .statistics_epoch = 0};
 }
 
 /// The oldest capture in `queue`, which must hold one: front would wait for it otherwise.

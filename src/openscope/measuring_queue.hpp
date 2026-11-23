@@ -11,8 +11,8 @@
 
 namespace openscope {
 
-/// The Running captures that live mode's processing thread has completed and its measuring thread
-/// has yet to measure and publish, oldest first (#71). It is bounded twice, so its memory stays
+/// The captures that live mode's processing thread has published and its measuring thread has yet
+/// to measure and count, oldest first (#71). It is bounded twice, so its memory stays
 /// small whatever the record length: by captures, for many short ones, and by samples summed over
 /// channels, for long ones. A capture always gets in when the queue is empty, so even one longer
 /// than the sample limit never waits forever. One thread pushes and one other thread takes.

@@ -45,11 +45,14 @@ void LivePipeline::acquire_blocks(const std::stop_token& stop) {
 
 void LivePipeline::process_blocks(const std::stop_token& stop) {
   // Waiting for the measuring thread to make room stalls this thread, so the ring buffer fills
-  // and drops blocks, counted, rather than a capture vanishing unseen; a capture is given up only
-  // when the pipeline stops.
-  const Instrument::CaptureHandOff to_measuring = [&](Instrument::CompletedCapture completed) {
-    (void)captures_.push(std::move(completed), stop);
-  };
+  // and drops blocks, counted, rather than a capture going uncounted. When the pipeline stops
+  // first, the capture is counted here instead, so no MEAS:STAT? waits for it for ever.
+  const Instrument::CaptureHandOff to_measuring =
+      [&](const Instrument::CompletedCapture& completed) {
+        if (!captures_.push(completed, stop)) {
+          instrument_->count_measured(completed);
+        }
+      };
   while (!stop.stop_requested()) {
     if (const std::optional<AcquiredBlock> block = blocks_.try_pop()) {
       instrument_->process(*block, to_measuring);
@@ -61,7 +64,7 @@ void LivePipeline::process_blocks(const std::stop_token& stop) {
 
 void LivePipeline::measure_captures(const std::stop_token& stop) {
   while (const std::optional<Instrument::CompletedCapture> next = captures_.front(stop)) {
-    instrument_->publish_measured(*next);
+    instrument_->count_measured(*next);
     captures_.pop();
   }
 }
