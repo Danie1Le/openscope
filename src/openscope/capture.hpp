@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <vector>
 
@@ -51,5 +52,14 @@ struct Capture {
 
 /// Channel `channel` (1 to 4) of `capture`. Throws std::out_of_range when it is not in the capture.
 const CapturedChannel& captured_channel(const Capture& capture, std::size_t channel);
+
+/// How many of the captures a sample block could complete `CaptureAssembler::push` completes, as
+/// the run state the block was acquired in says (AcquiredBlock::limit).
+enum class CaptureLimit : std::uint8_t {
+  /// Every one (the Running run state).
+  kEvery,
+  /// The first, after which push stops (the Armed-single run state).
+  kFirst,
+};
 
 }  // namespace openscope

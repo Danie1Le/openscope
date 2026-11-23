@@ -16,14 +16,6 @@
 
 namespace openscope {
 
-/// How many of the captures a sample block could complete `CaptureAssembler::push` completes.
-enum class CaptureLimit : std::uint8_t {
-  /// Every one (the Running run state).
-  kEvery,
-  /// The first, after which push stops (the Armed-single run state).
-  kFirst,
-};
-
 /// Called by `CaptureAssembler::push` with each capture as it completes: the one way captures
 /// leave the assembler, so each can be measured and published. It never changes, so the sink may
 /// keep it.

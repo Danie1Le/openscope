@@ -15,7 +15,6 @@
 #include "capture_blocks.hpp"
 #include "openscope/acquired_block.hpp"
 #include "openscope/capture.hpp"
-#include "openscope/capture_assembler.hpp"
 #include "openscope/sample_clock.hpp"
 
 namespace openscope {

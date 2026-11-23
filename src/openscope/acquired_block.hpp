@@ -4,7 +4,6 @@
 #include <cstdint>
 
 #include "openscope/capture.hpp"
-#include "openscope/capture_assembler.hpp"
 #include "openscope/channel.hpp"
 #include "openscope/sample_block.hpp"
 #include "openscope/trigger.hpp"
