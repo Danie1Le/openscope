@@ -5,10 +5,10 @@ import threading
 import time
 
 import pytest
-from engine_helpers import LONGEST_RECORD, PATIENCE
+from engine_helpers import LONGEST_RECORD, PATIENCE, scpi_error
 from server_limits import INPUT_BUFFER_OVERRUN, MAX_CLIENTS, MAX_LINE, TOO_MUCH_DATA
 
-from openscope_client import ScpiError, TriggerMode
+from openscope_client import TriggerMode
 from openscope_client.transport import MAX_RESPONSE_BYTES
 
 #: How long another client's `*IDN?` may take while a line of bulk queries runs: generous for a
@@ -25,11 +25,10 @@ def test_a_line_of_4096_bytes_runs(scope):
 
 @pytest.mark.parametrize("length", [MAX_LINE + 1, 1_000_000])
 def test_a_longer_line_is_rejected_and_the_session_carries_on(scope, length):
-    with pytest.raises(ScpiError) as raised:
-        scope.query("*IDN?".ljust(length))
+    raised = scpi_error(lambda: scope.query("*IDN?".ljust(length)))
 
-    assert raised.value.errors == (INPUT_BUFFER_OVERRUN,)
-    assert raised.value.reply is None
+    assert raised.errors == (INPUT_BUFFER_OVERRUN,)
+    assert raised.reply is None
     assert scope.identify().manufacturer == "OpenScope"
 
 
