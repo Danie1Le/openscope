@@ -17,8 +17,6 @@
 #include "openscope/channel.hpp"
 #include "openscope/instrument.hpp"
 #include "openscope/sample_block.hpp"
-#include "openscope/sample_clock.hpp"
-#include "openscope/trigger.hpp"
 
 namespace openscope {
 namespace {
