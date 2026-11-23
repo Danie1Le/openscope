@@ -24,6 +24,10 @@ OTHER_CLIENT_CEILING = 10.0
 #: runner and an ASan engine.
 UNSTALLED_CEILING = 0.25
 
+#: Seconds to wait for a 4 KB line of ASCII `WAV:DATA?`: under 1 s on a release engine, far
+#: longer on a sanitizer build.
+BULK_PATIENCE = 180.0
+
 
 def test_a_line_of_4096_bytes_runs(scope):
     line = "*IDN?".ljust(MAX_LINE)  # Trailing white space is allowed.
@@ -112,7 +116,8 @@ def test_a_line_of_bulk_queries_stops_at_the_reply_limit_and_others_are_served(e
 def test_another_clients_commands_do_not_wait_for_a_bulk_line_to_be_formatted(engine):
     # About 3.5 ASCII blocks of 16 MiB fit the reply: 0.6 s of formatting, which no other client
     # waits for, since lines of different Sessions run in parallel.
-    with socket.create_connection(("127.0.0.1", engine.port), timeout=PATIENCE) as bulk:
+    # The line may take a TSan engine most of a minute to format; only the other client is timed.
+    with socket.create_connection(("127.0.0.1", engine.port), timeout=BULK_PATIENCE) as bulk:
         assert plain_query(bulk, f"ACQ:POIN {LONGEST_RECORD};:SING;*OPC?") == b"1"
 
         waits = waits_while(
