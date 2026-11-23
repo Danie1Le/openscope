@@ -217,8 +217,8 @@ TEST_P(LiveLongestRecordTest, RunningAtFourChannelsLosesNoBlockAndCountsEveryCap
 }
 
 INSTANTIATE_TEST_SUITE_P(Clients, LiveLongestRecordTest, testing::Bool(),
-                         [](const testing::TestParamInfo<bool>& info) {
-                           return info.param ? "WithAClient" : "WithNoClient";
+                         [](const testing::TestParamInfo<bool>& parameter) {
+                           return parameter.param ? "WithAClient" : "WithNoClient";
                          });
 
 TEST_F(LivePipelineTest, StopFreezesTheLatestCapture) {
