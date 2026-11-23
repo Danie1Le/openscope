@@ -161,7 +161,7 @@ class Instrument {
 
   /// Measures `completed`, from `process`'s hand-off, without the mutex, then counts it in the
   /// measurement statistics, unless they have been reset since it completed. A `MEAS:STAT?` waits
-  /// until every capture published so far is counted. Captures must come from one thread at a
+  /// until every capture published before it is counted. Captures must come from one thread at a
   /// time, in the order they were handed off.
   void count_measured(const CompletedCapture& completed);
 
@@ -204,6 +204,10 @@ class Instrument {
     /// From an operation's end, which released its held line, until that line has ended or waits
     /// again (settle). Needs mutex_.
     bool released = false;
+    /// While the Session's `MEAS:STAT?` waits for captures to be counted: how many had been
+    /// handed off for counting when it began to wait, so later ones never hold it up. Needs
+    /// mutex_.
+    std::optional<std::uint64_t> counted_by = std::nullopt;
   };
 
   /// A line from `execute` until it ends, including while `*OPC?` or `*WAI` holds it until no
@@ -367,8 +371,18 @@ class Instrument {
   /// Counts the released line of `state`, if it has one, as settled; once every released line
   /// has, returns the lines whose commands waited for them, for `hand_on`. Needs mutex_.
   std::vector<RunningLine> settle(SessionState& state);
+  /// The state of `caller`, whose command is running; null once it has closed. Needs mutex_.
+  [[nodiscard]] SessionState* state_of(const Session& caller) const;
   /// Whether `caller`'s line is a released one. Needs mutex_.
-  [[nodiscard]] bool released(const Session& caller) const;
+  [[nodiscard]] bool released(const Session& caller) const {
+    const SessionState* state = state_of(caller);
+    return state != nullptr && state->released;
+  }
+  /// Whether the line of `state`, held by its `MEAS:STAT?`, still waits for captures to be
+  /// counted. Needs mutex_.
+  [[nodiscard]] bool waits_for_count(const SessionState& state) const {
+    return state.counted_by && counted_ < *state.counted_by;
+  }
   /// Hands each of `lines` to its Session's Resumer, one line per piece of work. Called without
   /// mutex_, since a Resumer may run the work at once.
   void hand_on(std::vector<RunningLine> lines);
@@ -399,8 +413,10 @@ class Instrument {
   MeasurementStatistics statistics_;
   /// How many times the statistics have been reset (reset_statistics).
   std::uint64_t statistics_epoch_ = 0;
-  /// Captures published, and handed off, that count_measured has not counted yet.
-  std::size_t uncounted_ = 0;
+  /// Captures published and handed off to be counted, and how many of them count_measured has
+  /// counted (or left out after a reset), both since the Instrument was built.
+  std::uint64_t handed_off_ = 0;
+  std::uint64_t counted_ = 0;
   /// Lines whose `MEAS:STAT?` waits for those captures to be counted.
   std::vector<RunningLine> awaiting_count_;
   /// The lines held while an operation is pending, at most one per Session: a Session with a
