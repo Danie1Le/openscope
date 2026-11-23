@@ -693,26 +693,25 @@ void Instrument::enter(RunState state) {
   }
 }
 
+std::optional<std::vector<Instrument::RunningLine>> Instrument::keep(RunningLine& line) {
+  const std::scoped_lock lock(mutex_);
+  // Checked again here, under the lock that operations end and lines settle under, so no end is
+  // missed. The holding command has no effect of its own, so a line held here waits as if it had
+  // run now: `*OPC?` after a `STOP;SINGle` of another Session in between waits for that Single.
+  const bool runs_again = line.execution.held_to_run_again();
+  if (!(runs_again ? settling_ > 0 : pending())) {
+    return std::nullopt;
+  }
+  line.state->holding = true;
+  std::vector<RunningLine> settled = settle(*line.state);  // A released line waiting again has.
+  (runs_again ? waiting_ : held_).push_back(std::move(line));
+  return settled;
+}
+
 void Instrument::finish(RunningLine line) {
   while (line.execution.held()) {
-    std::vector<RunningLine> settled;
-    bool kept = false;
-    {
-      const std::scoped_lock lock(mutex_);
-      // Checked again here, under the lock that operations end and lines settle under, so no end
-      // is missed. The holding command has no effect of its own, so a line held here waits as if
-      // it had run now: `*OPC?` after a `STOP;SINGle` of another Session in between waits for
-      // that new Single.
-      const bool runs_again = line.execution.held_to_run_again();
-      if (runs_again ? settling_ > 0 : pending()) {
-        line.state->holding = true;
-        settled = settle(*line.state);  // A released line that waits again has settled.
-        (runs_again ? waiting_ : held_).push_back(std::move(line));
-        kept = true;
-      }
-    }
-    if (kept) {
-      hand_on(std::move(settled));
+    if (std::optional<std::vector<RunningLine>> settled = keep(line)) {
+      hand_on(std::move(*settled));
       return;
     }
     commands_.resume(line.state->session, line.execution);
@@ -754,7 +753,7 @@ std::vector<Instrument::RunningLine> Instrument::take_woken() {
     return {};
   }
   std::vector<RunningLine> woken = std::exchange(held_, {});
-  for (RunningLine& line : woken) {
+  for (const RunningLine& line : woken) {
     line.state->released = true;
   }
   settling_ += woken.size();
