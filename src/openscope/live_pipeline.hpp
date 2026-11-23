@@ -8,7 +8,10 @@
 #include <thread>
 
 #include "openscope/acquired_block.hpp"
+#include "openscope/capture.hpp"
+#include "openscope/channel.hpp"
 #include "openscope/instrument.hpp"
+#include "openscope/measuring_queue.hpp"
 #include "openscope/spsc_ring_buffer.hpp"
 
 namespace openscope {
@@ -27,15 +30,27 @@ struct LiveCounters {
 
 /// Runs an Instrument in real time (live mode, spec #1). An acquisition thread acquires sample
 /// blocks as the Pacer releases them and pushes them through an SPSC ring buffer; a processing
-/// thread pops them and assembles captures, so a slow capture never holds up the sample clock.
-/// When processing falls behind and the buffer is full, the block is dropped and counted; when
-/// acquisition falls behind the wall clock, the samples it skips are counted too. The
-/// threads start when the pipeline is built and stop when it is destroyed; blocks still in the
-/// buffer are dropped then, and lines held on a Single stay held until a command ends it.
+/// thread pops them, assembles captures and publishes each as it completes, so a slow capture
+/// never holds up the sample clock. A measuring thread measures every capture processing
+/// publishes and counts it in the measurement statistics, so measuring a long capture, which takes
+/// longer than the ring buffer holds blocks (#71), never holds up processing. When processing
+/// falls behind and the buffer is full, the block is dropped and counted; when acquisition falls
+/// behind the wall clock, the samples it skips are counted too. When measuring falls behind,
+/// processing waits for it rather than leave a capture uncounted: the blocks that then overflow
+/// the ring buffer are counted as dropped. The threads start when the pipeline is built and stop
+/// when it is destroyed; blocks still in the buffer are dropped then, every capture already
+/// published is counted first, and lines held on a Single stay held until a command ends it.
 class LivePipeline {
  public:
   /// Blocks the ring buffer holds before it drops one: at least kQueueCapacity ticks of samples.
   static constexpr std::size_t kQueueCapacity = 64;
+  /// The most captures waiting for the measuring thread, counting the one it measures: as many
+  /// short captures as the ring buffer holds blocks.
+  static constexpr std::size_t kMeasuringCaptures = kQueueCapacity;
+  /// The most samples, summed over channels, in captures waiting for the measuring thread,
+  /// counting the one it measures: one capture of the longest record on every channel.
+  static constexpr std::size_t kMeasuringSamples =
+      AcquisitionSettings::kMaxRecordLength * kChannelCount;
   /// How long the acquisition thread sleeps between rounds. Each round acquires what fell due
   /// since the last, so at 1 MS/s a block is about 1000 samples.
   static constexpr std::chrono::milliseconds kTick{1};
@@ -64,12 +79,15 @@ class LivePipeline {
  private:
   void acquire_blocks(const std::stop_token& stop);
   void process_blocks(const std::stop_token& stop);
+  void measure_captures(const std::stop_token& stop);
 
   SpscRingBuffer<AcquiredBlock> blocks_{kQueueCapacity};
+  MeasuringQueue captures_{kMeasuringCaptures, kMeasuringSamples};
   Instrument* instrument_;
   std::atomic<std::uint64_t> skipped_samples_ = 0;
   // Declared last so they stop and join first, while what they use still exists; acquisition
-  // stops before processing.
+  // stops before processing, and processing before measuring.
+  std::jthread measuring_;
   std::jthread processing_;
   std::jthread acquisition_;
 };

@@ -27,13 +27,10 @@ using testing::Each;
 using testing::ElementsAre;
 using testing::Eq;
 
-/// Enables the channels *RST leaves off, so a capture holds all four.
-constexpr auto kEnableChannelsTwoToFour = "CHAN2:DISP ON;:CHAN3:DISP ON;:CHAN4:DISP ON";
-
 using AcquisitionTest = test::InstrumentFixture;
 
 TEST_F(AcquisitionTest, ChannelNIsFedByGeneratorN) {
-  session.send(kEnableChannelsTwoToFour);
+  session.send(test::kEnableChannelsTwoToFour);
   session.send("SOUR1:FUNC DC;OFFS 0.5;:SOUR2:FUNC DC;OFFS 1;:SOUR3:FUNC DC;OFFS 1.5");
   session.send("SOUR4:FUNC DC;OFFS 2");
 
@@ -291,13 +288,13 @@ TEST_F(AcquisitionTest, RstGivesTheSameNextCaptureAsAFreshInstrument) {
   instrument.advance((2 * kResetRecordLength) - kBeforeChange);
 
   session.send("*RST");
-  session.send(kEnableChannelsTwoToFour);
+  session.send(test::kEnableChannelsTwoToFour);
   instrument.advance(kResetRecordLength);
 
   Instrument fresh;
   ScpiSession client{fresh};
   fresh.advance(2 * kResetRecordLength);
-  client.send(kEnableChannelsTwoToFour);
+  client.send(test::kEnableChannelsTwoToFour);
   fresh.advance(kResetRecordLength);
 
   ASSERT_NE(instrument.latest_capture(), nullptr);
@@ -321,14 +318,14 @@ TEST_F(AcquisitionTest, RstKeepsTheInstrumentSeedForNoise) {
   reset_client.send("SOUR1:FUNC SQU;FREQ 1234;:SOUR2:NOIS 0.3;:ACQ:SRAT 3E6");
   reset.advance(2 * kResetRecordLength);
   reset_client.send("*RST");
-  reset_client.send(kEnableChannelsTwoToFour);
+  reset_client.send(test::kEnableChannelsTwoToFour);
   reset_client.send(kNoiseOnEveryChannel);
   reset.advance(kResetRecordLength);
 
   Instrument fresh{kSeed};
   ScpiSession fresh_client{fresh};
   fresh.advance(2 * kResetRecordLength);
-  fresh_client.send(kEnableChannelsTwoToFour);
+  fresh_client.send(test::kEnableChannelsTwoToFour);
   fresh_client.send(kNoiseOnEveryChannel);
   fresh.advance(kResetRecordLength);
 

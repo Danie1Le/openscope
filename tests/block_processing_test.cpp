@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "instrument_fixture.hpp"
@@ -21,6 +22,7 @@
 #include "openscope/capture.hpp"
 #include "openscope/instrument.hpp"
 #include "openscope/measurement.hpp"
+#include "reply_numbers.hpp"
 #include "scpi_session.hpp"
 
 namespace openscope {
@@ -321,6 +323,182 @@ TEST_F(BlockProcessingTest, RunDuringASinglesBlockCapturesTheRestOfTheBlock) {
 
   EXPECT_EQ(first_index(instrument), 40U);
   EXPECT_EQ(instrument.discarded_captures(), 0U);
+}
+
+/// Every capture `process` publishes from `block` and hands off for counting, in order.
+std::vector<Instrument::CompletedCapture> handed_off(Instrument& instrument,
+                                                     const AcquiredBlock& block) {
+  std::vector<Instrument::CompletedCapture> completed;
+  instrument.process(block, [&](Instrument::CompletedCapture capture) {
+    completed.push_back(std::move(capture));
+  });
+  return completed;
+}
+
+/// Counts every capture in `completed`, oldest first, as live mode's measuring thread does.
+void count_all(Instrument& instrument, const std::vector<Instrument::CompletedCapture>& completed) {
+  for (const Instrument::CompletedCapture& capture : completed) {
+    instrument.count_measured(capture);
+  }
+}
+
+// #71: live mode measures captures on another thread. A capture is the latest as soon as it
+// completes and is counted once count_measured has measured it, in the order they completed.
+TEST_F(BlockProcessingTest, HandedOffCapturesArePublishedAtOnceAndCountedOnceMeasured) {
+  session.send("ACQ:POIN 100");
+
+  const std::vector<Instrument::CompletedCapture> completed =
+      handed_off(instrument, acquired(instrument, 300));
+
+  ASSERT_EQ(completed.size(), 3U);
+  EXPECT_EQ(first_index(instrument), 200U);
+  count_all(instrument, completed);
+  const test::Statistics statistics = test::statistics_of(session.send("MEAS:STAT? VAV,CHAN1"));
+  EXPECT_EQ(statistics.count, 3.0);
+}
+
+// MEAS:STAT? holds its line while captures already published wait to be counted, so it never
+// replies statistics that leave out the latest capture; other commands do not wait.
+TEST_F(BlockProcessingTest, StatisticsQueryWaitsForThePublishedCapturesToBeCounted) {
+  session.send("ACQ:POIN 100");
+  const std::vector<Instrument::CompletedCapture> completed =
+      handed_off(instrument, acquired(instrument, 200));
+  ASSERT_EQ(completed.size(), 2U);
+
+  const auto reply = session.start("MEAS:STAT? VAV,CHAN1");
+  EXPECT_FALSE(reply->ended);
+  EXPECT_EQ(ScpiSession(instrument).send("ACQ:POIN?"), "100");
+  instrument.count_measured(completed.front());
+  EXPECT_FALSE(reply->ended);
+  instrument.count_measured(completed.back());
+
+  EXPECT_EQ(test::statistics_of(reply->text).count, 2.0);
+}
+
+// Only the captures published before the query hold it up: while Running, more keep coming, and
+// a query that waited for all of them might never reply (it did not under TSan).
+TEST_F(BlockProcessingTest, StatisticsQueryDoesNotWaitForCapturesPublishedAfterIt) {
+  session.send("ACQ:POIN 100");
+  const std::vector<Instrument::CompletedCapture> before =
+      handed_off(instrument, acquired(instrument, 100));
+  const auto reply = session.start("MEAS:STAT? VAV,CHAN1");
+  const std::vector<Instrument::CompletedCapture> after =
+      handed_off(instrument, acquired(instrument, 100));
+
+  count_all(instrument, before);
+
+  EXPECT_EQ(test::statistics_of(reply->text).count, 1.0);
+  count_all(instrument, after);
+}
+
+// A capture that completed before a statistics reset never counts after it (#71 review): the
+// statistics start from the captures that complete after the reset.
+TEST_F(BlockProcessingTest, CapturesCompletedBeforeAStatisticsResetAreNotCounted) {
+  session.send("ACQ:POIN 100");
+  const std::vector<Instrument::CompletedCapture> before =
+      handed_off(instrument, acquired(instrument, 200));
+
+  session.send("MEAS:STAT:RES");
+  const std::vector<Instrument::CompletedCapture> after =
+      handed_off(instrument, acquired(instrument, 100));
+  count_all(instrument, before);
+  count_all(instrument, after);
+
+  EXPECT_EQ(test::statistics_of(session.send("MEAS:STAT? VAV,CHAN1")).count, 1.0);
+}
+
+// The same for a setting change, which resets the statistics too: the capture that completed
+// before it stays the latest until the next one, but is not counted.
+TEST_F(BlockProcessingTest, CapturesCompletedBeforeASettingChangeAreNotCounted) {
+  const std::vector<Instrument::CompletedCapture> before =
+      handed_off(instrument, acquired(instrument, kResetRecordLength));
+  ASSERT_EQ(before.size(), 1U);
+
+  session.send("SOUR1:OFFS 0.5");
+  count_all(instrument, before);
+
+  EXPECT_EQ(first_index(instrument), 0U);
+  session.send("MEAS:STAT? VAV,CHAN1");
+  EXPECT_EQ(session.next_error(), test::kDataStaleReply);  // Nothing counted.
+}
+
+// A capture that completed before STOP or SINGle still counts and stays the latest (#71 review):
+// run control keeps the statistics, and STOP freezes the latest capture where it is.
+class RunControlWithCapturesQueuedTest : public test::UntriggeredDcFixture,
+                                         public testing::WithParamInterface<const char*> {};
+
+TEST_P(RunControlWithCapturesQueuedTest, CapturesCompletedBeforeItAreCountedAndKept) {
+  session.send("ACQ:POIN 100");
+  const std::vector<Instrument::CompletedCapture> completed =
+      handed_off(instrument, acquired(instrument, 300));
+
+  session.send(GetParam());
+  count_all(instrument, completed);
+
+  EXPECT_EQ(first_index(instrument), 200U);
+  EXPECT_EQ(test::statistics_of(session.send("MEAS:STAT? VAV,CHAN1")).count, 3.0);
+}
+
+INSTANTIATE_TEST_SUITE_P(StopAndSingle, RunControlWithCapturesQueuedTest,
+                         testing::Values("STOP", "SINGle"));
+
+// A Single's capture is published with the Single's end and handed off like any other: the lines
+// held on it carry on at once, and their MEAS:STAT? waits for the count, while other Sessions'
+// settings wait for those lines (#68), so the statistics are of the Single's capture alone.
+TEST_F(BlockProcessingTest, LinesHeldOnASingleReadItsCountedStatistics) {
+  std::vector<std::function<void()>> handed;
+  ScpiSession waiting(instrument, test::keeping_in(handed));
+  const auto reply = waiting.start("MEAS:STAT:RES;:SING;*OPC?;:MEAS:STAT? VAV,CHAN1");
+
+  const std::vector<Instrument::CompletedCapture> completed =
+      handed_off(instrument, acquired(instrument, kResetRecordLength));
+  ASSERT_EQ(completed.size(), 1U);
+  EXPECT_EQ(first_index(instrument), 0U);
+  ASSERT_EQ(handed.size(), 1U);
+  handed.front()();
+  const auto setting = ScpiSession(instrument).start("SOUR1:OFFS 0.5");
+
+  EXPECT_FALSE(reply->ended);
+  EXPECT_FALSE(setting->ended);
+  instrument.count_measured(completed.front());
+  ASSERT_EQ(handed.size(), 2U);  // The held line again, now its query can reply.
+  handed.back()();
+  EXPECT_THAT(reply->text, testing::Optional(testing::EndsWith(",1")));  // A count of one.
+  EXPECT_TRUE(setting->ended);
+}
+
+// A line held for the count whose client disconnects frees the others it was holding up.
+TEST_F(BlockProcessingTest, ClosingASessionWaitingForTheCountLetsTheOthersCarryOn) {
+  std::vector<std::function<void()>> handed;
+  ScpiSession waiting(instrument, test::keeping_in(handed));
+  (void)waiting.start("SING;*OPC?;:MEAS:STAT? VAV,CHAN1");
+  const std::vector<Instrument::CompletedCapture> completed =
+      handed_off(instrument, acquired(instrument, kResetRecordLength));
+  ASSERT_EQ(handed.size(), 1U);
+  handed.front()();
+  const auto setting = ScpiSession(instrument).start("SOUR1:OFFS 0.5");
+  EXPECT_FALSE(setting->ended);
+
+  waiting.close();
+
+  EXPECT_TRUE(setting->ended);
+  count_all(instrument, completed);
+}
+
+// After RUN ends a Single inside its block, the rest of the block is captured as Running, and its
+// captures are handed off after the Single's.
+TEST_F(BlockProcessingTest, RunningCapturesAfterASinglesCaptureAreHandedOffInOrder) {
+  session.send("ACQ:POIN 10;:SINGle");
+  const AcquiredBlock armed = acquired(instrument, 25);
+  session.send("RUN");
+
+  const std::vector<Instrument::CompletedCapture> completed = handed_off(instrument, armed);
+
+  ASSERT_EQ(completed.size(), 2U);
+  EXPECT_EQ(completed.front().capture->first_index, 0U);  // The Single's.
+  EXPECT_EQ(completed.back().capture->first_index, 10U);
+  EXPECT_EQ(first_index(instrument), 10U);
+  count_all(instrument, completed);
 }
 
 // The Single still ends at its capture, so the trigger restarts there as after any Single: the

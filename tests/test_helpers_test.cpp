@@ -1,10 +1,13 @@
-// The shared test helpers that are not tested where they are used: eventually, padded,
+// The shared test helpers that are not tested where they are used: eventually, padded, send_live,
 // advance_in_steps and float32_reply.
 
 #include <gtest/gtest-spi.h>
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <optional>
+#include <string>
+#include <thread>
 #include <vector>
 
 #include "binary_block.hpp"
@@ -57,6 +60,31 @@ TEST_F(UntriggeredDcFixture, Float32ReplyIsTheDecodedBlock) {
 
   EXPECT_EQ(float32_reply(session, "WAV:DATA?"), std::vector<float>(4, 0.5F));
   EXPECT_NONFATAL_FAILURE((void)float32_reply(session, "*IDN?"), "not a definite-length block");
+}
+
+TEST_F(UntriggeredDcFixture, SendLiveRepliesALineThatEndsAtOnce) {
+  EXPECT_EQ(session.send_live("ACQ:POIN 4;POIN?"), "4");
+}
+
+// The line ends on the thread that completes the Single, after send_live has begun to wait.
+TEST_F(UntriggeredDcFixture, SendLiveWaitsForALineThatEndsOnAnotherThread) {
+  session.send("ACQ:POIN 4");
+  const std::jthread single_taker([&] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    instrument.advance(4);
+  });
+
+  EXPECT_EQ(session.send_live("SING;*OPC?"), "1");
+}
+
+TEST_F(UntriggeredDcFixture, SendLiveFailsALineThatNeverEnds) {
+  session.send("TRIG:MODE NORM");
+  std::optional<std::string> reply;
+
+  EXPECT_NONFATAL_FAILURE(reply = session.send_live("SING;*OPC?", std::chrono::milliseconds(50)),
+                          "has not ended");
+  EXPECT_EQ(reply, std::nullopt);
+  session.close();  // Drops the held line.
 }
 
 }  // namespace

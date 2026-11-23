@@ -131,20 +131,39 @@ class Instrument {
   /// kMaxBlockLength.
   [[nodiscard]] std::optional<AcquiredBlock> acquire(std::size_t count);
 
+  /// A capture `process` has published but not yet counted, with the statistics reset it
+  /// completed after: what `count_measured` needs to count it later, on another thread.
+  struct CompletedCapture {
+    std::shared_ptr<const Capture> capture;
+    /// How many statistics resets came before the capture completed (statistics_epoch_).
+    std::uint64_t statistics_epoch = 0;
+  };
+
+  /// Takes each capture `process` publishes, in order, for `count_measured`.
+  using CaptureHandOff = std::function<void(CompletedCapture completed)>;
+
   /// Live mode's processing half: assembles `block`, from `acquire`, into captures without the
-  /// mutex that commands take, and measures each capture for the measurement statistics as it
-  /// completes, also without it. It takes the mutex only to count and publish a capture or end a
-  /// Single, about once a capture. A capture is counted, and becomes the latest capture in the
-  /// same hold of the mutex, only when no command has discarded the capture in progress since the
-  /// block was acquired, so neither ever holds settings older than a command that has already
-  /// returned. A Single's capture stops the instrument and hands each line held on it to its
+  /// mutex that commands take. Each capture becomes the latest capture as it completes, in one
+  /// hold of the mutex, but only when no command has discarded the capture in progress since the
+  /// block was acquired, so it never holds settings older than a command that has already
+  /// returned. Measuring it for the statistics takes long for a long capture (#71: about 115 ms
+  /// for four 1M-sample channels, more than live mode's ring buffer holds blocks), so with a
+  /// `hand_off` it is handed on to be measured and counted elsewhere (`count_measured`);
+  /// without, it is measured here first and counted as it is published. A Single's capture stops
+  /// the instrument in the same hold of the mutex and hands each line held on it to its
   /// Session's Resumer; this thread runs none of them, so the ring buffer keeps draining. When
-  /// `RUN` has ended the Single since the block was acquired, the rest of the block,
-  /// and every later block acquired while the Single was armed, is captured as Running, with the
-  /// trigger restarted at the Single's capture as after any Single. Blocks must come in the order
-  /// they were acquired; a block that never arrives is a dropped block, and the capture that would
+  /// `RUN` has ended the Single since the block was acquired, the rest of the block, and every
+  /// later block acquired while the Single was armed, is captured as Running, with the trigger
+  /// restarted at the Single's capture as after any Single. Blocks must come in the order they
+  /// were acquired; a block that never arrives is a dropped block, and the capture that would
   /// span it is discarded and counted.
-  void process(const AcquiredBlock& block);
+  void process(const AcquiredBlock& block, const CaptureHandOff& hand_off = {});
+
+  /// Measures `completed`, from `process`'s hand-off, without the mutex, then counts it in the
+  /// measurement statistics, unless they have been reset since it completed. A `MEAS:STAT?` waits
+  /// until every capture published before it is counted. Captures must come from one thread at a
+  /// time, in the order they were handed off.
+  void count_measured(const CompletedCapture& completed);
 
   /// Samples per second on the sample clock (`ACQuire:SRATe`), which live mode paces against.
   [[nodiscard]] double sample_rate() const;
@@ -185,6 +204,10 @@ class Instrument {
     /// From an operation's end, which released its held line, until that line has ended or waits
     /// again (settle). Needs mutex_.
     bool released = false;
+    /// While the Session's `MEAS:STAT?` waits for captures to be counted: how many had been
+    /// handed off for counting when it began to wait, so later ones never hold it up. Needs
+    /// mutex_.
+    std::optional<std::uint64_t> counted_by = std::nullopt;
   };
 
   /// A line from `execute` until it ends, including while `*OPC?` or `*WAI` holds it until no
@@ -208,11 +231,18 @@ class Instrument {
   /// How many captures assembling `block` makes: its own limit, unless `RUN` has already ended
   /// the Single it was acquired for. Processing state only, so it needs no lock.
   [[nodiscard]] CaptureLimit capture_limit(const AcquiredBlock& block) const;
-  /// Counts `capture`, which completed in `block`, in the measurement statistics with its
-  /// `results` and makes it the latest capture, unless a command has discarded the capture in
-  /// progress since `block` was acquired. Needs mutex_.
-  void publish(const AcquiredBlock& block, const std::shared_ptr<const Capture>& capture,
-               const CaptureResults& results);
+  /// Makes `capture`, which completed in `block`, the latest capture, unless a command has
+  /// discarded the capture in progress since `block` was acquired. With its `results` it counts
+  /// it too; without, it returns it to be counted by `count_measured`. Needs mutex_.
+  std::optional<CompletedCapture> publish(const AcquiredBlock& block,
+                                          const std::shared_ptr<const Capture>& capture,
+                                          const std::optional<CaptureResults>& results);
+  /// Resets the measurement statistics: captures published before are no longer counted. Needs
+  /// mutex_.
+  void reset_statistics() {
+    statistics_.reset();
+    ++statistics_epoch_;
+  }
   /// Ends the Single whose capture completed inside `block`, unless a command has discarded the
   /// capture in progress since `block` was acquired; the caller then hands the lines held on it
   /// on (take_woken). Returns true when `RUN` had already ended the Single, so the samples after
@@ -326,9 +356,10 @@ class Instrument {
   /// its handler and, when it was the last released line to settle, hands on the lines that
   /// waited for that. Takes mutex_ itself.
   void finish(RunningLine line);
-  /// For finish: keeps the held `line` (moving it into held_ or waiting_) while what it waits for
-  /// lasts, and returns the released lines that keeping it settled; nullopt when it is already
-  /// over, so the line carries on now. Takes mutex_ itself.
+  /// For finish: keeps the held `line` (moving it into held_, waiting_ or awaiting_count_) while
+  /// what it waits for lasts, and returns the released lines that keeping it settled; nullopt when
+  /// it is already over, so the line carries on now. A released line waiting for the count has
+  /// not settled: it still reads the instrument as the operation left it. Takes mutex_ itself.
   std::optional<std::vector<RunningLine>> keep(RunningLine& line);
   /// Carries on `line`, handed to its Session's Resumer, unless the Session has closed since.
   void resume(RunningLine line);
@@ -340,8 +371,18 @@ class Instrument {
   /// Counts the released line of `state`, if it has one, as settled; once every released line
   /// has, returns the lines whose commands waited for them, for `hand_on`. Needs mutex_.
   std::vector<RunningLine> settle(SessionState& state);
+  /// The state of `caller`, whose command is running; null once it has closed. Needs mutex_.
+  [[nodiscard]] SessionState* state_of(const Session& caller) const;
   /// Whether `caller`'s line is a released one. Needs mutex_.
-  [[nodiscard]] bool released(const Session& caller) const;
+  [[nodiscard]] bool released(const Session& caller) const {
+    const SessionState* state = state_of(caller);
+    return state != nullptr && state->released;
+  }
+  /// Whether the line of `state`, held by its `MEAS:STAT?`, still waits for captures to be
+  /// counted. Needs mutex_.
+  [[nodiscard]] bool waits_for_count(const SessionState& state) const {
+    return state.counted_by && counted_ < *state.counted_by;
+  }
   /// Hands each of `lines` to its Session's Resumer, one line per piece of work. Called without
   /// mutex_, since a Resumer may run the work at once.
   void hand_on(std::vector<RunningLine> lines);
@@ -370,6 +411,14 @@ class Instrument {
   SpectrumCache spectra_;
   /// Every capture completed since the last capture_setting_changed(), `*RST` or `MEAS:STAT:RES`.
   MeasurementStatistics statistics_;
+  /// How many times the statistics have been reset (reset_statistics).
+  std::uint64_t statistics_epoch_ = 0;
+  /// Captures published and handed off to be counted, and how many of them count_measured has
+  /// counted (or left out after a reset), both since the Instrument was built.
+  std::uint64_t handed_off_ = 0;
+  std::uint64_t counted_ = 0;
+  /// Lines whose `MEAS:STAT?` waits for those captures to be counted.
+  std::vector<RunningLine> awaiting_count_;
   /// The lines held while an operation is pending, at most one per Session: a Session with a
   /// held line sends no other.
   std::vector<RunningLine> held_;

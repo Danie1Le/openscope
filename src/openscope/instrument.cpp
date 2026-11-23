@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <format>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -229,10 +230,10 @@ void Instrument::add_command(scpi::Command command) {
   commands_.add(std::move(command));
 }
 
-bool Instrument::released(const Session& caller) const {
-  return std::ranges::any_of(sessions_, [&](const auto& open) {
-    return open.second->released && &open.second->session == &caller;
-  });
+Instrument::SessionState* Instrument::state_of(const Session& caller) const {
+  const auto found = std::ranges::find_if(
+      sessions_, [&](const auto& open) { return &open.second->session == &caller; });
+  return found == sessions_.end() ? nullptr : found->second.get();
 }
 
 void Instrument::add_run_control_commands() {
@@ -486,14 +487,26 @@ void Instrument::add_statistics_commands() {
       {.header = "MEASure:STATistics?",
        .parameters = {scpi::KeywordParameter{.choices = std::move(mnemonics)}, channel_parameter()},
        .handler = [this](Session& caller, const Arguments& arguments) -> scpi::HandlerResult {
+         // Captures already published but still being measured would be left out (#71): the
+         // query waits, holding its line, and runs again once those are counted
+         // (count_measured). Captures published after it began to wait do not hold it up.
+         if (SessionState* state = state_of(caller)) {
+           state->counted_by = state->counted_by.value_or(handed_off_);
+           if (waits_for_count(*state)) {
+             return scpi::Hold{.reply = std::nullopt, .again = true};
+           }
+           state->counted_by.reset();
+         }
          if (statistics_.empty()) {
            return kDataCorruptOrStale;  // No capture since the statistics were last reset.
          }
          const std::size_t measurement = value_of<scpi::Choice>(arguments, 0).index;
          const std::size_t channel = value_of<scpi::Choice>(arguments, 1).suffix;
-         // Every capture is counted as it is published, under this handler's mutex, so the latest
-         // capture is the most recent one they hold and has the channels of every capture they
-         // hold (a channel change resets them).
+         // Every capture published before this query is counted by now, so `current` is the
+         // newest counted capture's result. While Running it can be older than the latest
+         // capture: one completed while the query waited may not be counted yet. The latest
+         // capture still has the channels of every capture they hold (a channel change resets
+         // them).
          return reply_with_source(
              channel, [&](const std::shared_ptr<const Capture>&, const CapturedChannel&) {
                const MeasurementSeries& series = statistics_.at(channel, measurement);
@@ -516,7 +529,7 @@ void Instrument::add_statistics_commands() {
   add_command({.header = "MEASure:STATistics:RESet",
                .parameters = {},
                .handler = [this](Session&, const Arguments&) -> scpi::HandlerResult {
-                 statistics_.reset();
+                 reset_statistics();
                  return std::nullopt;
                }});
 }
@@ -679,7 +692,7 @@ void Instrument::change_trigger(const std::function<void(TriggerSettings&)>& cha
 
 void Instrument::capture_setting_changed() {
   discard_capture();
-  statistics_.reset();
+  reset_statistics();
 }
 
 void Instrument::reset() {
@@ -707,11 +720,19 @@ std::optional<std::vector<Instrument::RunningLine>> Instrument::keep(RunningLine
   // Checked again here, under the lock that operations end and lines settle under, so no end is
   // missed. The holding command has no effect of its own, so a line held here waits as if it had
   // run now: `*OPC?` after a `STOP;SINGle` of another Session in between waits for that Single.
+  // A command held to run again waits for the released lines to settle (any command of another
+  // Session) or for the published captures to be counted (MEAS:STAT?).
   const bool runs_again = line.execution.held_to_run_again();
-  if (!(runs_again ? settling_ > 0 : pending())) {
+  const bool waits_to_settle = runs_again && settling_ > 0 && !line.state->released;
+  const bool counting = runs_again && !waits_to_settle && waits_for_count(*line.state);
+  if (!(runs_again ? waits_to_settle || counting : pending())) {
     return std::nullopt;
   }
   line.state->holding = true;
+  if (counting) {
+    awaiting_count_.push_back(std::move(line));
+    return std::vector<RunningLine>{};
+  }
   std::vector<RunningLine> settled = settle(*line.state);  // A released line waiting again has.
   (runs_again ? waiting_ : held_).push_back(std::move(line));
   return settled;
@@ -793,16 +814,26 @@ SessionId Instrument::open_session(Resumer resumer) {
 }
 
 void Instrument::close_session(SessionId session) {
-  const std::scoped_lock lock(mutex_);
-  const auto found = sessions_.find(session);
-  if (found == sessions_.end()) {
-    throw std::out_of_range("unknown Session");
+  std::vector<RunningLine> settled;
+  {
+    const std::scoped_lock lock(mutex_);
+    const auto found = sessions_.find(session);
+    if (found == sessions_.end()) {
+      throw std::out_of_range("unknown Session");
+    }
+    found->second->open = false;
+    const auto of_this_session = [&](const RunningLine& line) {
+      return line.state == found->second;
+    };
+    std::erase_if(held_, of_this_session);
+    std::erase_if(waiting_, of_this_session);
+    // A released line waiting for the count has not settled yet; dropped, it has.
+    if (std::erase_if(awaiting_count_, of_this_session) > 0) {
+      settled = settle(*found->second);
+    }
+    sessions_.erase(found);
   }
-  found->second->open = false;
-  const auto of_this_session = [&](const RunningLine& line) { return line.state == found->second; };
-  std::erase_if(held_, of_this_session);
-  std::erase_if(waiting_, of_this_session);
-  sessions_.erase(found);
+  hand_on(std::move(settled));
 }
 
 void Instrument::execute(SessionId session, std::string_view line, ReplyHandler on_reply) {
@@ -838,7 +869,7 @@ void Instrument::advance(std::size_t samples) {
         // on how `advance` is chunked; and before held lines resume, so they see the Single's
         // capture.
         single_end = assemble(*block, [&](const std::shared_ptr<const Capture>& capture) {
-          publish(*block, capture, measure_all(*capture));
+          (void)publish(*block, capture, measure_all(*capture));
         });
         // The Single's capture ends the operation at its last sample: the lines it resumes run
         // with the clock there, and the next block starts there under whatever they changed, so
@@ -877,36 +908,50 @@ std::optional<AcquiredBlock> Instrument::acquire(std::size_t count) {
   return block;
 }
 
-void Instrument::process(const AcquiredBlock& block) {
-  // Each capture is measured as it completes, without the mutex, and published under it.
-  const CaptureSink publish_measured = [this,
-                                        &block](const std::shared_ptr<const Capture>& capture) {
-    const CaptureResults results = measure_all(*capture);
-    const std::scoped_lock lock(mutex_);
-    publish(block, capture, results);
+void Instrument::process(const AcquiredBlock& block, const CaptureHandOff& hand_off) {
+  // Without a hand-off, a capture is measured here, before it is published and counted.
+  const auto measured_here = [&](const Capture& capture) {
+    return hand_off ? std::nullopt : std::optional(measure_all(capture));
   };
-  // A Single's capture, the only one its block completes, is kept measured until the Single ends,
-  // and published in the same hold of the mutex: no command falls between the two, so a command
+  const auto hand_off_published = [&](std::optional<CompletedCapture> published) {
+    if (published) {
+      hand_off(std::move(*published));
+    }
+  };
+  const CaptureSink publish_running = [&](const std::shared_ptr<const Capture>& capture) {
+    const std::optional<CaptureResults> results = measured_here(*capture);
+    std::optional<CompletedCapture> published;
+    {
+      const std::scoped_lock lock(mutex_);
+      published = publish(block, capture, results);
+    }
+    hand_off_published(std::move(published));
+  };
+  // A Single's capture, the only one its block completes, is kept until the Single ends and
+  // published in the same hold of the mutex: no command falls between the two, so a command
   // that has seen the capture finds the instrument Stopped.
   std::shared_ptr<const Capture> single_capture;
-  CaptureResults single_results;
-  const CaptureSink keep_measured = [&](const std::shared_ptr<const Capture>& capture) {
-    single_results = measure_all(*capture);
+  std::optional<CaptureResults> single_results;
+  const CaptureSink keep_single = [&](const std::shared_ptr<const Capture>& capture) {
+    single_results = measured_here(*capture);
     single_capture = capture;
   };
-  const std::optional<std::size_t> single_end = assemble(
-      block, capture_limit(block) == CaptureLimit::kFirst ? keep_measured : publish_measured);
+  const std::optional<std::size_t> single_end =
+      assemble(block, capture_limit(block) == CaptureLimit::kFirst ? keep_single : publish_running);
   if (!single_end) {
     return;
   }
   bool rest_runs = false;
   std::vector<RunningLine> woken;
+  std::optional<CompletedCapture> published;
   {
     const std::scoped_lock lock(mutex_);
-    publish(block, single_capture, single_results);
+    published = publish(block, single_capture, single_results);
     rest_runs = conclude(block);
     woken = take_woken();
   }
+  // Before the Running captures after it: captures are counted in the order they completed.
+  hand_off_published(std::move(published));
   // Handed to the Resumers, which in live mode run them elsewhere: held bulk queries must not
   // stop this thread draining the ring buffer, nor run back to back in one hold (#67).
   hand_on(std::move(woken));
@@ -918,8 +963,28 @@ void Instrument::process(const AcquiredBlock& block) {
   }
   if (rest_runs && *single_end < block.samples.count) {
     captures_.push(samples_from(block.samples, *single_end), block.acquisition, block.channels,
-                   block.trigger, CaptureLimit::kEvery, publish_measured);
+                   block.trigger, CaptureLimit::kEvery, publish_running);
   }
+}
+
+void Instrument::count_measured(const CompletedCapture& completed) {
+  const CaptureResults results = measure_all(*completed.capture);
+  std::vector<RunningLine> counted;
+  {
+    const std::scoped_lock lock(mutex_);
+    // A reset since the capture completed leaves it out: the statistics start after the reset.
+    if (completed.statistics_epoch == statistics_epoch_) {
+      statistics_.add(results);
+    }
+    ++counted_;
+    // Order kept: the lines whose captures are all counted now, in the order they began to wait.
+    const auto still_waits = std::ranges::stable_partition(
+        awaiting_count_, [&](const RunningLine& line) { return !waits_for_count(*line.state); });
+    counted.assign(std::make_move_iterator(awaiting_count_.begin()),
+                   std::make_move_iterator(still_waits.begin()));
+    awaiting_count_.erase(awaiting_count_.begin(), still_waits.begin());
+  }
+  hand_on(std::move(counted));
 }
 
 double Instrument::sample_rate() const {
@@ -976,15 +1041,21 @@ CaptureLimit Instrument::capture_limit(const AcquiredBlock& block) const {
   return block.generation == run_generation_ ? CaptureLimit::kEvery : block.limit;
 }
 
-void Instrument::publish(const AcquiredBlock& block, const std::shared_ptr<const Capture>& capture,
-                         const CaptureResults& results) {
+std::optional<Instrument::CompletedCapture> Instrument::publish(
+    const AcquiredBlock& block, const std::shared_ptr<const Capture>& capture,
+    const std::optional<CaptureResults>& results) {
   // A command since the block was acquired has discarded what it belongs to: its capture would
-  // show settings older than that command. Counting and publishing in one hold of the mutex keeps
-  // the statistics' current result the latest capture's.
-  if (block.generation == generation_) {
-    statistics_.add(results);
-    latest_.store(capture);
+  // show settings older than that command.
+  if (block.generation != generation_) {
+    return std::nullopt;
   }
+  latest_.store(capture);
+  if (results) {
+    statistics_.add(*results);
+    return std::nullopt;
+  }
+  ++handed_off_;
+  return CompletedCapture{.capture = capture, .statistics_epoch = statistics_epoch_};
 }
 
 bool Instrument::conclude(const AcquiredBlock& block) {

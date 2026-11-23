@@ -17,6 +17,7 @@ namespace openscope {
 
 LivePipeline::LivePipeline(Instrument& instrument)
     : instrument_(&instrument),
+      measuring_([this](const std::stop_token& stop) { measure_captures(stop); }),
       processing_([this](const std::stop_token& stop) { process_blocks(stop); }),
       acquisition_([this](const std::stop_token& stop) { acquire_blocks(stop); }) {}
 
@@ -43,12 +44,28 @@ void LivePipeline::acquire_blocks(const std::stop_token& stop) {
 }
 
 void LivePipeline::process_blocks(const std::stop_token& stop) {
+  // Waiting for the measuring thread to make room stalls this thread, so the ring buffer fills
+  // and drops blocks, counted, rather than a capture going uncounted. When the pipeline stops
+  // first, the capture is counted here instead, so no MEAS:STAT? waits for it for ever.
+  const Instrument::CaptureHandOff to_measuring =
+      [&](const Instrument::CompletedCapture& completed) {
+        if (!captures_.push(completed, stop)) {
+          instrument_->count_measured(completed);
+        }
+      };
   while (!stop.stop_requested()) {
     if (const std::optional<AcquiredBlock> block = blocks_.try_pop()) {
-      instrument_->process(*block);
+      instrument_->process(*block, to_measuring);
     } else {
       std::this_thread::sleep_for(kTick);
     }
+  }
+}
+
+void LivePipeline::measure_captures(const std::stop_token& stop) {
+  while (const std::optional<Instrument::CompletedCapture> next = captures_.front(stop)) {
+    instrument_->count_measured(*next);
+    captures_.pop();
   }
 }
 

@@ -57,7 +57,7 @@ A sample block lost because processing fell behind. Any capture that would span 
 _Avoid_: Lost samples, overrun (alone)
 
 **Live mode**:
-The instrument running in real time: an acquisition thread takes sample blocks as the pacer releases them and a processing thread assembles them into captures. In test mode, by contrast, a test steps the sample clock by hand.
+The instrument running in real time: an acquisition thread takes sample blocks as the pacer releases them, a processing thread assembles them into captures and publishes each as it completes, and a measuring thread measures each capture and counts it in the measurement statistics. In test mode, by contrast, a test steps the sample clock by hand.
 _Avoid_: Real-time mode, free-run
 
 **Pacer**:
