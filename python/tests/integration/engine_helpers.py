@@ -40,6 +40,7 @@ def live_counters(event: dict[str, Any]) -> dict[str, int]:
     """The LIVE_COUNTERS fields of a `live` or `stopping` log event."""
     return {name: event[name] for name in LIVE_COUNTERS}
 
+
 #: The `*RST` record length, and the longest (`ACQ:POIN`).
 RECORD_LENGTH = 10000
 LONGEST_RECORD = 1048576
