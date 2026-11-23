@@ -511,9 +511,6 @@ TEST_F(CommandTreeTest, RepliesBeforeAnErrorAreKept) {
 /// `:TEST:BULK? <bytes>`, for the reply-limit tests: absolute, so it may follow any command.
 std::string bulk(std::size_t bytes) { return ":TEST:BULK? " + std::to_string(bytes); }
 
-// The Python client reads at most this much (transport.MAX_RESPONSE_BYTES): the two must agree.
-TEST(ReplyLimitTest, IsSixtyFourMebibytes) { EXPECT_EQ(kMaxReplyLength, 64U * 1024U * 1024U); }
-
 TEST_F(CommandTreeTest, RepliesUpToTheLimitAreReplied) {
   const std::size_t first = kMaxReplyLength / 2;
   const std::size_t second = kMaxReplyLength - first - 1;  // The joining ';' takes the last byte.

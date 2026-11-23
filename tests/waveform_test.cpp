@@ -17,6 +17,7 @@
 #include "openscope/capture.hpp"
 #include "openscope/instrument.hpp"
 #include "openscope/scpi/command_tree.hpp"
+#include "openscope/scpi/response.hpp"
 #include "reply_numbers.hpp"
 #include "scpi_session.hpp"
 
@@ -224,10 +225,11 @@ TEST_F(WaveformTest, RealDataOfTheLongestRecordFitsOneBlock) {
   EXPECT_EQ(decode_float32_block(reply), captured(instrument, 1).samples);
 }
 
-/// The bytes of a `WAV:DATA?` reply in REAL at `points` points: `#`, the digit count, the byte
-/// count, then 4 bytes a point.
+/// The bytes of a `WAV:DATA?` reply in REAL at `points` points: the block header, then a float32
+/// a point.
 std::size_t real_block_bytes(std::size_t points) {
-  return 2 + std::to_string(4 * points).size() + (4 * points);
+  const std::size_t data = points * sizeof(float);
+  return scpi::definite_length_header(data).size() + data;
 }
 
 /// A line that sets REAL and then asks `WAV:DATA?` `queries` times.
@@ -259,7 +261,7 @@ TEST(ReplyLimitTest, LineOfDataQueriesUpToTheLimitIsReplied) {
             std::pair(scpi::kMaxReplyLength, std::string(kNoErrorReply)));
 }
 
-// 33 blocks of 2 033 602 bytes and their 32 joining ';' are one byte over kMaxReplyLength: the 32
+// 33 blocks of 2 033 601 bytes and their 32 joining ';' are one byte over kMaxReplyLength: the 32
 // blocks before the last are replied.
 TEST(ReplyLimitTest, LineOfDataQueriesOneByteOverTheLimitIsTooMuchData) {
   constexpr std::size_t kPoints = 508'398;

@@ -370,8 +370,8 @@ void Instrument::add_waveform_commands() {
                  .parameters = {},
                  .handler = [this](Session& caller, const Arguments&) {
                    return reply_with_source(
-                       caller.waveform().source,
-                       [&caller](const Capture&, const CapturedChannel& channel) {
+                       caller.waveform().source, [&caller](const std::shared_ptr<const Capture>&,
+                                                           const CapturedChannel& channel) {
                          return caller.waveform().format == WaveformFormat::kReal
                                     ? scpi::float32_block(channel.samples)
                                     : ascii_values(channel.samples);
@@ -382,11 +382,12 @@ void Instrument::add_waveform_commands() {
        .parameters = {},
        .handler = [this](Session& caller, const Arguments&) {
          return reply_with_source(
-             caller.waveform().source, [](const Capture& capture, const CapturedChannel& channel) {
-               return std::format("{},{},{},{},{},{}", scpi::format_real(capture.sample_rate),
-                                  capture.record_length, scpi::format_real(channel.settings.scale),
+             caller.waveform().source,
+             [](const std::shared_ptr<const Capture>& capture, const CapturedChannel& channel) {
+               return std::format("{},{},{},{},{},{}", scpi::format_real(capture->sample_rate),
+                                  capture->record_length, scpi::format_real(channel.settings.scale),
                                   scpi::format_real(channel.settings.offset),
-                                  capture.trigger_position, capture.untriggered ? 1 : 0);
+                                  capture->trigger_position, capture->untriggered ? 1 : 0);
              });
        }});
 }
@@ -404,47 +405,46 @@ void Instrument::add_fft_commands() {
       [](Session& caller, const Arguments&) {
         return static_cast<std::size_t>(caller.fft().window);
       });
-  commands_.add({.header = "FFT:DATA?",
-                 .parameters = {},
-                 .handler = [this](Session& caller, const Arguments&) {
-                   const std::size_t source = caller.fft().source;
-                   return reply_with_source(source, [&](const Capture&, const CapturedChannel&) {
-                     // The capture reply_with_source checked, as for measurements: none is
-                     // published while this handler holds the mutex.
-                     return scpi::float32_block(
-                         *spectra_.spectrum(latest_capture(), source, caller.fft().window));
-                   });
-                 }});
   commands_.add(
-      {.header = "FFT:SPACing?",
+      {.header = "FFT:DATA?",
        .parameters = {},
        .handler = [this](Session& caller, const Arguments&) {
-         return reply_with_source(caller.fft().source, [](const Capture& capture,
-                                                          const CapturedChannel& channel) {
-           // N from the samples FFT:DATA? transforms, so the two replies always agree.
-           return scpi::format_real(capture.sample_rate /
-                                    static_cast<double>(spectrum_length(channel.samples.size())));
-         });
+         const std::size_t source = caller.fft().source;
+         return reply_with_source(
+             source, [&](const std::shared_ptr<const Capture>& capture, const CapturedChannel&) {
+               return scpi::float32_block(*spectra_.spectrum(capture, source, caller.fft().window));
+             });
        }});
+  commands_.add({.header = "FFT:SPACing?",
+                 .parameters = {},
+                 .handler = [this](Session& caller, const Arguments&) {
+                   return reply_with_source(
+                       caller.fft().source, [](const std::shared_ptr<const Capture>& capture,
+                                               const CapturedChannel& channel) {
+                         // N from the samples FFT:DATA? transforms, so the two replies always
+                         // agree.
+                         return scpi::format_real(
+                             capture->sample_rate /
+                             static_cast<double>(spectrum_length(channel.samples.size())));
+                       });
+                 }});
 }
 
 void Instrument::add_measurement_commands() {
   const std::span<const Measurement> all = measurements();
   for (std::size_t measurement = 0; measurement < all.size(); ++measurement) {
-    commands_.add({.header = std::format("MEASure:{}?", all[measurement].mnemonic),
-                   .parameters = {channel_parameter()},
-                   .handler = [this, measurement](Session& caller, const Arguments& arguments) {
-                     const std::size_t channel = value_of<scpi::Choice>(arguments).suffix;
-                     return reply_with_source(channel, [&](const Capture&, const CapturedChannel&) {
-                       // The engine keys its cache on the shared capture, which is the one
-                       // reply_with_source just checked: a capture is published only under the
-                       // mutex this handler runs under, so none can land in between.
-                       const MeasurementResult result =
-                           measurements_.measure(latest_capture(), channel, measurement);
-                       report_status(caller, result.status);
-                       return value_reply(result.value);
-                     });
-                   }});
+    commands_.add(
+        {.header = std::format("MEASure:{}?", all[measurement].mnemonic),
+         .parameters = {channel_parameter()},
+         .handler = [this, measurement](Session& caller, const Arguments& arguments) {
+           const std::size_t channel = value_of<scpi::Choice>(arguments).suffix;
+           return reply_with_source(channel, [&](const std::shared_ptr<const Capture>& capture,
+                                                 const CapturedChannel&) {
+             const MeasurementResult result = measurements_.measure(capture, channel, measurement);
+             report_status(caller, result.status);
+             return value_reply(result.value);
+           });
+         }});
   }
   add_statistics_commands();
 }
@@ -466,23 +466,24 @@ void Instrument::add_statistics_commands() {
          // Every capture is counted as it is published, under this handler's mutex, so the latest
          // capture is the most recent one they hold and has the channels of every capture they
          // hold (a channel change resets them).
-         return reply_with_source(channel, [&](const Capture&, const CapturedChannel&) {
-           const MeasurementSeries& series = statistics_.at(channel, measurement);
-           report_status(caller, series.current.status);
-           // A Clipped value counted earlier makes the statistics questionable too.
-           if (series.clipped && series.current.status != MeasurementStatus::kClipped) {
-             caller.push_error(kClipped);
-           }
-           const RunningStatistics& values = series.values;
-           // With nothing counted, the statistics have no value.
-           const auto statistic = [counted = values.count() > 0](double value) {
-             return value_reply(counted ? std::optional(value) : std::nullopt);
-           };
-           return std::format("{},{},{},{},{},{}", value_reply(series.current.value),
-                              statistic(values.mean()), statistic(values.minimum()),
-                              statistic(values.maximum()), statistic(values.standard_deviation()),
-                              values.count());
-         });
+         return reply_with_source(
+             channel, [&](const std::shared_ptr<const Capture>&, const CapturedChannel&) {
+               const MeasurementSeries& series = statistics_.at(channel, measurement);
+               report_status(caller, series.current.status);
+               // A Clipped value counted earlier makes the statistics questionable too.
+               if (series.clipped && series.current.status != MeasurementStatus::kClipped) {
+                 caller.push_error(kClipped);
+               }
+               const RunningStatistics& values = series.values;
+               // With nothing counted, the statistics have no value.
+               const auto statistic = [counted = values.count() > 0](double value) {
+                 return value_reply(counted ? std::optional(value) : std::nullopt);
+               };
+               return std::format("{},{},{},{},{},{}", value_reply(series.current.value),
+                                  statistic(values.mean()), statistic(values.minimum()),
+                                  statistic(values.maximum()),
+                                  statistic(values.standard_deviation()), values.count());
+             });
        }});
   commands_.add({.header = "MEASure:STATistics:RESet",
                  .parameters = {},
@@ -494,7 +495,8 @@ void Instrument::add_statistics_commands() {
 
 scpi::HandlerResult Instrument::reply_with_source(
     std::size_t source,
-    const std::function<std::string(const Capture&, const CapturedChannel&)>& reply) const {
+    const std::function<std::string(const std::shared_ptr<const Capture>&, const CapturedChannel&)>&
+        reply) const {
   const std::shared_ptr<const Capture> capture = latest_capture();
   if (capture == nullptr) {
     return kDataCorruptOrStale;
@@ -503,7 +505,7 @@ scpi::HandlerResult Instrument::reply_with_source(
   if (!channel) {
     return kSettingsConflict;
   }
-  return std::optional<std::string>(reply(*capture, *channel));
+  return std::optional<std::string>(reply(capture, *channel));
 }
 
 void Instrument::add_setting(std::string_view header, scpi::ParameterSpec parameter,

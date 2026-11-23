@@ -111,11 +111,8 @@ class MeasurementEngine {
     std::vector<std::optional<MeasurementResult>> results;
   };
 
-  /// The capture the cached results belong to. A weak pointer, so the cache never keeps a capture
-  /// alive; once that capture is gone it locks to null and matches no capture, even one that
-  /// reuses its address.
-  std::weak_ptr<const Capture> capture_;
-  std::array<std::optional<ChannelResults>, kChannelCount> channels_;
+  /// Each channel's results for the capture last asked about, by channel number - 1.
+  CaptureCache<std::array<std::optional<ChannelResults>, kChannelCount>> channels_;
 };
 
 }  // namespace openscope

@@ -54,6 +54,31 @@ struct Capture {
   std::array<std::optional<CapturedChannel>, kChannelCount> channels;
 };
 
+/// Channel `channel` (1 to 4) of `capture`. Throws std::out_of_range when it is not in the capture.
+const CapturedChannel& captured_channel(const Capture& capture, std::size_t channel);
+
+/// Values computed from one capture, kept for as long as it is the capture asked about: what
+/// MeasurementEngine and SpectrumCache cache. It holds the capture by a weak pointer, so it never
+/// keeps a capture alive; once that capture is gone it matches no capture, even one that reuses
+/// its address.
+template <typename Values>
+class CaptureCache {
+ public:
+  /// The values kept for `capture`. Asking about another capture drops them and starts afresh
+  /// from `Values{}`.
+  Values& of(const std::shared_ptr<const Capture>& capture) {
+    if (capture_.lock() != capture) {
+      capture_ = capture;
+      values_ = Values{};
+    }
+    return values_;
+  }
+
+ private:
+  std::weak_ptr<const Capture> capture_;
+  Values values_{};
+};
+
 /// How many of the captures a sample block could complete `CaptureAssembler::push` completes.
 enum class CaptureLimit : std::uint8_t {
   /// Every one (the Running run state).

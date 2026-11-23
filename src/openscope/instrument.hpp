@@ -198,10 +198,11 @@ class Instrument {
 
   /// Replies what `reply` writes from the latest capture and channel `source` (1 to 4) in it.
   /// Before the first capture completes it reports -230; when the source channel is not in the
-  /// latest capture, -221 (a query never reads a channel that was not captured).
+  /// latest capture, -221 (a query never reads a channel that was not captured). `reply` gets the
+  /// shared capture itself, which the measurement and spectrum caches key on.
   scpi::HandlerResult reply_with_source(
-      std::size_t source,
-      const std::function<std::string(const Capture&, const CapturedChannel&)>& reply) const;
+      std::size_t source, const std::function<std::string(const std::shared_ptr<const Capture>&,
+                                                          const CapturedChannel&)>& reply) const;
 
   /// Registers `<header> <parameter>`, which runs `set`, and `<header>?`, which replies what `get`
   /// returns. Both receive the calling Session, for the settings a Session owns (ADR 0002).

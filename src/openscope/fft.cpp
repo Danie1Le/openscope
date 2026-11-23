@@ -8,7 +8,6 @@
 #include <cstddef>
 #include <memory>
 #include <numbers>
-#include <optional>
 #include <span>
 #include <stdexcept>
 #include <utility>
@@ -137,18 +136,11 @@ std::vector<float> magnitude_spectrum_db(std::span<const float> samples, FftWind
 
 std::shared_ptr<const std::vector<float>> SpectrumCache::spectrum(
     const std::shared_ptr<const Capture>& capture, std::size_t channel, FftWindow window) {
-  const std::optional<CapturedChannel>& captured = capture->channels.at(channel - 1);
-  if (!captured) {
-    throw std::out_of_range("channel is not in the capture");
-  }
-  if (capture_.lock() != capture) {
-    capture_ = capture;
-    spectra_.clear();
-  }
-  std::shared_ptr<const std::vector<float>>& cached = spectra_[{channel, window}];
+  const CapturedChannel& captured = captured_channel(*capture, channel);
+  std::shared_ptr<const std::vector<float>>& cached = spectra_.of(capture)[{channel, window}];
   if (!cached) {
-    cached = std::make_shared<const std::vector<float>>(
-        magnitude_spectrum_db(captured->samples, window));
+    cached =
+        std::make_shared<const std::vector<float>>(magnitude_spectrum_db(captured.samples, window));
   }
   return cached;
 }

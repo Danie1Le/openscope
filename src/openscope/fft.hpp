@@ -66,10 +66,10 @@ class SpectrumCache {
                                                      std::size_t channel, FftWindow window);
 
  private:
-  /// The capture the cached spectra belong to; a weak pointer, as in MeasurementEngine, so the
-  /// cache never keeps a capture alive or mistakes a new capture at the same address for it.
-  std::weak_ptr<const Capture> capture_;
-  std::map<std::pair<std::size_t, FftWindow>, std::shared_ptr<const std::vector<float>>> spectra_;
+  /// The spectra of the capture last asked about, by channel number and window.
+  CaptureCache<
+      std::map<std::pair<std::size_t, FftWindow>, std::shared_ptr<const std::vector<float>>>>
+      spectra_;
 };
 
 }  // namespace openscope
