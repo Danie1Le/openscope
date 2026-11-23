@@ -27,7 +27,9 @@ TEST(EventuallyTest, GivesUpAfterItsPatience) {
   const auto started = std::chrono::steady_clock::now();
 
   EXPECT_FALSE(eventually([] { return false; }, std::chrono::milliseconds(20)));
-  EXPECT_GE(std::chrono::steady_clock::now() - started, std::chrono::milliseconds(20));
+  const auto waited = std::chrono::steady_clock::now() - started;
+  EXPECT_GE(waited, std::chrono::milliseconds(20));
+  EXPECT_LT(waited, kPatience / 2);  // Its own patience, not the default.
 }
 
 TEST(PaddedTest, PadsWithSpacesToTheLength) {
