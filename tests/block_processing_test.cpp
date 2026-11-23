@@ -3,6 +3,7 @@
 // after it, and a capture that would span a dropped block (one acquired and never processed) is
 // discarded and counted (#8).
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <cstddef>
@@ -209,6 +210,27 @@ TEST_F(BlockProcessingTest, SingleCaptureHandsEachHeldLineToItsResumerAsItsOwnWo
   EXPECT_EQ(second_reply->text, "1;CHAN2");
   handed.at(0)();
   EXPECT_EQ(first_reply->text, "1;CHAN1");
+}
+
+// A held line carries on as the operation left the instrument (#68 review): a setting another
+// Session sends before the held line's work runs waits for it, so the statistics the held line
+// reads are still those of the Single's capture alone. Queries of a capture do not wait.
+TEST_F(BlockProcessingTest, CommandsOfOtherSessionsWaitUntilTheHeldLinesHaveCarriedOn) {
+  std::vector<std::function<void()>> handed;
+  ScpiSession waiting(instrument, keeping_in(handed));
+  const auto reply = waiting.start("MEAS:STAT:RES;:SING;*OPC?;:MEAS:STAT? VAV,CHAN1");
+  instrument.process(acquired(instrument, kResetRecordLength));
+  ScpiSession other(instrument);
+
+  const auto setting = other.start("SOUR1:OFFS 0.5;:SOUR1:OFFS?");
+  EXPECT_FALSE(setting->ended);
+  EXPECT_TRUE(ScpiSession(instrument).start("WAV:PRE?")->ended);  // Reads only the capture.
+
+  ASSERT_EQ(handed.size(), 1U);
+  handed.front()();
+  EXPECT_THAT(reply->text, testing::Optional(testing::EndsWith(",1")));  // A count of one.
+  EXPECT_EQ(setting->text, "0.5");  // Carried on once the held line had.
+  EXPECT_EQ(waiting.next_error(), test::kNoErrorReply);
 }
 
 // A client that disconnects after its line was handed on, before the work ran, has gone: the

@@ -62,6 +62,9 @@ struct Arguments {
 /// whatever it waited for is over even if it has begun again since.
 struct Hold {
   std::optional<std::string> reply;
+  /// The command has not run but waits to (a command of another Session while held lines carry
+  /// on, #68 review): when the line carries on, it runs again instead of replying `reply`.
+  bool again = false;
 };
 
 /// What a handler returns: its reply (nullopt for a command without one), the execution error
@@ -144,6 +147,9 @@ class Execution {
 
   /// True while a handler holds the line (it returned Hold); false once the line has ended.
   [[nodiscard]] bool held() const { return hold_.has_value(); }
+
+  /// True while the line is held by a command that runs again when it carries on (Hold::again).
+  [[nodiscard]] bool held_to_run_again() const { return hold_ && hold_->again; }
 
   /// The replies of the queries that have run, joined with `;`, or nullopt when none replied.
   [[nodiscard]] const std::optional<std::string>& reply() const { return reply_; }

@@ -439,17 +439,18 @@ Execution CommandTree::execute(Session& session, std::string_view line) const {
 void CommandTree::resume(Session& session, Execution& execution) const {
   std::vector<ParsedCommand>& commands = execution.commands_;
   bool fits = true;
-  if (execution.hold_) {
+  if (execution.hold_ && !execution.hold_->again) {
     fits = join_reply(session, std::nullopt, execution.reply_, std::move(execution.hold_->reply));
-    execution.hold_.reset();
     ++execution.next_;
   }
+  execution.hold_.reset();
   for (; fits && execution.next_ < commands.size(); ++execution.next_) {
     ParsedCommand& command = commands[execution.next_];
     // SCPI-99 compound headers: a header without a leading ':' continues from the path of the
     // previous command (all but its last node). Common commands leave the path alone.
     if (!command.common && !command.absolute) {
       command.path.insert(command.path.begin(), execution.path_.begin(), execution.path_.end());
+      command.absolute = true;  // Its whole path now, should it run again (Hold::again).
     }
     Arguments arguments;
     const auto entry = std::ranges::find_if(entries_, [&](const Entry& candidate) {
