@@ -94,28 +94,27 @@ MeasurementResult evaluate(const Measurement& measurement, const ChannelSettings
 
 /// The measurement engine: measures channels of a capture on demand and caches each result for as
 /// long as that capture is the one asked about, so repeated queries of the latest capture cost
-/// nothing after the first.
+/// nothing after the first. Any thread may use it: Sessions measure at the same time, and two
+/// asking for the same result share one computation.
 class MeasurementEngine {
  public:
   /// Measurement `measurement` (a position in measurements()) of channel `channel` (1 to 4) of
-  /// `capture`. Asking about a different capture drops every cached result. Throws
+  /// `capture`. Asking about a different capture starts the cache afresh. Throws
   /// std::out_of_range when `measurement` is not in measurements() or `channel` is not in
   /// `capture`.
   MeasurementResult measure(const std::shared_ptr<const Capture>& capture, std::size_t channel,
                             std::size_t measurement);
 
  private:
-  /// One channel's levels and the results asked for so far, by measurement position.
+  /// One channel's levels and its results, by measurement position.
   struct ChannelResults {
-    SignalLevels levels;
-    std::vector<std::optional<MeasurementResult>> results;
+    ComputedOnce<SignalLevels> levels;
+    std::vector<ComputedOnce<MeasurementResult>> results =
+        std::vector<ComputedOnce<MeasurementResult>>(measurements().size());
   };
 
-  /// The capture the cached results belong to. A weak pointer, so the cache never keeps a capture
-  /// alive; once that capture is gone it locks to null and matches no capture, even one that
-  /// reuses its address.
-  std::weak_ptr<const Capture> capture_;
-  std::array<std::optional<ChannelResults>, kChannelCount> channels_;
+  /// Each channel's results for the capture last asked about, by channel number - 1.
+  CaptureCache<std::array<ChannelResults, kChannelCount>> channels_;
 };
 
 }  // namespace openscope

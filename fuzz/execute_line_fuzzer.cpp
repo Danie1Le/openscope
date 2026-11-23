@@ -21,7 +21,8 @@
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size) {
   constexpr std::size_t kSamplesPerLine = 64;
   openscope::Instrument instrument;
-  const std::array sessions{instrument.open_session(), instrument.open_session()};
+  const std::array sessions{instrument.open_session(openscope::run_at_once),
+                            instrument.open_session(openscope::run_at_once)};
   std::array<bool, sessions.size()> held{};
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): libFuzzer passes bytes as uint8_t.
   std::string_view input(reinterpret_cast<const char*>(data), size);

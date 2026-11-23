@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <ostream>
@@ -286,17 +287,43 @@ TEST_F(RunControlTest, OpcRepliesWhenAnotherSessionSendsRunOrReset) {
   }
 }
 
-// The reply comes from the call that ended the operation, after that Session's own reply.
-TEST_F(RunControlTest, StopFromAnotherSessionRepliesToItBeforeTheWaitingSession) {
+// The `STOP` itself hands the waiting line on (#68 review), so with a Resumer that runs it at once
+// the waiting Session replies before the rest of the stopper's line has run.
+TEST_F(RunControlTest, StopFromAnotherSessionCarriesTheWaitingSessionOnAtTheStop) {
   session.send("TRIG:MODE NORM");
   std::vector<std::string> order;
-  const SessionId waiting = instrument.open_session();
-  const SessionId stopper = instrument.open_session();
+  const SessionId waiting = instrument.open_session(run_at_once);
+  const SessionId stopper = instrument.open_session(run_at_once);
   instrument.execute(waiting, "SINGle;*OPC?", [&](const auto&) { order.emplace_back("waiting"); });
 
-  instrument.execute(stopper, "STOP", [&](const auto&) { order.emplace_back("stopper"); });
+  instrument.execute(stopper, "STOP;*IDN?", [&](const auto&) { order.emplace_back("stopper"); });
 
-  EXPECT_THAT(order, ElementsAre("stopper", "waiting"));
+  EXPECT_THAT(order, ElementsAre("waiting", "stopper"));
+}
+
+// The reviewer's three Sessions (#68 review): a `STOP` ends A's wait at once, before the rest of
+// B's line, so C's `SINGle` meanwhile waits for A instead of arming a Single A would wait on
+// again (and never see if it never triggers). B's own later command waits for A too.
+TEST_F(RunControlTest, StopEndsTheWaitBeforeTheRestOfItsLineAndAnotherSessionsSingle) {
+  session.send("TRIG:MODE NORM;LEV 50");  // The DC signal never triggers: no Single completes.
+  std::vector<std::function<void()>> handed;
+  ScpiSession a(instrument, test::keeping_in(handed));
+  ScpiSession b(instrument);
+  ScpiSession c(instrument);
+  const auto waiting = start_held(a, "SINGle;*OPC?");
+
+  const auto stopping = b.start("STOP;:SOUR1:OFFS 0.5;OFFS?");
+  ASSERT_EQ(handed.size(), 1U);
+  EXPECT_FALSE(stopping->ended);  // A was handed on at the STOP, not when B's line ended.
+  const auto single = c.start("SINGle");
+  EXPECT_FALSE(single->ended);  // Waits for A to carry on.
+
+  handed.front()();
+
+  EXPECT_EQ(waiting->text, "1");
+  EXPECT_EQ(stopping->text, "0.5");  // Carried on once A had.
+  EXPECT_TRUE(single->ended);
+  EXPECT_EQ(b.next_error(), kNoErrorReply);
 }
 
 TEST_F(RunControlTest, OpcInAnotherSessionWaitsForTheSameSingle) {

@@ -29,7 +29,7 @@ class LivePipeline {
   static constexpr std::chrono::milliseconds kTick{1};
 
   /// Starts running `instrument` live. It must outlive the pipeline, and nothing may `advance` it
-  /// meanwhile. Reply handlers of held lines run on the processing thread.
+  /// meanwhile. The processing thread hands lines held on a Single to their Sessions' Resumers.
   explicit LivePipeline(Instrument& instrument);
 
   /// Blocks dropped because the ring buffer was full. Any thread may read it.

@@ -67,7 +67,7 @@ static_assert(kFormatKeywords.size() == static_cast<std::size_t>(WaveformFormat:
 
 /// The `FFT:WINDow` keywords, in FftWindow order.
 constexpr std::array<std::string_view, 3> kWindowKeywords{"RECTangular", "HANNing", "BHARris"};
-static_assert(kWindowKeywords.size() == static_cast<std::size_t>(FftWindow::kBlackmanHarris) + 1);
+static_assert(kWindowKeywords.size() == kFftWindowCount);
 
 /// The `TRIGger:SLOPe` keywords, in TriggerSlope order.
 constexpr std::array<std::string_view, 2> kSlopeKeywords{"POSitive", "NEGative"};
@@ -109,11 +109,6 @@ std::array<Generator, kChannelCount> make_generators(std::uint64_t seed, double 
 /// The channel, and so the Generator, that a `CHANnel<n>` or `SOURce<n>` header names, counted
 /// from 0.
 std::size_t channel_of(const Arguments& arguments) { return arguments.suffixes.at(0) - 1; }
-
-/// Matches the held lines of `session`.
-auto of_session(SessionId session) {
-  return [session](const auto& held) { return held.session == session; };
-}
 
 /// The value of a command's parameter at `index`, the only one by default.
 template <typename Value>
@@ -173,30 +168,32 @@ Instrument::Instrument(std::uint64_t seed)
     : seed_(seed),
       channels_(default_channels()),
       generators_(make_generators(seed, acquisition_.sample_rate)) {
-  commands_.add({.header = "*IDN?",
-                 .parameters = {},
-                 .handler = [](Session&, const Arguments&) -> std::optional<std::string> {
-                   return "OpenScope,OS-4,000001," OPENSCOPE_VERSION;
-                 }});
+  add_lock_free_command({.header = "*IDN?",
+                         .parameters = {},
+                         .handler = [](Session&, const Arguments&) -> std::optional<std::string> {
+                           return "OpenScope,OS-4,000001," OPENSCOPE_VERSION;
+                         }});
   // Resets instrument-wide settings only; error queues survive *RST.
-  commands_.add({.header = "*RST",
-                 .parameters = {},
-                 .handler = [this](Session&, const Arguments&) -> std::optional<std::string> {
-                   reset();
-                   return std::nullopt;
-                 }});
-  commands_.add({.header = "*CLS",
-                 .parameters = {},
-                 .handler = [](Session& caller, const Arguments&) -> std::optional<std::string> {
-                   caller.clear_errors();
-                   return std::nullopt;
-                 }});
-  commands_.add({.header = "SYSTem:ERRor[:NEXT]?",
-                 .parameters = {},
-                 .handler = [](Session& caller, const Arguments&) -> std::optional<std::string> {
-                   const ScpiError error = caller.pop_error();
-                   return std::format(R"({},"{}")", error.code, error.message);
-                 }});
+  add_command({.header = "*RST",
+               .parameters = {},
+               .handler = [this](Session&, const Arguments&) -> std::optional<std::string> {
+                 reset();
+                 return std::nullopt;
+               }});
+  add_lock_free_command(
+      {.header = "*CLS",
+       .parameters = {},
+       .handler = [](Session& caller, const Arguments&) -> std::optional<std::string> {
+         caller.clear_errors();
+         return std::nullopt;
+       }});
+  add_lock_free_command(
+      {.header = "SYSTem:ERRor[:NEXT]?",
+       .parameters = {},
+       .handler = [](Session& caller, const Arguments&) -> std::optional<std::string> {
+         const ScpiError error = caller.pop_error();
+         return std::format(R"({},"{}")", error.code, error.message);
+       }});
   add_run_control_commands();
   add_generator_commands();
   add_channel_commands();
@@ -208,6 +205,36 @@ Instrument::Instrument(std::uint64_t seed)
   add_measurement_commands();
 }
 
+void Instrument::add_command(scpi::Command command) {
+  command.handler = [this, handler = std::move(command.handler)](
+                        Session& caller, const Arguments& arguments) -> scpi::HandlerResult {
+    std::vector<RunningLine> woken;
+    scpi::HandlerResult result;
+    {
+      const std::scoped_lock lock(mutex_);
+      // The lines an operation's end released carry on as it left the instrument: until they
+      // have, this command waits, holding its line, and runs once they have (settle).
+      if (settling_ > 0 && !released(caller)) {
+        return scpi::Hold{.reply = std::nullopt, .again = true};
+      }
+      result = handler(caller, arguments);
+      // A command that ended the operation (STOP, RUN, *RST) releases the lines held on it here,
+      // in the hold of the mutex that ended it, not when its own line ends: no other Session's
+      // command (a SINGle that arms a new Single) can come in between.
+      woken = take_woken();
+    }
+    hand_on(std::move(woken));
+    return result;
+  };
+  commands_.add(std::move(command));
+}
+
+bool Instrument::released(const Session& caller) const {
+  return std::ranges::any_of(sessions_, [&](const auto& open) {
+    return open.second->released && &open.second->session == &caller;
+  });
+}
+
 void Instrument::add_run_control_commands() {
   const auto enters = [this](RunState state) {
     return [this, state](Session&, const Arguments&) -> scpi::HandlerResult {
@@ -215,10 +242,10 @@ void Instrument::add_run_control_commands() {
       return std::nullopt;
     };
   };
-  commands_.add({.header = "RUN", .parameters = {}, .handler = enters(RunState::kRunning)});
-  commands_.add({.header = "STOP", .parameters = {}, .handler = enters(RunState::kStopped)});
-  commands_.add({.header = "SINGle", .parameters = {}, .handler = enters(RunState::kArmedSingle)});
-  // While a Single is armed, the command holds its line and replies once resume_held resumes it.
+  add_command({.header = "RUN", .parameters = {}, .handler = enters(RunState::kRunning)});
+  add_command({.header = "STOP", .parameters = {}, .handler = enters(RunState::kStopped)});
+  add_command({.header = "SINGle", .parameters = {}, .handler = enters(RunState::kArmedSingle)});
+  // While a Single is armed, the command holds its line and replies once the line is resumed.
   const auto waits = [this](std::optional<std::string> reply) {
     return [this, reply = std::move(reply)](Session&, const Arguments&) -> scpi::HandlerResult {
       if (pending()) {
@@ -227,8 +254,8 @@ void Instrument::add_run_control_commands() {
       return reply;
     };
   };
-  commands_.add({.header = "*OPC?", .parameters = {}, .handler = waits("1")});
-  commands_.add({.header = "*WAI", .parameters = {}, .handler = waits(std::nullopt)});
+  add_command({.header = "*OPC?", .parameters = {}, .handler = waits("1")});
+  add_command({.header = "*WAI", .parameters = {}, .handler = waits(std::nullopt)});
 }
 
 void Instrument::add_generator_commands() {
@@ -253,7 +280,7 @@ void Instrument::add_generator_commands() {
   // An action, not a setting: it has no query. The magnitude's unit depends on the kind of fault
   // (volts or hertz), so the parameter takes none; each kind's own limit is checked in the handler.
   const double widest = largest_fault_magnitude();
-  commands_.add(
+  add_command(
       {.header = "SOURce<1-4>:FAULt",
        .parameters = {scpi::KeywordParameter{
                           .choices = {kFaultKeywords.begin(), kFaultKeywords.end()}},
@@ -366,27 +393,29 @@ void Instrument::add_waveform_commands() {
       [](Session& caller, const Arguments&) {
         return static_cast<std::size_t>(caller.waveform().format);
       });
-  commands_.add({.header = "WAVeform:DATA?",
-                 .parameters = {},
-                 .handler = [this](Session& caller, const Arguments&) {
-                   return reply_with_source(
-                       caller.waveform().source,
-                       [&caller](const Capture&, const CapturedChannel& channel) {
-                         return caller.waveform().format == WaveformFormat::kReal
-                                    ? scpi::float32_block(channel.samples)
-                                    : ascii_values(channel.samples);
-                       });
-                 }});
-  commands_.add(
+  add_lock_free_command(
+      {.header = "WAVeform:DATA?",
+       .parameters = {},
+       .handler = [this](Session& caller, const Arguments&) {
+         return reply_with_source(
+             caller.waveform().source,
+             [&caller](const std::shared_ptr<const Capture>&, const CapturedChannel& channel) {
+               return caller.waveform().format == WaveformFormat::kReal
+                          ? scpi::float32_block(channel.samples)
+                          : ascii_values(channel.samples);
+             });
+       }});
+  add_lock_free_command(
       {.header = "WAVeform:PREamble?",
        .parameters = {},
        .handler = [this](Session& caller, const Arguments&) {
          return reply_with_source(
-             caller.waveform().source, [](const Capture& capture, const CapturedChannel& channel) {
-               return std::format("{},{},{},{},{},{}", scpi::format_real(capture.sample_rate),
-                                  capture.record_length, scpi::format_real(channel.settings.scale),
+             caller.waveform().source,
+             [](const std::shared_ptr<const Capture>& capture, const CapturedChannel& channel) {
+               return std::format("{},{},{},{},{},{}", scpi::format_real(capture->sample_rate),
+                                  capture->record_length, scpi::format_real(channel.settings.scale),
                                   scpi::format_real(channel.settings.offset),
-                                  capture.trigger_position, capture.untriggered ? 1 : 0);
+                                  capture->trigger_position, capture->untriggered ? 1 : 0);
              });
        }});
 }
@@ -404,45 +433,46 @@ void Instrument::add_fft_commands() {
       [](Session& caller, const Arguments&) {
         return static_cast<std::size_t>(caller.fft().window);
       });
-  commands_.add(
+  add_lock_free_command(
       {.header = "FFT:DATA?",
        .parameters = {},
        .handler = [this](Session& caller, const Arguments&) {
-         return reply_with_source(caller.fft().source, [&caller](const Capture&,
-                                                                 const CapturedChannel& channel) {
-           return scpi::float32_block(magnitude_spectrum_db(channel.samples, caller.fft().window));
-         });
+         const std::size_t source = caller.fft().source;
+         return reply_with_source(
+             source, [&](const std::shared_ptr<const Capture>& capture, const CapturedChannel&) {
+               return scpi::float32_block(*spectra_.spectrum(capture, source, caller.fft().window));
+             });
        }});
-  commands_.add(
+  add_lock_free_command(
       {.header = "FFT:SPACing?",
        .parameters = {},
        .handler = [this](Session& caller, const Arguments&) {
-         return reply_with_source(caller.fft().source, [](const Capture& capture,
-                                                          const CapturedChannel& channel) {
-           // N from the samples FFT:DATA? transforms, so the two replies always agree.
-           return scpi::format_real(capture.sample_rate /
-                                    static_cast<double>(spectrum_length(channel.samples.size())));
-         });
+         return reply_with_source(
+             caller.fft().source,
+             [](const std::shared_ptr<const Capture>& capture, const CapturedChannel& channel) {
+               // N from the samples FFT:DATA? transforms, so the two replies always
+               // agree.
+               return scpi::format_real(capture->sample_rate / static_cast<double>(spectrum_length(
+                                                                   channel.samples.size())));
+             });
        }});
 }
 
 void Instrument::add_measurement_commands() {
   const std::span<const Measurement> all = measurements();
   for (std::size_t measurement = 0; measurement < all.size(); ++measurement) {
-    commands_.add({.header = std::format("MEASure:{}?", all[measurement].mnemonic),
-                   .parameters = {channel_parameter()},
-                   .handler = [this, measurement](Session& caller, const Arguments& arguments) {
-                     const std::size_t channel = value_of<scpi::Choice>(arguments).suffix;
-                     return reply_with_source(channel, [&](const Capture&, const CapturedChannel&) {
-                       // The engine keys its cache on the shared capture, which is the one
-                       // reply_with_source just checked: a capture is published only under the
-                       // mutex this handler runs under, so none can land in between.
-                       const MeasurementResult result =
-                           measurements_.measure(latest_capture(), channel, measurement);
-                       report_status(caller, result.status);
-                       return value_reply(result.value);
-                     });
-                   }});
+    add_lock_free_command(
+        {.header = std::format("MEASure:{}?", all[measurement].mnemonic),
+         .parameters = {channel_parameter()},
+         .handler = [this, measurement](Session& caller, const Arguments& arguments) {
+           const std::size_t channel = value_of<scpi::Choice>(arguments).suffix;
+           return reply_with_source(channel, [&](const std::shared_ptr<const Capture>& capture,
+                                                 const CapturedChannel&) {
+             const MeasurementResult result = measurements_.measure(capture, channel, measurement);
+             report_status(caller, result.status);
+             return value_reply(result.value);
+           });
+         }});
   }
   add_statistics_commands();
 }
@@ -452,7 +482,7 @@ void Instrument::add_statistics_commands() {
   for (const Measurement& measurement : measurements()) {
     mnemonics.push_back(measurement.mnemonic);
   }
-  commands_.add(
+  add_command(
       {.header = "MEASure:STATistics?",
        .parameters = {scpi::KeywordParameter{.choices = std::move(mnemonics)}, channel_parameter()},
        .handler = [this](Session& caller, const Arguments& arguments) -> scpi::HandlerResult {
@@ -464,35 +494,37 @@ void Instrument::add_statistics_commands() {
          // Every capture is counted as it is published, under this handler's mutex, so the latest
          // capture is the most recent one they hold and has the channels of every capture they
          // hold (a channel change resets them).
-         return reply_with_source(channel, [&](const Capture&, const CapturedChannel&) {
-           const MeasurementSeries& series = statistics_.at(channel, measurement);
-           report_status(caller, series.current.status);
-           // A Clipped value counted earlier makes the statistics questionable too.
-           if (series.clipped && series.current.status != MeasurementStatus::kClipped) {
-             caller.push_error(kClipped);
-           }
-           const RunningStatistics& values = series.values;
-           // With nothing counted, the statistics have no value.
-           const auto statistic = [counted = values.count() > 0](double value) {
-             return value_reply(counted ? std::optional(value) : std::nullopt);
-           };
-           return std::format("{},{},{},{},{},{}", value_reply(series.current.value),
-                              statistic(values.mean()), statistic(values.minimum()),
-                              statistic(values.maximum()), statistic(values.standard_deviation()),
-                              values.count());
-         });
+         return reply_with_source(
+             channel, [&](const std::shared_ptr<const Capture>&, const CapturedChannel&) {
+               const MeasurementSeries& series = statistics_.at(channel, measurement);
+               report_status(caller, series.current.status);
+               // A Clipped value counted earlier makes the statistics questionable too.
+               if (series.clipped && series.current.status != MeasurementStatus::kClipped) {
+                 caller.push_error(kClipped);
+               }
+               const RunningStatistics& values = series.values;
+               // With nothing counted, the statistics have no value.
+               const auto statistic = [counted = values.count() > 0](double value) {
+                 return value_reply(counted ? std::optional(value) : std::nullopt);
+               };
+               return std::format("{},{},{},{},{},{}", value_reply(series.current.value),
+                                  statistic(values.mean()), statistic(values.minimum()),
+                                  statistic(values.maximum()),
+                                  statistic(values.standard_deviation()), values.count());
+             });
        }});
-  commands_.add({.header = "MEASure:STATistics:RESet",
-                 .parameters = {},
-                 .handler = [this](Session&, const Arguments&) -> scpi::HandlerResult {
-                   statistics_.reset();
-                   return std::nullopt;
-                 }});
+  add_command({.header = "MEASure:STATistics:RESet",
+               .parameters = {},
+               .handler = [this](Session&, const Arguments&) -> scpi::HandlerResult {
+                 statistics_.reset();
+                 return std::nullopt;
+               }});
 }
 
 scpi::HandlerResult Instrument::reply_with_source(
     std::size_t source,
-    const std::function<std::string(const Capture&, const CapturedChannel&)>& reply) const {
+    const std::function<std::string(const std::shared_ptr<const Capture>&, const CapturedChannel&)>&
+        reply) const {
   const std::shared_ptr<const Capture> capture = latest_capture();
   if (capture == nullptr) {
     return kDataCorruptOrStale;
@@ -501,25 +533,26 @@ scpi::HandlerResult Instrument::reply_with_source(
   if (!channel) {
     return kSettingsConflict;
   }
-  return std::optional<std::string>(reply(*capture, *channel));
+  return std::optional<std::string>(reply(capture, *channel));
 }
 
 void Instrument::add_setting(std::string_view header, scpi::ParameterSpec parameter,
                              std::function<void(Session&, const Arguments&)> set,
                              std::function<std::string(Session&, const Arguments&)> get) {
-  commands_.add({.header = header,
-                 .parameters = {std::move(parameter)},
-                 .handler = [set = std::move(set)](Session& caller, const Arguments& arguments)
-                     -> scpi::HandlerResult {
-                   set(caller, arguments);
-                   return std::nullopt;
-                 }});
+  add_command({.header = header,
+               .parameters = {std::move(parameter)},
+               .handler = [set = std::move(set)](
+                              Session& caller, const Arguments& arguments) -> scpi::HandlerResult {
+                 set(caller, arguments);
+                 return std::nullopt;
+               }});
   const std::string query = std::string(header) + '?';
-  commands_.add(
-      {.header = query,
-       .parameters = {},
-       .handler = [get = std::move(get)](Session& caller, const Arguments& arguments)
-           -> scpi::HandlerResult { return std::optional<std::string>(get(caller, arguments)); }});
+  add_command({.header = query,
+               .parameters = {},
+               .handler = [get = std::move(get)](
+                              Session& caller, const Arguments& arguments) -> scpi::HandlerResult {
+                 return std::optional<std::string>(get(caller, arguments));
+               }});
 }
 
 void Instrument::add_keyword_setting(
@@ -669,80 +702,157 @@ void Instrument::enter(RunState state) {
   }
 }
 
-void Instrument::resume_held() {
-  // Every line held when the operation ended carries on, even after an earlier one arms another
-  // Single: what each waited for is over. A line that waits again joins the next round, which
-  // runs at once if a resumed line has already ended that Single too (STOP).
-  while (!held_.empty() && !pending()) {
-    for (HeldLine& line : std::exchange(held_, {})) {
-      commands_.resume(sessions_.at(line.session), line.execution);
-      if (line.execution.held()) {
-        held_.push_back(std::move(line));
-      } else {
-        line.on_reply(line.execution.take_reply());
-      }
+std::optional<std::vector<Instrument::RunningLine>> Instrument::keep(RunningLine& line) {
+  const std::scoped_lock lock(mutex_);
+  // Checked again here, under the lock that operations end and lines settle under, so no end is
+  // missed. The holding command has no effect of its own, so a line held here waits as if it had
+  // run now: `*OPC?` after a `STOP;SINGle` of another Session in between waits for that Single.
+  const bool runs_again = line.execution.held_to_run_again();
+  if (!(runs_again ? settling_ > 0 : pending())) {
+    return std::nullopt;
+  }
+  line.state->holding = true;
+  std::vector<RunningLine> settled = settle(*line.state);  // A released line waiting again has.
+  (runs_again ? waiting_ : held_).push_back(std::move(line));
+  return settled;
+}
+
+void Instrument::finish(RunningLine line) {
+  while (line.execution.held()) {
+    if (std::optional<std::vector<RunningLine>> settled = keep(line)) {
+      hand_on(std::move(*settled));
+      return;
     }
+    commands_.resume(line.state->session, line.execution);
+  }
+  std::vector<RunningLine> settled;
+  {
+    const std::scoped_lock lock(mutex_);
+    line.state->holding = false;
+    settled = settle(*line.state);
+  }
+  line.on_reply(line.execution.take_reply());
+  hand_on(std::move(settled));
+}
+
+void Instrument::resume(RunningLine line) {
+  std::vector<RunningLine> settled;
+  bool open = false;
+  {
+    const std::scoped_lock lock(mutex_);
+    open = line.state->open;
+    if (!open) {
+      settled = settle(*line.state);
+    }
+  }
+  if (!open) {
+    hand_on(std::move(settled));
+    return;
+  }
+  commands_.resume(line.state->session, line.execution);
+  finish(std::move(line));
+}
+
+std::vector<Instrument::RunningLine> Instrument::take_woken() {
+  // Every line held when the operation ended carries on, even after an earlier one arms another
+  // Single: what each waited for is over. One that waits again is held again (finish).
+  if (pending()) {
+    return {};
+  }
+  std::vector<RunningLine> woken = std::exchange(held_, {});
+  for (const RunningLine& line : woken) {
+    line.state->released = true;
+  }
+  settling_ += woken.size();
+  return woken;
+}
+
+std::vector<Instrument::RunningLine> Instrument::settle(SessionState& state) {
+  if (!state.released) {
+    return {};
+  }
+  state.released = false;
+  return --settling_ == 0 ? std::exchange(waiting_, {}) : std::vector<RunningLine>{};
+}
+
+void Instrument::hand_on(std::vector<RunningLine> lines) {
+  for (RunningLine& line : lines) {
+    // A Resumer takes copyable work, and a held line is move-only.
+    auto held = std::make_shared<RunningLine>(std::move(line));
+    const Resumer& resumer = held->state->resumer;
+    resumer([this, held] { resume(std::move(*held)); });
   }
 }
 
-SessionId Instrument::open_session() {
+SessionId Instrument::open_session(Resumer resumer) {
   const std::scoped_lock lock(mutex_);
   const SessionId id{next_session_id_++};
-  sessions_.try_emplace(id);
+  sessions_.emplace(id, std::make_shared<SessionState>(
+                            SessionState{.session = {}, .resumer = std::move(resumer)}));
   return id;
 }
 
 void Instrument::close_session(SessionId session) {
   const std::scoped_lock lock(mutex_);
-  if (sessions_.erase(session) == 0) {
+  const auto found = sessions_.find(session);
+  if (found == sessions_.end()) {
     throw std::out_of_range("unknown Session");
   }
-  std::erase_if(held_, of_session(session));
+  found->second->open = false;
+  const auto of_this_session = [&](const RunningLine& line) { return line.state == found->second; };
+  std::erase_if(held_, of_this_session);
+  std::erase_if(waiting_, of_this_session);
+  sessions_.erase(found);
 }
 
 void Instrument::execute(SessionId session, std::string_view line, ReplyHandler on_reply) {
-  const std::scoped_lock lock(mutex_);
-  Session& caller = sessions_.at(session);
-  if (std::ranges::any_of(held_, of_session(session))) {
-    throw std::logic_error("Session sent a line while its previous line is held");
+  std::shared_ptr<SessionState> state;
+  {
+    const std::scoped_lock lock(mutex_);
+    state = sessions_.at(session);
+    if (state->holding) {
+      throw std::logic_error("Session sent a line while its previous line is held");
+    }
   }
   if (line.size() > kMaxLineLength) {
-    caller.push_error(kInputBufferOverrun);
+    state->session.push_error(kInputBufferOverrun);
     on_reply(std::nullopt);
     return;
   }
-  scpi::Execution execution = commands_.execute(caller, line);
-  if (execution.held()) {
-    held_.push_back(
-        {.session = session, .execution = std::move(execution), .on_reply = std::move(on_reply)});
-  } else {
-    on_reply(execution.take_reply());
-  }
-  resume_held();  // This line may have ended the operation (STOP, RUN, *RST).
+  scpi::Execution execution = commands_.execute(state->session, line);
+  finish({.state = std::move(state),
+          .execution = std::move(execution),
+          .on_reply = std::move(on_reply)});
 }
 
 void Instrument::advance(std::size_t samples) {
-  const std::scoped_lock lock(mutex_);
   while (samples > 0) {
-    std::size_t count = std::min(samples, kMaxBlockLength);
-    const std::optional<AcquiredBlock> block = sample(count);
-    std::optional<std::size_t> single_end;
-    if (block) {
-      // Every capture counts, not only the last of the block, so the statistics do not depend on
-      // how `advance` is chunked; and before held lines resume, so they see the Single's capture.
-      single_end = assemble(*block, [&](const std::shared_ptr<const Capture>& capture) {
-        publish(*block, capture, measure_all(*capture));
-      });
-      // The Single's capture ends the operation at its last sample: the lines it resumes run with
-      // the clock there, and the next block starts there under whatever they changed, so how
-      // `advance` is chunked never changes a capture or a reply (ADR 0003).
-      count = single_end.value_or(count);
+    std::vector<RunningLine> woken;
+    {
+      const std::scoped_lock lock(mutex_);
+      std::size_t count = std::min(samples, kMaxBlockLength);
+      const std::optional<AcquiredBlock> block = sample(count);
+      std::optional<std::size_t> single_end;
+      if (block) {
+        // Every capture counts, not only the last of the block, so the statistics do not depend
+        // on how `advance` is chunked; and before held lines resume, so they see the Single's
+        // capture.
+        single_end = assemble(*block, [&](const std::shared_ptr<const Capture>& capture) {
+          publish(*block, capture, measure_all(*capture));
+        });
+        // The Single's capture ends the operation at its last sample: the lines it resumes run
+        // with the clock there, and the next block starts there under whatever they changed, so
+        // how `advance` is chunked never changes a capture or a reply (ADR 0003).
+        count = single_end.value_or(count);
+      }
+      clock_.take(count);
+      samples -= count;
+      if (block && single_end) {
+        conclude(*block);
+        woken = take_woken();
+      }
     }
-    clock_.take(count);
-    samples -= count;
-    if (block && single_end) {
-      conclude(*block);
-    }
+    hand_on(std::move(woken));
   }
 }
 
@@ -790,11 +900,16 @@ void Instrument::process(const AcquiredBlock& block) {
     return;
   }
   bool rest_runs = false;
+  std::vector<RunningLine> woken;
   {
     const std::scoped_lock lock(mutex_);
     publish(block, single_capture, single_results);
     rest_runs = conclude(block);
+    woken = take_woken();
   }
+  // Handed to the Resumers, which in live mode run them elsewhere: held bulk queries must not
+  // stop this thread draining the ring buffer, nor run back to back in one hold (#67).
+  hand_on(std::move(woken));
   // RUN came after the block was acquired for a Single. The Single still ends at its capture, and
   // the trigger restarts there as after any Single, but the instrument runs on: the samples after
   // that capture are captured, not lost.
@@ -879,7 +994,6 @@ bool Instrument::conclude(const AcquiredBlock& block) {
   }
   if (pending()) {
     enter(RunState::kStopped);
-    resume_held();
     return false;
   }
   // RUN leaves Armed-single without discarding, so a block acquired while the Single was armed

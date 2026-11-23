@@ -9,15 +9,19 @@
 #include <complex>
 #include <cstddef>
 #include <format>
+#include <memory>
 #include <numbers>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "decibels.hpp"
+#include "openscope/capture.hpp"
 #include "openscope/fft_window.hpp"
+#include "openscope/spectrum_cache.hpp"
 
 namespace openscope {
 namespace {
@@ -268,6 +272,56 @@ TEST(MagnitudeSpectrumTest, UsesOnlyTheFirstSpectrumLengthSamples) {
 
 TEST(MagnitudeSpectrumTest, RejectsNoSamples) {
   EXPECT_THROW(magnitude_spectrum_db({}, FftWindow::kHann), std::invalid_argument);
+}
+
+/// A capture holding only channel 2: ten cycles of a sine over 256 samples, plus a DC offset.
+std::shared_ptr<const Capture> channel_two_capture() {
+  auto capture = std::make_shared<Capture>();
+  std::vector<float> samples = sine(256, 10);
+  for (float& sample : samples) {
+    sample += 0.25F;
+  }
+  capture->channels.at(1) = CapturedChannel{.settings = {}, .samples = std::move(samples)};
+  return capture;
+}
+
+constexpr std::array kWindows{FftWindow::kRectangular, FftWindow::kHann,
+                              FftWindow::kBlackmanHarris};
+
+TEST(SpectrumCacheTest, IsTheMagnitudeSpectrumOfTheChannelUnderTheWindow) {
+  SpectrumCache cache;
+  const std::shared_ptr<const Capture> capture = channel_two_capture();
+  for (const FftWindow window : kWindows) {
+    EXPECT_EQ(*cache.spectrum(capture, 2, window),
+              magnitude_spectrum_db(captured_channel(*capture, 2).samples, window));
+  }
+}
+
+// The first spectrum is still held, so a recomputed one could not reuse its address.
+TEST(SpectrumCacheTest, AskingAgainReturnsTheSpectrumAlreadyComputed) {
+  SpectrumCache cache;
+  const std::shared_ptr<const Capture> capture = channel_two_capture();
+  const auto hann = cache.spectrum(capture, 2, FftWindow::kHann);
+
+  EXPECT_NE(cache.spectrum(capture, 2, FftWindow::kRectangular), hann);
+  EXPECT_EQ(cache.spectrum(capture, 2, FftWindow::kHann), hann);
+}
+
+TEST(SpectrumCacheTest, AnotherCaptureIsTransformedAfresh) {
+  SpectrumCache cache;
+  const std::shared_ptr<const Capture> first = channel_two_capture();
+  const auto spectrum = cache.spectrum(first, 2, FftWindow::kHann);
+
+  const std::shared_ptr<const Capture> second = channel_two_capture();
+  const auto again = cache.spectrum(second, 2, FftWindow::kHann);
+
+  EXPECT_NE(again, spectrum);
+  EXPECT_EQ(*again, *spectrum);  // The same samples.
+}
+
+TEST(SpectrumCacheTest, ChannelNotInTheCaptureThrows) {
+  SpectrumCache cache;
+  EXPECT_THROW((void)cache.spectrum(channel_two_capture(), 1, FftWindow::kHann), std::out_of_range);
 }
 
 }  // namespace

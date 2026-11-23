@@ -53,6 +53,9 @@ inline const ScpiError kSettingsConflict{.code = -221, .message = "Settings conf
 /// A numeric parameter outside the range the command accepts.
 inline const ScpiError kDataOutOfRange{.code = -222, .message = "Data out of range"};
 
+/// A query whose reply would make the line's replies longer than scpi::kMaxReplyLength.
+inline const ScpiError kTooMuchData{.code = -223, .message = "Too much data"};
+
 /// A keyword the parameter does not accept.
 inline const ScpiError kIllegalParameterValue{.code = -224, .message = "Illegal parameter value"};
 

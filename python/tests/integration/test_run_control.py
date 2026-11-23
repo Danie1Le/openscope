@@ -2,11 +2,20 @@
 `STOP`, `RUN` or `*RST` from another Session end an `*OPC?` wait (docs/scpi-reference.md, Run
 control and Consistency model)."""
 
+import socket
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from engine_helpers import eventually, take_capture
+from engine_helpers import (
+    BULK_PATIENCE,
+    LONGEST_RECORD,
+    PATIENCE,
+    eventually,
+    plain_query,
+    plain_reply,
+    take_capture,
+)
 
 from openscope_client import Measurement
 
@@ -83,6 +92,30 @@ def test_another_session_ends_an_opc_wait(waiting, line):
 
     wait.result(timeout=30)  # Replied 1.
     assert scope.identify().manufacturer == "OpenScope"  # The Session carries on.
+
+
+def test_a_stop_ends_the_wait_even_if_another_client_arms_a_single_before_its_line_ends(
+    engine, open_client
+):
+    # The STOP itself ends A's wait (#68 review): a SINGle from C, sent while the rest of B's
+    # line (bulk ASCII) still runs, waits for A instead of arming a Single A would wait on again.
+    with socket.create_connection(("127.0.0.1", engine.port), timeout=BULK_PATIENCE) as b:
+        assert plain_query(b, f"ACQ:POIN {LONGEST_RECORD};:SING;*OPC?") == b"1"
+        assert plain_query(b, "TRIG:MODE NORM;LEV 1.5;:SYST:ERR?") == b'0,"No error"'
+        a, c = open_client(engine.port), open_client(engine.port)
+        a.single()
+        a.timeout = PATIENCE
+        with ThreadPoolExecutor(1) as pool:
+            wait = pool.submit(a.wait_complete)
+            time.sleep(WAIT)
+            assert not wait.done()
+
+            b.sendall(b"STOP;:WAV:FORM ASC;DATA?;DATA?;DATA?\n")  # About 0.6 s of formatting.
+            time.sleep(0.05)
+            c.single()
+
+            wait.result(timeout=PATIENCE)  # Replied 1.
+        assert plain_reply(b).count(b";") == 2  # B's three blocks.
 
 
 def test_wai_holds_the_line_until_the_single_completes(waiting):

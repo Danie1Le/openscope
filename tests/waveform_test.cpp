@@ -4,6 +4,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cstddef>
+#include <format>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -12,6 +14,8 @@
 #include "binary_block.hpp"
 #include "instrument_fixture.hpp"
 #include "openscope/capture.hpp"
+#include "openscope/scpi/command_tree.hpp"
+#include "openscope/scpi/response.hpp"
 #include "reply_numbers.hpp"
 #include "scpi_session.hpp"
 
@@ -28,11 +32,19 @@ using test::kNoErrorReply;
 using test::kParameterNotAllowedReply;
 using test::kResetRecordLength;
 using test::kSettingsConflictReply;
+using test::kTooMuchDataReply;
 using test::ScpiSession;
 using testing::Optional;
 using testing::StartsWith;
 
-using WaveformTest = test::InstrumentFixture;
+class WaveformTest : public test::InstrumentFixture {
+ protected:
+  /// Takes one untriggered capture of `points` points.
+  void take_capture(std::size_t points) {
+    session.send(std::format("ACQ:POIN {};:{}", points, test::kUntriggeredCaptures));
+    instrument.advance(points);
+  }
+};
 
 TEST_F(WaveformTest, NewSessionReadsChannelOneAsAscii) {
   EXPECT_EQ(session.send("WAV:SOUR?"), "CHAN1");
@@ -216,6 +228,51 @@ TEST_F(WaveformTest, RealDataOfTheLongestRecordFitsOneBlock) {
 
   EXPECT_THAT(reply, StartsWith("#74194304"));
   EXPECT_EQ(decode_float32_block(reply), captured(instrument, 1).samples);
+}
+
+/// The bytes of a `WAV:DATA?` reply in REAL at `points` points: the block header, then a float32
+/// a point.
+std::size_t real_block_bytes(std::size_t points) {
+  const std::size_t data = points * sizeof(float);
+  return scpi::definite_length_header(data).size() + data;
+}
+
+/// The bytes of `blocks` REAL `WAV:DATA?` replies at `points` points joined with `;`.
+std::size_t joined_real_blocks(std::size_t blocks, std::size_t points) {
+  return (blocks * real_block_bytes(points)) + blocks - 1;
+}
+
+/// A line that sets REAL and then asks `WAV:DATA?` `queries` times.
+std::string real_data_queries(std::size_t queries) {
+  std::string line = "WAV:FORM REAL;DATA?";
+  for (std::size_t query = 1; query < queries; ++query) {
+    line += ";DATA?";
+  }
+  return line;
+}
+
+// 157 blocks of 427 444 bytes and their 156 joining ';' make exactly kMaxReplyLength.
+TEST_F(WaveformTest, LineOfDataQueriesUpToTheReplyLimitIsReplied) {
+  constexpr std::size_t kPoints = 106'859;
+  constexpr std::size_t kQueries = 157;
+  ASSERT_EQ(joined_real_blocks(kQueries, kPoints), scpi::kMaxReplyLength);
+  take_capture(kPoints);
+
+  EXPECT_EQ(session.send(real_data_queries(kQueries)).value_or("").size(), scpi::kMaxReplyLength);
+  EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+// 33 blocks of 2 033 601 bytes and their 32 joining ';' are one byte over kMaxReplyLength: the
+// blocks before the last are replied.
+TEST_F(WaveformTest, LineOfDataQueriesOneByteOverTheReplyLimitIsTooMuchData) {
+  constexpr std::size_t kPoints = 508'398;
+  constexpr std::size_t kQueries = 33;
+  ASSERT_EQ(joined_real_blocks(kQueries, kPoints), scpi::kMaxReplyLength + 1);
+  take_capture(kPoints);
+
+  EXPECT_EQ(session.send(real_data_queries(kQueries)).value_or("").size(),
+            joined_real_blocks(kQueries - 1, kPoints));
+  EXPECT_EQ(session.next_error(), kTooMuchDataReply);
 }
 
 // Time zero on the first sample: Auto takes the first 2 samples, and the ramp's trigger event at

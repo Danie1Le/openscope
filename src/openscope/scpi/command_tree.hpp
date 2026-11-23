@@ -62,6 +62,9 @@ struct Arguments {
 /// whatever it waited for is over even if it has begun again since.
 struct Hold {
   std::optional<std::string> reply;
+  /// The command has not run but waits to (a command of another Session while held lines carry
+  /// on, #68 review): when the line carries on, it runs again instead of replying `reply`.
+  bool again = false;
 };
 
 /// What a handler returns: its reply (nullopt for a command without one), the execution error
@@ -69,6 +72,13 @@ struct Hold {
 /// or Hold. A handler that replies but must also report something, as a measurement reports its
 /// status, puts that entry on the Session's queue itself, so the line carries on.
 using HandlerResult = std::variant<std::optional<std::string>, ScpiError, Hold>;
+
+/// The most bytes the replies of one line may hold, joined with `;` and without the terminator:
+/// 64 MiB, the most the Python client reads (`MAX_RESPONSE_BYTES` in
+/// python/src/openscope_client/transport.py). A 4 KB line holds hundreds of queries, and each
+/// `WAV:DATA?` or `FFT:DATA?` may reply megabytes, so without it one line could build a reply of
+/// gigabytes while every other client waits (#67).
+inline constexpr std::size_t kMaxReplyLength = std::size_t{64} * 1024 * 1024;
 
 /// Runs a matched command for the calling Session.
 using Handler = std::function<HandlerResult(Session&, const Arguments&)>;
@@ -138,6 +148,9 @@ class Execution {
   /// True while a handler holds the line (it returned Hold); false once the line has ended.
   [[nodiscard]] bool held() const { return hold_.has_value(); }
 
+  /// True while the line is held by a command that runs again when it carries on (Hold::again).
+  [[nodiscard]] bool held_to_run_again() const { return hold_ && hold_->again; }
+
   /// The replies of the queries that have run, joined with `;`, or nullopt when none replied.
   [[nodiscard]] const std::optional<std::string>& reply() const { return reply_; }
 
@@ -174,8 +187,10 @@ class CommandTree {
 
   /// Executes one line for `session` until it ends or a handler holds it, and returns how far it
   /// got. A syntax error anywhere runs nothing. Any other error, including an execution error a
-  /// handler returns, runs the commands before it and discards the rest of the line. Errors go to
-  /// `session`'s queue.
+  /// handler returns and -223 for a reply that would take the line's replies past
+  /// kMaxReplyLength, runs the commands before it, keeps their replies and discards the rest of
+  /// the line. A query whose reply -223 drops leaves `session` as it found it (a `SYST:ERR?` keeps
+  /// its entry on the queue). Errors go to `session`'s queue.
   [[nodiscard]] Execution execute(Session& session, std::string_view line) const;
 
   /// Carries on the held `execution` for `session`: the holding command's Hold reply joins the

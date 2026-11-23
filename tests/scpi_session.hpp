@@ -3,11 +3,13 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "openscope/instrument.hpp"
 
@@ -25,6 +27,7 @@ inline constexpr auto kDataStaleReply = R"(-230,"Data corrupt or stale")";
 inline constexpr auto kInvalidSuffixReply = R"(-131,"Invalid suffix")";
 inline constexpr auto kSuffixOutOfRangeReply = R"(-114,"Header suffix out of range")";
 inline constexpr auto kOutOfRangeReply = R"(-222,"Data out of range")";
+inline constexpr auto kTooMuchDataReply = R"(-223,"Too much data")";
 inline constexpr auto kClippedReply = R"(-231,"Data questionable;Clipped")";
 inline constexpr auto kNoSignalReply = R"(-200,"Execution error;No signal")";
 inline constexpr auto kTooFewCyclesReply = R"(-200,"Execution error;Too few cycles")";
@@ -36,6 +39,12 @@ inline std::string padded(std::string_view command, std::size_t length) {
   std::string line(command);
   line.resize(length, ' ');
   return line;
+}
+
+/// A Resumer that keeps the work it is handed in `handed`, for the test to run when it likes, so a
+/// test controls when a held line carries on.
+inline Resumer keeping_in(std::vector<std::function<void()>>& handed) {
+  return [&handed](std::function<void()> work) { handed.push_back(std::move(work)); };
 }
 
 /// The reply to one line, as the Instrument delivers it.
@@ -50,8 +59,10 @@ struct LineReply {
 /// tests read as a SCPI conversation.
 class ScpiSession {
  public:
-  explicit ScpiSession(Instrument& instrument)
-      : instrument_(&instrument), id_(instrument.open_session()) {}
+  /// A Session whose held lines `resumer` carries on: by default at once, inside the call that
+  /// ended the operation, as test mode needs.
+  explicit ScpiSession(Instrument& instrument, Resumer resumer = run_at_once)
+      : instrument_(&instrument), id_(instrument.open_session(std::move(resumer))) {}
 
   /// Executes one SCPI line that ends at once and returns the reply, if any. Fails the test when
   /// the line has not ended.
