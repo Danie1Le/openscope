@@ -22,7 +22,7 @@ The engine serves SCPI over TCP on `127.0.0.1:5025` by default (PyVISA resource 
 
 - A line is one program message. The transport ends it with `\n`, optionally preceded by `\r`; neither is part of the line.
 - A line holds at most 4096 bytes, not counting the terminator. A longer line is not parsed or run at all: it only queues `-363,"Input buffer overrun"`.
-- A line's reply holds at most 64 MiB (67 108 864 bytes), not counting the terminator: the replies of its queries joined with `;` (see [Several commands on one line](#several-commands-on-one-line)). A query whose reply would take it past that queues `-223,"Too much data"` and its reply is dropped (a status entry a measurement query queued before it stays on the queue); like any execution error it stops the line, and the replies before it are returned. One `WAV:DATA?` of the longest record is at most 16 MiB (ASCII) and one `FFT:DATA?` about 2 MiB, so only a line of several of them reaches the limit. The Python client reads replies of up to the same 64 MiB.
+- A line's reply holds at most 64 MiB (67 108 864 bytes), not counting the terminator: the replies of its queries joined with `;` (see [Several commands on one line](#several-commands-on-one-line)). A query whose reply would take it past that queues `-223,"Too much data"` and its reply is dropped, and the Session is left as that query found it: a `SYST:ERR?` keeps its entry on the queue, and a measurement query adds no status entry (those of the queries before it stay). Like any execution error it stops the line, and the replies before it are returned. One `WAV:DATA?` of the longest record is at most 16 MiB (ASCII) and one `FFT:DATA?` about 2 MiB, so only a line of several of them reaches the limit. The Python client reads replies of up to the same 64 MiB.
 - An empty line, or one holding only white space, does nothing.
 
 ## Headers
@@ -121,7 +121,7 @@ The queue holds 20 entries. When it is full, the newest entry is replaced by `-3
 | `-200` | Execution error;Too few cycles | A measurement found under one whole cycle or no complete edge; the query replied `9.91E37` |
 | `-221` | Settings conflict | A query reads a channel that is not in the latest capture (it was not enabled when the capture was taken), or `SOUR<n>:FAUL` finds its Generator already holding 64 faults |
 | `-222` | Data out of range | A number outside the command's range or beyond a double's range |
-| `-223` | Too much data | A query's reply would make the line's reply longer than 64 MiB; it replies nothing and the rest of the line is discarded |
+| `-223` | Too much data | A query's reply would make the line's reply longer than 64 MiB; its reply is dropped, the error queue is left as the query found it, and the rest of the line is discarded |
 | `-224` | Illegal parameter value | A keyword that is not one of the parameter's choices |
 | `-230` | Data corrupt or stale | A query reads capture data before the first capture has completed (or since `*RST`), or `MEAS:STAT?` finds no capture completed since the statistics were last reset |
 | `-231` | Data questionable;Clipped | A warning: a measurement replied its value, but a sample of the channel hit an input-range limit; or `MEAS:STAT?` replied statistics that count such a value |
@@ -156,13 +156,15 @@ The run state says what the instrument does with captures. It is separate from t
 
 An armed Single is the pending operation that `*OPC?` and `*WAI` wait for. Nothing else is ever pending, so in the Running and Stopped run states `*OPC?` replies `1` and `*WAI` does nothing at once.
 
-- `SINGle;*OPC?` replies `1` only once the Single's capture is complete. The wait also ends when the instrument leaves Armed-single any other way: `STOP`, `RUN` or `*RST`, from any Session. Every Session waiting then carries on, in the order they started waiting, even when the first to carry on sends `SINGle` again: the others waited for the Single that ended, not for the new one.
+- `SINGle;*OPC?` replies `1` only once the Single's capture is complete. The wait also ends when the instrument leaves Armed-single any other way: `STOP`, `RUN` or `*RST`, from any Session. Every Session waiting then carries on, each on its own and at the same time as the others, even when one of them sends `SINGle` again: the others waited for the Single that ended, not for the new one.
 - There is no timeout on the instrument: in `NORMal` trigger mode with no trigger event, `*OPC?` waits as long as it takes. The client's own timeout is the guard. Disconnecting ends the wait, with no reply.
-- `*WAI` holds the rest of the line, and the Session's later lines, until the operation ends; `SINGle;*WAI;WAV:DATA?` reads the Single's capture. `*OPC?` holds them the same way, so commands after it on the line also run once the operation has ended: `SINGle;*OPC?;WAV:PRE?` replies `1;` and the preamble of the Single's capture.
+- `*WAI` holds the rest of the line, and the Session's later lines, until the operation ends; `SINGle;*WAI;WAV:DATA?` reads the Single's capture. `*OPC?` holds them the same way, so commands after it on the line also run once the operation has ended: `SINGle;*OPC?;WAV:PRE?` replies `1;` and the preamble of the Single's capture, unless another Session's `RUN`, `SINGle` or `*RST` comes first (see [Consistency model](#consistency-model)).
 - A Session's commands run in order: while one of its lines is held, its next line waits until the reply has been sent. So the `STOP` that ends a wait comes from another Session (another connection or the display), or the client disconnects.
 - A Session waiting on `*OPC?` or `*WAI` is not idle, whatever the transport's idle timeout.
 
 ### Consistency model
+
+Lines of different Sessions run at the same time, on up to four threads, so one client's long line (bulk `WAV:DATA?` or `FFT:DATA?`) does not hold up another client's commands; only while four clients run long lines at once does a fifth client's line wait for one of them. Each command is atomic, but a line is not: another Session's command may run between two commands of one line, as it may between two lines.
 
 Every query of capture data reads the latest capture at the moment it runs. In the Running run state, two queries, even on one line, may read two different captures. To query one capture several times, take it with `SINGle;*OPC?` and then send the queries: the instrument is Stopped, so the latest capture no longer changes until the next `RUN` or `SINGle` (or `*RST`, which drops it).
 

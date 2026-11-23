@@ -548,6 +548,23 @@ TEST_F(CommandTreeTest, EmptyReplyAfterAFullOneIsTooMuchData) {
   EXPECT_EQ(next_error_code(), kTooMuchData.code);
 }
 
+// A query whose reply is dropped leaves the Session as it found it: `SYST:ERR?` crossing the
+// limit must not lose the entry it took off the queue.
+TEST_F(CommandTreeTest, QueryWhoseReplyIsTooMuchDataLeavesTheErrorQueueAsItWas) {
+  tree.add(
+      {.header = "TEST:POP?", .parameters = {}, .handler = [](Session& caller, const Arguments&) {
+         return HandlerResult{std::to_string(caller.pop_error().code)};
+       }});
+  session.push_error(kUndefinedHeader);
+
+  EXPECT_EQ(send(bulk(kMaxReplyLength - 4) + ";:TEST:POP?").value_or("").size(),
+            kMaxReplyLength - 4);  // "-113" and its ';' take five bytes: one more than is left.
+
+  EXPECT_EQ(next_error_code(), kUndefinedHeader.code);
+  EXPECT_EQ(next_error_code(), kTooMuchData.code);
+  EXPECT_EQ(next_error_code(), 0);
+}
+
 TEST_F(CommandTreeTest, EmptyOrBlankLineDoesNothing) {
   for (const char* line : {"", " ", "\t \t"}) {
     calls.clear();

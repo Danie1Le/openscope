@@ -183,7 +183,8 @@ class CommandTree {
   /// got. A syntax error anywhere runs nothing. Any other error, including an execution error a
   /// handler returns and -223 for a reply that would take the line's replies past
   /// kMaxReplyLength, runs the commands before it, keeps their replies and discards the rest of
-  /// the line. Errors go to `session`'s queue.
+  /// the line. A query whose reply -223 drops leaves `session` as it found it (a `SYST:ERR?` keeps
+  /// its entry on the queue). Errors go to `session`'s queue.
   [[nodiscard]] Execution execute(Session& session, std::string_view line) const;
 
   /// Carries on the held `execution` for `session`: the holding command's Hold reply joins the
