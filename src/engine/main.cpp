@@ -4,7 +4,7 @@
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/signal_set.hpp>
 #include <boost/asio/steady_timer.hpp>
-#include <boost/system/error_code.hpp>
+#include <boost/system/detail/error_code.hpp>
 #include <boost/system/system_error.hpp>
 #include <chrono>
 #include <csignal>
@@ -12,7 +12,8 @@
 #include <exception>
 #include <format>
 #include <iostream>
-#include <nlohmann/json.hpp>
+#include <nlohmann/json.hpp>  // IWYU pragma: keep (the definition of ordered_json)
+#include <nlohmann/json_fwd.hpp>
 #include <optional>
 #include <span>
 #include <stdexcept>

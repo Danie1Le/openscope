@@ -187,10 +187,10 @@ TEST_P(SignalTest, StopsTheEngineCleanlyFromTheMomentItListens) {
 
   EXPECT_EQ(engine.exit_status(), 0) << engine.output();
   // With what live mode lost by then (#67).
-  EXPECT_THAT(engine.output(),
-              ContainsRegex(std::format(R"("event":"stopping","signal":{},"dropped_blocks":[0-9]+,)"
-                                        R"("skipped_samples":[0-9]+,"discarded_captures":[0-9]+[^,0-9])",
-                                        GetParam())));
+  EXPECT_THAT(engine.output(), ContainsRegex(std::format(
+                                   R"("event":"stopping","signal":{},"dropped_blocks":[0-9]+,)"
+                                   R"("skipped_samples":[0-9]+,"discarded_captures":[0-9]+[^,0-9])",
+                                   GetParam())));
 }
 
 INSTANTIATE_TEST_SUITE_P(Signals, SignalTest, testing::Values(SIGINT, SIGTERM));
