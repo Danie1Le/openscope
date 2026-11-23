@@ -26,7 +26,7 @@ All five Google Benchmarks in `bench/`, with the headline number from the machin
 | `BM_MagnitudeSpectrum` | `fft_benchmark` | everything `FFT:DATA?` computes for one capture | 162 µs (4K) to 91.7 ms (1M) |
 | `BM_SpscRingBufferThroughput` | `ring_buffer_benchmark` | items handed from one thread to another through `SpscRingBuffer`, 16 to 4096 slots | 24.5 ns (16 slots) to 10.8 ns (4096), wall time per item |
 
-`live_run` is not a Google Benchmark (it runs in real time and prints drop counts), so CI does not run it; its section is below.
+`live_run` is not a Google Benchmark (it runs in real time and prints drop counts). CI runs it once per pull request, for 20 s at 4 channels x 1M points, after the Google Benchmarks and reports its table the same way; its section is below.
 
 ## FFT against KissFFT
 
@@ -142,11 +142,12 @@ Not measured, so only a hypothesis: that most of each hand-over is the two cores
 
 ## Live mode at 4 channels x 1 MS/s (NFR-1)
 
-`bench/live_run.cpp` runs the instrument live (`openscope::LivePipeline`) with all four channels enabled, each a 1 kHz sine with 10 mV RMS noise, at the record length of 10 000 and the `*RST` 1 MS/s or the sample rate given second. Once a second it prints how far the latest capture reaches on the sample clock against the samples the wall clock has released, the skipped samples (released by the wall clock but never acquired, because acquisition fell more than one round behind), the dropped-block and discarded-capture counts, and the slowest `*IDN?` of that second, sent every 5 ms from the main thread while the pipeline runs:
+`bench/live_run.cpp` runs the instrument live (`openscope::LivePipeline`) with all four channels enabled, each a 1 kHz sine with 10 mV RMS noise, at the `*RST` 1 MS/s or the sample rate given second, and the `*RST` record length of 10 000 or the one given third. Once a second it prints how far the latest capture reaches on the sample clock against the samples the wall clock has released, the skipped samples (released by the wall clock but never acquired, because acquisition fell more than one round behind), the dropped-block and discarded-capture counts, and the slowest `*IDN?` of that second, sent every 5 ms from the main thread while the pipeline runs:
 
 ```sh
-build/benchmark/bench/live_run 60        # 1 MS/s
-build/benchmark/bench/live_run 10 1E7    # 10 MS/s
+build/benchmark/bench/live_run 60                # 1 MS/s
+build/benchmark/bench/live_run 10 1E7            # 10 MS/s
+build/benchmark/bench/live_run 20 1E6 1048576    # 1 MS/s, the longest record
 ```
 
 Measured 2026-11-21 on the machine above (same container and build flags as the ring buffer), while other builds and tests shared the machine. Three 60-second runs at 1 MS/s:
@@ -171,3 +172,35 @@ Ten seconds at each sample rate, same setup:
 | 1E8 | 1 000 436 604 | 44 619 675 | 870 357 048 | 0 | 0.06 ms |
 
 What the table shows: this machine acquires about 4.4 M sample indexes per second on four noisy channels, so at 1E7 and above acquisition falls behind the wall clock every round. The pacer then skips what is over a round and counts it: at 1E8, 87 % of the samples the wall clock released were skipped, and the skipped count says so where the dropped-block count alone (0) would not. `*IDN?` stayed under 0.1 ms at these rates and under 2.4 ms in every run, because `Instrument::acquire` holds the Instrument's mutex only to take the indexes and a settings snapshot and samples outside it.
+
+### At the longest record ([#71](https://github.com/Danie1Le/openscope/issues/71))
+
+Running at the longest record, 1 048 576 points on all four channels, dropped blocks with no client at all. Where the time went, per completed capture, from a driver that acquires 1000-sample blocks (one 1 ms tick at 1 MS/s) and processes them on one thread with the release library (same machine and container as above, 2026-11-23, other agents' builds sharing the machine):
+
+| Work on the processing thread | Time |
+|---|---|
+| `measure_all` of the capture (every measurement of every channel, for the statistics) | 111 to 122 ms |
+| of which, for one channel (CH1): `find_levels` | 10.8 ms |
+| of which, for one channel (CH1): FREQ, PER, DUTY (each finds its own edges) | 3.5 to 4.1 ms each |
+| of which, for one channel (CH1): RIS, FALL | 2.0 to 2.2 ms each |
+| of which, for one channel (CH1): VAV, VRMS | 1.1 ms each |
+| Counting the results in the statistics (`MeasurementStatistics::add`) | 0.001 ms |
+| Assembling any other block (`process` of a block that completes nothing) | 0.007 ms mean, 0.99 ms worst |
+| Acquiring a block (`acquire(1000)`, on the acquisition thread) | 0.21 ms |
+
+The ring buffer holds 64 blocks, about 64 ms at 1 MS/s, so the processing thread fell 50 ms or more behind at every capture: the blocks acquired meanwhile were dropped, and the capture that had just started was discarded. Measuring is about 11 % of the 1.05 s a capture takes to acquire, so the work keeps up on average and is only bursty: the fix moves it off the processing thread instead of enlarging the ring. A measuring thread now measures and publishes each Running capture, through a queue of at most 64 captures and one longest four-channel capture of samples, and processing waits for it (so the ring then drops, counted) rather than lose a capture unseen. A Single's capture is still measured by the processing thread, which publishes it with the Single's end (see below).
+
+`live_run 20 1E6 1048576`, before (`main` at 382bc40) and after the fix:
+
+| | Before, this machine | Before, hosted runner | After, this machine | After, hosted runner |
+|---|---|---|---|---|
+| Dropped blocks in 20 s | 330 | 294 | 0 | 0 |
+| Captures discarded | 17 | 17 | 0 | 0 |
+| Skipped samples | 0 | 0 | 0 | 0 |
+| Slowest `*IDN?` in any second | 0.11 ms | 1.25 ms | 0.55 ms | 0.02 ms |
+
+The hosted runner is the CI benchmark job's (`ubuntu-24.04`, 4 CPUs; an AMD EPYC 7763 for the run before, an Intel Xeon 6975P-C for the run after): the drops were not peculiar to this machine. After the fix this machine also ran 30 s with no drop (the table's after column), and `LiveLongestRecordTest` (release builds only) asserts no dropped block, no discarded capture and an exact statistics count over five such captures, with and without a client reading waveforms and measurements meanwhile.
+
+Under TSan, `test_the_holdoff_spaces_the_trigger_events_of_captures` failed 31 of 48 runs before (12 loops of its 4 cases, twice: 31 both times) and 0 of 48 after. Its Single of a 100 000-point capture made the processing thread measure the Single's capture (110 ms under TSan) and then a second, stale capture assembled from the blocks acquired meanwhile (another 110 ms), so the first Running blocks after `RUN` overflowed the ring, the capture in progress was discarded and the trigger restarted, which cut a holdoff short. A capture that a command has already discarded is no longer measured.
+
+What remains: a Single's capture is still measured on the processing thread before the Single ends, so a Single at 4 x 1M points holds up processing for about 115 ms, and the blocks acquired after its capture that overflow the ring are counted as dropped. Nothing is lost by it (those blocks follow the Single's capture and are discarded anyway, unless `RUN` came first), but the dropped-block count rises.
