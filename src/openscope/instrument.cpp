@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <format>
 #include <functional>
-#include <iterator>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -209,13 +208,23 @@ Instrument::Instrument(std::uint64_t seed)
 void Instrument::add_command(scpi::Command command) {
   command.handler = [this, handler = std::move(command.handler)](
                         Session& caller, const Arguments& arguments) -> scpi::HandlerResult {
-    const std::scoped_lock lock(mutex_);
-    // The lines an operation's end released carry on as it left the instrument: until they have,
-    // this command waits, holding its line, and runs once they have (settle).
-    if (settling_ > 0 && !released(caller)) {
-      return scpi::Hold{.reply = std::nullopt, .again = true};
+    std::vector<RunningLine> woken;
+    scpi::HandlerResult result;
+    {
+      const std::scoped_lock lock(mutex_);
+      // The lines an operation's end released carry on as it left the instrument: until they
+      // have, this command waits, holding its line, and runs once they have (settle).
+      if (settling_ > 0 && !released(caller)) {
+        return scpi::Hold{.reply = std::nullopt, .again = true};
+      }
+      result = handler(caller, arguments);
+      // A command that ended the operation (STOP, RUN, *RST) releases the lines held on it here,
+      // in the hold of the mutex that ended it, not when its own line ends: no other Session's
+      // command (a SINGle that arms a new Single) can come in between.
+      woken = take_woken();
     }
-    return handler(caller, arguments);
+    hand_on(std::move(woken));
+    return result;
   };
   commands_.add(std::move(command));
 }
@@ -716,16 +725,14 @@ void Instrument::finish(RunningLine line) {
     }
     commands_.resume(line.state->session, line.execution);
   }
-  std::vector<RunningLine> released;
+  std::vector<RunningLine> settled;
   {
     const std::scoped_lock lock(mutex_);
     line.state->holding = false;
-    released = settle(*line.state);
-    // This line may have ended the operation (STOP, RUN, *RST).
-    std::ranges::move(take_woken(), std::back_inserter(released));
+    settled = settle(*line.state);
   }
   line.on_reply(line.execution.take_reply());
-  hand_on(std::move(released));
+  hand_on(std::move(settled));
 }
 
 void Instrument::resume(RunningLine line) {

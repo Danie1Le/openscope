@@ -7,7 +7,7 @@ import time
 from collections.abc import Callable
 
 import pytest
-from engine_helpers import LONGEST_RECORD, PATIENCE
+from engine_helpers import BULK_PATIENCE, LONGEST_RECORD, PATIENCE, plain_query
 from server_limits import MAX_CLIENTS, MAX_LINE, TOO_MUCH_DATA
 
 from openscope_client import ErrorEntry, ScpiError, TriggerMode
@@ -23,10 +23,6 @@ OTHER_CLIENT_CEILING = 10.0
 #: clients run in parallel, so it waits for no bulk query (a few ms locally); generous for a loaded
 #: runner and an ASan engine.
 UNSTALLED_CEILING = 0.25
-
-#: Seconds to wait for a 4 KB line of ASCII `WAV:DATA?`: under 1 s on a release engine, far
-#: longer on a sanitizer build.
-BULK_PATIENCE = 180.0
 
 
 def test_a_line_of_4096_bytes_runs(scope):
@@ -82,18 +78,6 @@ def waits_while(other: Callable[[str], str], line: Callable[[], object]) -> list
     waits = [wait for sent, wait in asked if started <= sent < ended]
     assert waits  # Asked while the line ran.
     return waits
-
-
-def plain_query(connection: socket.socket, line: str) -> bytes:
-    """Sends `line` and reads its reply, which must hold no block, to its `\\n`, doing no more in
-    Python per chunk than a socket read. Parsing 57 MB of ASCII in this process, as the client
-    does, holds the GIL for tenths of a second and would delay the thread a test times."""
-    connection.sendall(f"{line}\n".encode())
-    chunks = [connection.recv(1 << 20)]
-    while not chunks[-1].endswith(b"\n"):
-        chunks.append(connection.recv(1 << 20))
-        assert chunks[-1], "the engine closed the connection"
-    return b"".join(chunks)[:-1]
 
 
 def test_a_line_of_bulk_queries_stops_at_the_reply_limit_and_others_are_served(engine):
