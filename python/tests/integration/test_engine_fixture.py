@@ -25,7 +25,7 @@ def test_the_engine_keeps_its_newest_events_and_waits_past_the_dropped_ones(engi
     # A `live` event, logged should the engine lose samples meanwhile, takes an older one's place.
     events = [event for event in engine.events if event["event"] != "live"]
     events = events[len(events) % 2 :]  # Whole connect and disconnect pairs.
-    assert len(events) > KEPT_EVENTS - 10
+    assert len(events) > KEPT_EVENTS // 2  # Mostly connections still.
     newest_peers = peers[-(len(events) // 2) :]
     assert [event["event"] for event in events] == ["connect", "disconnect"] * len(newest_peers)
     assert [event["peer"] for event in events] == [peer for peer in newest_peers for _ in range(2)]

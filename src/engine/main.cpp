@@ -57,7 +57,7 @@ class CounterLog {
     timer_.expires_after(kCounterInterval);
     timer_.async_wait([this](const boost::system::error_code& error) {
       if (error) {
-        return;  // Cancelled: the engine is stopping.
+        return;  // Cancelled: the timer is being destroyed.
       }
       const openscope::LiveCounters now = live_->counters();
       if (now != logged_) {
@@ -98,7 +98,7 @@ int run(std::span<char*> arguments, openscope::JsonLog& log) {
   std::optional<openscope::ScpiServer> server;
   std::optional<openscope::LivePipeline> live;
   // Caught from here on, so a signal while the engine starts still stops it cleanly: io.run()
-  // handles it at once, by when the pipeline runs.
+  // handles it at once, and only once the pipeline below runs, so `stopping` always has its counts.
   boost::asio::signal_set signals(io, SIGINT, SIGTERM);
   signals.async_wait([&](const auto& error, int signal) {
     if (!error) {

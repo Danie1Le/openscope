@@ -15,9 +15,9 @@ namespace openscope {
 
 /// What live mode has lost so far, as the engine reports it (spec #1 story 41, NFR-1).
 struct LiveCounters {
-  /// LivePipeline::dropped_blocks.
+  /// Dropped blocks (GLOSSARY): blocks lost because processing fell behind (dropped_blocks()).
   std::uint64_t dropped_blocks = 0;
-  /// LivePipeline::skipped_samples.
+  /// Skipped samples (GLOSSARY): released by the wall clock, never acquired (skipped_samples()).
   std::uint64_t skipped_samples = 0;
   /// Instrument::discarded_captures: captures that would have spanned a dropped block.
   std::uint64_t discarded_captures = 0;
