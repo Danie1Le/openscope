@@ -164,7 +164,7 @@ An armed Single is the pending operation that `*OPC?` and `*WAI` wait for. Nothi
 
 ### Consistency model
 
-Lines of different Sessions run at the same time, on up to four threads, so one client's long line (bulk `WAV:DATA?` or `FFT:DATA?`) does not hold up another client's commands; only while four clients run long lines at once does a fifth client's line wait for one of them. Each command is atomic, but a line is not: another Session's command may run between two commands of one line, as it may between two lines (the one exception is the rest of a line `*OPC?` or `*WAI` held, see [Run control](#run-control)).
+Lines of different Sessions run at the same time, each Session on a thread of its own, so one client's long line (bulk `WAV:DATA?` or `FFT:DATA?`) never holds up another client's commands. Each command is atomic, but a line is not: another Session's command may run between two commands of one line, as it may between two lines (the one exception is the rest of a line `*OPC?` or `*WAI` held, see [Run control](#run-control)).
 
 Every query of capture data reads the latest capture at the moment it runs. In the Running run state, two queries, even on one line, may read two different captures. To query one capture several times, take it with `SINGle;*OPC?` and then send the queries: the instrument is Stopped, so the latest capture no longer changes until the next `RUN` or `SINGle` (or `*RST`, which drops it).
 
