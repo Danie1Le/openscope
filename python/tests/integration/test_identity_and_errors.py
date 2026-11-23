@@ -9,6 +9,8 @@ from engine_helpers import (
     NO_SIGNAL,
     NOT_A_NUMBER,
     REJECTED_LINES,
+    STALE,
+    read_channel,
     scpi_error,
     take_capture,
 )
@@ -28,10 +30,7 @@ def test_identify_names_the_instrument(scope):
     ("line", "error"), REJECTED_LINES, ids=[str(e.code) for _, e in REJECTED_LINES]
 )
 def test_a_rejected_command_raises_its_code_and_message(scope, line, error):
-    with pytest.raises(ScpiError) as raised:
-        scope.write(line)
-
-    assert raised.value.errors == (error,)
+    assert scpi_error(lambda: scope.write(line)).errors == (error,)
     assert scope.next_error() == NO_ERROR
 
 
@@ -49,22 +48,19 @@ def test_a_query_before_any_capture_raises_instead_of_waiting_for_a_reply(scope)
     # signal never reaches.
     scope.write("*RST;:TRIG:MODE NORM;LEV 100")
 
-    with pytest.raises(ScpiError) as raised:
-        scope.waveform.read()
+    raised = scpi_error(scope.waveform.read)
 
-    assert (raised.value.code, raised.value.message) == (-230, "Data corrupt or stale")
-    assert raised.value.reply is None
+    assert raised.errors == (STALE,)
+    assert raised.reply is None
     assert scope.trigger.mode == TriggerMode.NORMAL  # The client carries on.
 
 
 def test_a_query_of_a_channel_not_in_the_capture_raises_settings_conflict(scope):
     take_capture(scope)
-    scope.waveform.source = 2  # Channel 2 is off at *RST.
 
-    with pytest.raises(ScpiError, match="Settings conflict") as raised:
-        scope.waveform.read()
+    raised = scpi_error(lambda: read_channel(scope, 2))  # Channel 2 is off at *RST.
 
-    assert raised.value.code == -221
+    assert (raised.code, raised.message) == (-221, "Settings conflict")
 
 
 def test_a_measurement_with_no_signal_raises_its_status_and_carries_not_a_number(scope):

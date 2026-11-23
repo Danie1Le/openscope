@@ -42,13 +42,16 @@ TEST_F(UntriggeredDcFixture, AdvanceInStepsTakesAsManySamplesAsOneAdvance) {
 
   advance_in_steps(instrument, 25, 7);
 
+  // The capture of samples 20 to 29 completes at sample 29, exactly 5 samples on from 25.
   EXPECT_EQ(first_index(instrument), 10U);
-  instrument.advance(5);  // Samples 25 to 29 complete the next capture: the clock was at 25.
+  instrument.advance(4);
+  EXPECT_EQ(first_index(instrument), 10U);
+  instrument.advance(1);
   EXPECT_EQ(first_index(instrument), 20U);
 }
 
-TEST_F(InstrumentFixture, Float32ReplyIsTheDecodedBlock) {
-  session.send("ACQ:POIN 4;:SOUR1:FUNC DC;OFFS 0.5;:WAV:FORM REAL;:TRIG:POS 0");
+TEST_F(UntriggeredDcFixture, Float32ReplyIsTheDecodedBlock) {
+  session.send("ACQ:POIN 4;:SOUR1:OFFS 0.5;:WAV:FORM REAL");
   instrument.advance(4);
 
   EXPECT_EQ(float32_reply(session, "WAV:DATA?"), std::vector<float>(4, 0.5F));

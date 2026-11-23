@@ -139,8 +139,8 @@ class WaveformData:
 
     def times(self) -> tuple[float, ...]:
         """The time of each sample in seconds, 0 at the time-zero sample."""
-        rate, position = self.preamble.sample_rate, self.preamble.time_zero
-        return tuple((index - position) / rate for index in range(len(self.samples)))
+        rate, time_zero = self.preamble.sample_rate, self.preamble.time_zero
+        return tuple((index - time_zero) / rate for index in range(len(self.samples)))
 
 
 def _number(text: str) -> float:

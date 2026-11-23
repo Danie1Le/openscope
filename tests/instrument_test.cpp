@@ -19,6 +19,8 @@ namespace {
 using test::kInputBufferOverrunReply;
 using test::kNoErrorReply;
 using test::kParameterNotAllowedReply;
+using test::kQueueOverflowReply;
+using test::kSyntaxErrorReply;
 using test::kUndefinedHeaderReply;
 using test::ScpiSession;
 using testing::MatchesRegex;
@@ -168,7 +170,7 @@ TEST_F(InstrumentTest, SyntaxErrorAnywhereOnALineRunsNothingOnIt) {
   EXPECT_EQ(session.send("*CLS;*IDN?;SYST:ERR? 1,"), std::nullopt);
 
   EXPECT_EQ(session.next_error(), kUndefinedHeaderReply);
-  EXPECT_EQ(session.next_error(), R"(-102,"Syntax error")");
+  EXPECT_EQ(session.next_error(), kSyntaxErrorReply);
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 
@@ -198,7 +200,7 @@ TEST_F(InstrumentTest, FullErrorQueueKeepsTheOldestErrorsAndEndsWithQueueOverflo
   for (std::size_t i = 2; i < Session::kErrorQueueCapacity; ++i) {
     EXPECT_EQ(session.next_error(), kUndefinedHeaderReply) << "entry " << i;
   }
-  EXPECT_EQ(session.next_error(), R"(-350,"Queue overflow")");
+  EXPECT_EQ(session.next_error(), kQueueOverflowReply);
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
 
@@ -224,7 +226,7 @@ TEST_F(InstrumentTest, ErrorsAfterAnOverflowQueueBehindIt) {
   for (std::size_t i = 2; i < Session::kErrorQueueCapacity; ++i) {
     session.next_error();
   }
-  EXPECT_EQ(session.next_error(), R"(-350,"Queue overflow")");
+  EXPECT_EQ(session.next_error(), kQueueOverflowReply);
   EXPECT_EQ(session.next_error(), kParameterNotAllowedReply);
   EXPECT_EQ(session.next_error(), kNoErrorReply);
 }
