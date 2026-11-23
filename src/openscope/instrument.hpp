@@ -102,9 +102,10 @@ class Instrument {
   ///
   /// While an operation is pending (a Single is armed), `*OPC?` and `*WAI` hold the line, and
   /// `execute` returns. Once nothing is pending, the Instrument hands the rest of the line to the
-  /// Session's Resumer, as its own piece of work, after the reply of the call that ended the
-  /// operation (`advance`, `process`, or `execute` for any Session); the rest runs, and `on_reply`
-  /// is called, when that work runs. Until every line that operation released has ended or waits
+  /// Session's Resumer, as its own piece of work, as soon as the operation has ended: at the
+  /// capture in `advance` or `process`, or right after the `STOP`, `RUN` or `*RST` command of any
+  /// Session, before the rest of that command's line; the rest runs, and `on_reply` is called,
+  /// when that work runs. Until every line that operation released has ended or waits
   /// again, a command of any other Session that reads or changes instrument-wide state waits too,
   /// and its line carries on through its Resumer once they have, so the released lines see the
   /// instrument as the operation left it. There is no timeout. A transport waits for `on_reply`
@@ -222,7 +223,8 @@ class Instrument {
   void discard_capture() { ++generation_; }
 
   /// Registers `command` with its handler run under mutex_: every command that reads or changes
-  /// instrument-wide state.
+  /// instrument-wide state. While released lines settle it waits instead (Hold::again); when it
+  /// ends the operation, it releases the held lines in the same hold of the mutex.
   void add_command(scpi::Command command);
   /// Registers `command` to run without mutex_: only a command that touches nothing but its own
   /// Session, the latest capture (an atomic load) and the caches, so the costly part of a query
@@ -321,8 +323,8 @@ class Instrument {
   /// Deals with `line` once it has run as far as it can: keeps it while an operation is pending
   /// (held by `*OPC?`) or while released lines settle (a command waiting for them), carries it on
   /// at once when that ended since the command looked, or, once it has ended, passes its reply to
-  /// its handler and hands on the lines it set going (it ended an operation, or was the last
-  /// released line to settle). Takes mutex_ itself.
+  /// its handler and, when it was the last released line to settle, hands on the lines that
+  /// waited for that. Takes mutex_ itself.
   void finish(RunningLine line);
   /// For finish: keeps the held `line` (moving it into held_ or waiting_) while what it waits for
   /// lasts, and returns the released lines that keeping it settled; nullopt when it is already

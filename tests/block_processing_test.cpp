@@ -7,19 +7,20 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <format>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
-#include <utility>
 #include <vector>
 
 #include "instrument_fixture.hpp"
 #include "openscope/acquired_block.hpp"
 #include "openscope/capture.hpp"
 #include "openscope/instrument.hpp"
+#include "openscope/measurement.hpp"
 #include "scpi_session.hpp"
 
 namespace openscope {
@@ -37,11 +38,6 @@ using BlockProcessingTest = test::UntriggeredDcFixture;
 /// Normal trigger mode, time zero at the first sample and ten-sample captures: each capture is
 /// placed by one trigger event.
 constexpr auto kNormalTenSamples = "TRIG:MODE NORM;POS 0;:ACQ:POIN 10";
-
-/// A Resumer that keeps the work it is handed in `handed`, for the test to run when it likes.
-Resumer keeping_in(std::vector<std::function<void()>>& handed) {
-  return [&handed](std::function<void()> work) { handed.push_back(std::move(work)); };
-}
 
 // The two halves together make the same captures as stepping the clock, whatever the block size.
 TEST(BlockProcessingStepTest, ProcessingAcquiredBlocksGivesTheCapturesAdvanceGives) {
@@ -194,7 +190,7 @@ TEST_F(BlockProcessingTest, SingleCaptureEndsTheHeldLineAndStops) {
 // Resumer as a piece of work of its own, so held bulk lines never run back to back in one call.
 TEST_F(BlockProcessingTest, SingleCaptureHandsEachHeldLineToItsResumerAsItsOwnWork) {
   std::vector<std::function<void()>> handed;
-  const Resumer queue = keeping_in(handed);
+  const Resumer queue = test::keeping_in(handed);
   ScpiSession first(instrument, queue);
   ScpiSession second(instrument, queue);
   const auto first_reply = first.start("SINGle;*OPC?;:WAV:SOUR?");
@@ -217,7 +213,7 @@ TEST_F(BlockProcessingTest, SingleCaptureHandsEachHeldLineToItsResumerAsItsOwnWo
 // reads are still those of the Single's capture alone. Queries of a capture do not wait.
 TEST_F(BlockProcessingTest, CommandsOfOtherSessionsWaitUntilTheHeldLinesHaveCarriedOn) {
   std::vector<std::function<void()>> handed;
-  ScpiSession waiting(instrument, keeping_in(handed));
+  ScpiSession waiting(instrument, test::keeping_in(handed));
   const auto reply = waiting.start("MEAS:STAT:RES;:SING;*OPC?;:MEAS:STAT? VAV,CHAN1");
   instrument.process(acquired(instrument, kResetRecordLength));
   ScpiSession other(instrument);
@@ -233,11 +229,35 @@ TEST_F(BlockProcessingTest, CommandsOfOtherSessionsWaitUntilTheHeldLinesHaveCarr
   EXPECT_EQ(waiting.next_error(), test::kNoErrorReply);
 }
 
+// Until a released line has carried on, no other Session's command that takes the Instrument's
+// mutex can run: it waits. So the bulk queries replying now shows they take no lock, and one
+// client's bulk data never stalls another's commands or acquisition (#68 review).
+TEST_F(BlockProcessingTest, BulkDataQueriesTakeNoLock) {
+  std::vector<std::function<void()>> handed;
+  ScpiSession waiting(instrument, test::keeping_in(handed));
+  const auto reply = waiting.start("SINGle;*OPC?");
+  instrument.process(acquired(instrument, kResetRecordLength));
+  ASSERT_EQ(handed.size(), 1U);
+  std::vector<std::string> queries = {"WAV:DATA?", "WAV:PRE?", "FFT:DATA?", "FFT:SPAC?",
+                                      "*IDN?",     "SYST:ERR?"};
+  for (const Measurement& measurement : measurements()) {
+    queries.push_back(std::format("MEAS:{}? CHAN1", measurement.mnemonic));
+  }
+  for (const std::string& query : queries) {
+    // A Session each, so one that waits does not hold up the next.
+    EXPECT_TRUE(ScpiSession(instrument).start(query)->ended) << query;
+  }
+  EXPECT_FALSE(ScpiSession(instrument).start("ACQ:POIN?")->ended);  // One that takes it waits.
+
+  handed.front()();
+  EXPECT_EQ(reply->text, "1");
+}
+
 // A client that disconnects after its line was handed on, before the work ran, has gone: the
 // rest of its line does not run.
 TEST_F(BlockProcessingTest, HandedLineOfASessionClosedSinceDoesNotRun) {
   std::vector<std::function<void()>> handed;
-  ScpiSession leaving(instrument, keeping_in(handed));
+  ScpiSession leaving(instrument, test::keeping_in(handed));
   const auto reply = leaving.start("SINGle;*OPC?;:SOUR1:FREQ 2000");
   instrument.process(acquired(instrument, kResetRecordLength));
   ASSERT_EQ(handed.size(), 1U);

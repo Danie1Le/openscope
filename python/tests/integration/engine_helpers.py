@@ -1,5 +1,6 @@
 """Helpers shared by the tests against the engine."""
 
+import socket
 import time
 from collections.abc import Callable
 from typing import Any
@@ -48,6 +49,10 @@ LONGEST_RECORD = 1048576
 #: Seconds to wait for the engine to start, stop, log an event or reach a state.
 PATIENCE = 20.0
 
+#: Seconds to wait for a 4 KB line of ASCII `WAV:DATA?` at the longest record: under 1 s on a
+#: release engine, far longer on a sanitizer build.
+BULK_PATIENCE = 180.0
+
 #: How many of its newest log events the `engine` fixture keeps: far more than a test reads or
 #: waits on, and bounded however long the engine runs (the soak logs two per connection, #65).
 KEPT_EVENTS = 1000
@@ -66,6 +71,23 @@ CLOCK_FREQUENCY = 1.0
 #: milliseconds a restarted trigger takes to see the signal and fill its pre-trigger samples at
 #: 1 MS/s, or a short fault takes to end.
 SETTLE = 0.1
+
+
+def plain_reply(connection: socket.socket) -> bytes:
+    """Reads one reply, which must hold no block, to its `\\n`, doing no more in Python per chunk
+    than a socket read. Parsing 57 MB of ASCII in this process, as the client does, holds the GIL
+    for tenths of a second and would delay a thread a test times."""
+    chunks = [connection.recv(1 << 20)]
+    while not chunks[-1].endswith(b"\n"):
+        chunks.append(connection.recv(1 << 20))
+        assert chunks[-1], "the engine closed the connection"
+    return b"".join(chunks)[:-1]
+
+
+def plain_query(connection: socket.socket, line: str) -> bytes:
+    """Sends `line` and returns its reply as plain_reply reads it."""
+    connection.sendall(f"{line}\n".encode())
+    return plain_reply(connection)
 
 
 def eventually(check: Callable[[], bool]) -> None:
