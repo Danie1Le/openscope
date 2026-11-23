@@ -132,8 +132,12 @@ class RawSession:
 
     def query(self, line: str) -> str:
         """Sends `line` and returns its reply."""
+        return self.query_bytes(line).decode()
+
+    def query_bytes(self, line: str) -> bytes:
+        """Sends `line` and returns its reply as bytes, for replies that hold binary blocks."""
         self._stream.write(f"{line}\n".encode())
-        return self._stream.read_response().decode()
+        return self._stream.read_response()
 
     def next_error(self) -> ErrorEntry | None:
         """The oldest entry of the Session's error queue (None if the reply is not one)."""

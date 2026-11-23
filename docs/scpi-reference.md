@@ -22,7 +22,7 @@ The engine serves SCPI over TCP on `127.0.0.1:5025` by default (PyVISA resource 
 
 - A line is one program message. The transport ends it with `\n`, optionally preceded by `\r`; neither is part of the line.
 - A line holds at most 4096 bytes, not counting the terminator. A longer line is not parsed or run at all: it only queues `-363,"Input buffer overrun"`.
-- A line's reply holds at most 64 MiB (67 108 864 bytes), not counting the terminator: the replies of its queries joined with `;` (see [Several commands on one line](#several-commands-on-one-line)). A query whose reply would take it past that queues `-223,"Too much data"` and replies nothing; like any execution error it stops the line, and the replies before it are returned. One `WAV:DATA?` or `FFT:DATA?` of the longest record is at most 16 MiB (ASCII), so only a line of several of them reaches the limit. The Python client reads replies of up to the same 64 MiB.
+- A line's reply holds at most 64 MiB (67 108 864 bytes), not counting the terminator: the replies of its queries joined with `;` (see [Several commands on one line](#several-commands-on-one-line)). A query whose reply would take it past that queues `-223,"Too much data"` and its reply is dropped (a status entry a measurement query queued before it stays on the queue); like any execution error it stops the line, and the replies before it are returned. One `WAV:DATA?` of the longest record is at most 16 MiB (ASCII) and one `FFT:DATA?` about 2 MiB, so only a line of several of them reaches the limit. The Python client reads replies of up to the same 64 MiB.
 - An empty line, or one holding only white space, does nothing.
 
 ## Headers
