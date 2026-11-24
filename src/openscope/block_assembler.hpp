@@ -7,6 +7,7 @@
 
 #include "openscope/acquired_block.hpp"
 #include "openscope/capture.hpp"
+#include "openscope/capture_assembler.hpp"
 
 namespace openscope {
 

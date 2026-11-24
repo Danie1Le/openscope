@@ -16,7 +16,9 @@
 
 #include "openscope/acquired_block.hpp"
 #include "openscope/capture.hpp"
+#include "openscope/capture_assembler.hpp"
 #include "openscope/channel.hpp"
+#include "openscope/completed_capture.hpp"
 #include "openscope/generator.hpp"
 #include "openscope/measurement.hpp"
 #include "openscope/measurement_statistics.hpp"
@@ -292,8 +294,7 @@ std::optional<AcquiredBlock> Instrument::acquire(std::size_t count) {
     throw std::invalid_argument("sample block longer than kMaxBlockLength");
   }
   std::unique_lock lock(mutex_);
-  const SampleIndex first = clock_.now();
-  clock_.take(count);
+  const SampleIndex first = clock_.take(count);
   std::optional<AcquiredBlock> block = snapshot();
   if (!block) {
     return std::nullopt;
@@ -412,9 +413,9 @@ std::optional<AcquiredBlock> Instrument::snapshot() {
                        .sequence = next_sequence_++};
 }
 
-std::optional<Instrument::CompletedCapture> Instrument::publish(
-    const AcquiredBlock& block, const std::shared_ptr<const Capture>& capture,
-    const std::optional<CaptureResults>& results) {
+std::optional<CompletedCapture> Instrument::publish(const AcquiredBlock& block,
+                                                    const std::shared_ptr<const Capture>& capture,
+                                                    const std::optional<CaptureResults>& results) {
   // A command since the block was acquired has discarded what it belongs to: its capture would
   // show settings older than that command.
   if (block.generation != generation_) {

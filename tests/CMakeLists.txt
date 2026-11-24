@@ -3,8 +3,8 @@ find_package(Threads REQUIRED)
 include(GoogleTest)
 
 add_executable(openscope_tests acquisition_test.cpp ascii_test.cpp block_assembler_test.cpp
-  block_processing_test.cpp capture_test.cpp command_tree_test.cpp engine_options_test.cpp
-  engine_test.cpp
+  block_processing_test.cpp capture_assembler_test.cpp capture_cache_test.cpp capture_test.cpp
+  command_tree_test.cpp engine_options_test.cpp engine_test.cpp
   fault_command_test.cpp fault_test.cpp fft_commands_test.cpp fft_test.cpp generator_test.cpp
   instrument_test.cpp json_log_test.cpp live_pipeline_test.cpp measurement_statistics_test.cpp
   measurement_test.cpp measuring_queue_test.cpp pacer_test.cpp phase_test.cpp

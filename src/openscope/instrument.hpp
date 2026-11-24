@@ -19,6 +19,7 @@
 #include "openscope/block_assembler.hpp"
 #include "openscope/capture.hpp"
 #include "openscope/channel.hpp"
+#include "openscope/completed_capture.hpp"
 #include "openscope/generator.hpp"
 #include "openscope/measurement.hpp"
 #include "openscope/measurement_statistics.hpp"
@@ -131,17 +132,6 @@ class Instrument {
   /// waits for a block to be sampled. Throws std::invalid_argument when `count` exceeds
   /// kMaxBlockLength.
   [[nodiscard]] std::optional<AcquiredBlock> acquire(std::size_t count);
-
-  /// A capture `process` has published but not yet counted, with the statistics reset it
-  /// completed after: what `count_measured` needs to count it later, on another thread.
-  struct CompletedCapture {
-    std::shared_ptr<const Capture> capture;
-    /// How many statistics resets came before the capture completed (statistics_epoch_).
-    std::uint64_t statistics_epoch = 0;
-  };
-
-  /// Takes each capture `process` publishes, in order, for `count_measured`.
-  using CaptureHandOff = std::function<void(CompletedCapture completed)>;
 
   /// Live mode's processing half: assembles `block`, from `acquire`, into captures without the
   /// mutex that commands take. Each capture becomes the latest capture as it completes, in one

@@ -7,7 +7,7 @@
 #include <utility>
 
 #include "openscope/capture.hpp"
-#include "openscope/instrument.hpp"
+#include "openscope/completed_capture.hpp"
 
 namespace openscope {
 namespace {
@@ -23,7 +23,7 @@ std::size_t samples_in(const Capture& capture) {
 
 }  // namespace
 
-bool MeasuringQueue::push(Instrument::CompletedCapture completed, const std::stop_token& stop) {
+bool MeasuringQueue::push(CompletedCapture completed, const std::stop_token& stop) {
   const std::size_t samples = samples_in(*completed.capture);
   std::unique_lock lock(mutex_);
   const bool room = changed_.wait(lock, stop, [&] {
@@ -45,7 +45,7 @@ bool MeasuringQueue::push(Instrument::CompletedCapture completed, const std::sto
   return true;
 }
 
-std::optional<Instrument::CompletedCapture> MeasuringQueue::front(const std::stop_token& stop) {
+std::optional<CompletedCapture> MeasuringQueue::front(const std::stop_token& stop) {
   std::unique_lock lock(mutex_);
   if (!changed_.wait(lock, stop, [&] { return !captures_.empty(); })) {
     return std::nullopt;
