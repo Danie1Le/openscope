@@ -390,13 +390,15 @@ std::optional<double> positive_duty_cycle(const MeasuredSignal& signal) {
   return 100.0 * cycles->high / cycles->length;
 }
 
-/// The mean time `edges` take from one outer reference level to the other, in seconds at
-/// `sample_rate`, or nullopt when there is no such edge.
-std::optional<double> mean_edge_duration(const EdgeDurations& edges, double sample_rate) {
+/// The mean time the `kEdges` edges of `signal` (rising or falling) take from one outer reference
+/// level to the other, in seconds, or nullopt when there is no such edge.
+template <EdgeDurations RiseFallDurations::*kEdges>
+std::optional<double> mean_edge_duration(const MeasuredSignal& signal) {
+  const EdgeDurations& edges = signal.rise_fall().*kEdges;
   if (edges.count == 0) {
     return std::nullopt;
   }
-  return edges.total / static_cast<double>(edges.count) / sample_rate;
+  return edges.total / static_cast<double>(edges.count) / signal.sample_rate();
 }
 
 constexpr std::array kMeasurements{
@@ -429,14 +431,10 @@ constexpr std::array kMeasurements{
     Measurement{.mnemonic = "PERiod", .measure = period, .needs_signal = true},
     Measurement{.mnemonic = "DUTYcycle", .measure = positive_duty_cycle, .needs_signal = true},
     Measurement{.mnemonic = "RISetime",
-                .measure = [](const MeasuredSignal& signal) -> std::optional<double> {
-                  return mean_edge_duration(signal.rise_fall().rising, signal.sample_rate());
-                },
+                .measure = mean_edge_duration<&RiseFallDurations::rising>,
                 .needs_signal = true},
     Measurement{.mnemonic = "FALLtime",
-                .measure = [](const MeasuredSignal& signal) -> std::optional<double> {
-                  return mean_edge_duration(signal.rise_fall().falling, signal.sample_rate());
-                },
+                .measure = mean_edge_duration<&RiseFallDurations::falling>,
                 .needs_signal = true},
 };
 
