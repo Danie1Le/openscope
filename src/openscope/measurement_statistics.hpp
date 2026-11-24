@@ -5,20 +5,11 @@
 #include <optional>
 #include <vector>
 
-#include "openscope/capture.hpp"
 #include "openscope/channel.hpp"
 #include "openscope/measurement.hpp"
 #include "openscope/running_statistics.hpp"
 
 namespace openscope {
-
-/// Every measurement of every channel of one capture: indexed by channel number - 1, then by
-/// position in measurements(); nullopt for a channel that is not in the capture.
-using CaptureResults = std::array<std::optional<std::vector<MeasurementResult>>, kChannelCount>;
-
-/// Every measurement of every channel in `capture`. It reads nothing but `capture` and keeps no
-/// state, so any thread may call it without a lock.
-CaptureResults measure_all(const Capture& capture);
 
 /// One measurement of one channel across the captures since the last statistics reset.
 struct MeasurementSeries {

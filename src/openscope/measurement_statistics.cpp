@@ -2,33 +2,13 @@
 
 #include <cstddef>
 #include <optional>
-#include <span>
 #include <stdexcept>
 #include <vector>
 
-#include "openscope/capture.hpp"
 #include "openscope/channel.hpp"
 #include "openscope/measurement.hpp"
 
 namespace openscope {
-
-CaptureResults measure_all(const Capture& capture) {
-  const std::span<const Measurement> all = measurements();
-  CaptureResults results;
-  for (std::size_t n = 0; n < kChannelCount; ++n) {
-    if (const std::optional<CapturedChannel>& channel = capture.channels.at(n)) {
-      const MeasuredSignal signal{.samples = channel->samples,
-                                  .levels = find_levels(channel->samples),
-                                  .sample_rate = capture.sample_rate};
-      std::vector<MeasurementResult>& channel_results = results.at(n).emplace();
-      channel_results.reserve(all.size());
-      for (const Measurement& measurement : all) {
-        channel_results.push_back(evaluate(measurement, channel->settings, signal));
-      }
-    }
-  }
-  return results;
-}
 
 void MeasurementSeries::add(const MeasurementResult& result) {
   current = result;

@@ -275,14 +275,15 @@ double crossing_before(std::span<const float> samples, std::size_t reached, doub
 /// capture that starts inside the band has no edge until the signal first passes one of its
 /// levels: which side it came from is unknown.
 std::vector<Edge> find_edges(const MeasuredSignal& signal, Band band) {
-  const double lower = level_at(signal.levels, band.lower);
-  const double upper = level_at(signal.levels, band.upper);
-  const double middle = level_at(signal.levels, 0.5);
+  const double lower = level_at(signal.levels(), band.lower);
+  const double upper = level_at(signal.levels(), band.upper);
+  const double middle = level_at(signal.levels(), 0.5);
+  const std::span<const float> samples = signal.samples();
   enum class Side : std::uint8_t { kUnknown, kLow, kHigh };
   Side side = Side::kUnknown;
   std::vector<Edge> edges;
-  for (std::size_t index = 0; index < signal.samples.size(); ++index) {
-    const double sample = signal.samples[index];
+  for (std::size_t index = 0; index < samples.size(); ++index) {
+    const double sample = samples[index];
     Side now = side;
     if (sample < lower) {
       now = Side::kLow;
@@ -293,7 +294,7 @@ std::vector<Edge> find_edges(const MeasuredSignal& signal, Band band) {
       const bool rising = now == Side::kHigh;
       const auto [start, far] = rising ? std::pair{lower, upper} : std::pair{upper, lower};
       const auto crossing = [&](double level) {
-        return crossing_before(signal.samples, index, level, rising ? 1.0 : -1.0);
+        return crossing_before(samples, index, level, rising ? 1.0 : -1.0);
       };
       edges.push_back({.direction = rising ? Edge::Direction::kRising : Edge::Direction::kFalling,
                        .middle = crossing(middle),
@@ -303,17 +304,6 @@ std::vector<Edge> find_edges(const MeasuredSignal& signal, Band band) {
   }
   return edges;
 }
-
-/// The whole cycles of a signal, each from one edge's 50% crossing to the next crossing in the same
-/// direction.
-struct WholeCycles {
-  /// The edges from the first one to the last that ends a whole cycle.
-  std::vector<Edge> edges;
-  /// How many whole cycles they bound.
-  std::size_t count;
-  /// Sample periods from the first edge's 50% crossing to the last one's.
-  double length;
-};
 
 /// Whether `signal` crossed kDoubtBand and back, between the first and the last of `edges` (its
 /// edges across kCycleBand), for at least `shortest` sample periods.
@@ -348,7 +338,7 @@ bool crossed_doubt_band_and_back(const MeasuredSignal& signal, std::span<const E
 
 /// The whole cycles in `signal`, or nullopt when there is not one or they are not known: the signal
 /// crossed kDoubtBand and back between two edges across kCycleBand for long enough to be a cycle.
-std::optional<WholeCycles> whole_cycles(const MeasuredSignal& signal) {
+std::optional<WholeCycles> find_whole_cycles(const MeasuredSignal& signal) {
   std::vector<Edge> edges = find_edges(signal, kCycleBand);
   if (edges.size() < 3) {
     return std::nullopt;
@@ -360,73 +350,77 @@ std::optional<WholeCycles> whole_cycles(const MeasuredSignal& signal) {
                                   kDoubtfulCycleShare * length / static_cast<double>(count))) {
     return std::nullopt;
   }
-  return WholeCycles{.edges = std::move(edges), .count = count, .length = length};
-}
-
-/// The mean period of the whole cycles in `signal`, in seconds, or nullopt under one whole cycle.
-std::optional<double> period(const MeasuredSignal& signal) {
-  const std::optional<WholeCycles> cycles = whole_cycles(signal);
-  if (!cycles) {
-    return std::nullopt;
-  }
-  return cycles->length / static_cast<double>(cycles->count) / signal.sample_rate;
-}
-
-/// The percentage of the whole cycles in `signal` spent above the 50% level, or nullopt under one
-/// whole cycle.
-std::optional<double> positive_duty_cycle(const MeasuredSignal& signal) {
-  const std::optional<WholeCycles> cycles = whole_cycles(signal);
-  if (!cycles) {
-    return std::nullopt;
-  }
-  const std::vector<Edge>& edges = cycles->edges;
   double high = 0.0;
   for (std::size_t edge = 0; edge + 1 < edges.size(); ++edge) {
     if (edges[edge].direction == Edge::Direction::kRising) {
       high += edges[edge + 1].middle - edges[edge].middle;
     }
   }
-  return 100.0 * high / cycles->length;
+  return WholeCycles{.count = count, .length = length, .high = high};
 }
 
-/// The mean time the edges in `kDirection` in `signal` take from one outer reference level to the
-/// other, in seconds, or nullopt when there is no such edge.
-template <Edge::Direction kDirection>
-std::optional<double> transition_time(const MeasuredSignal& signal) {
-  double total = 0.0;
-  std::size_t count = 0;
+/// The complete edges of `signal` across kRiseFallBand, by direction.
+RiseFallDurations find_rise_fall(const MeasuredSignal& signal) {
+  RiseFallDurations durations;
   for (const Edge& edge : find_edges(signal, kRiseFallBand)) {
-    if (edge.direction == kDirection) {
-      total += edge.duration;
-      ++count;
-    }
+    EdgeDurations& same_direction =
+        edge.direction == Edge::Direction::kRising ? durations.rising : durations.falling;
+    same_direction.total += edge.duration;
+    ++same_direction.count;
   }
-  if (count == 0) {
+  return durations;
+}
+
+/// The mean period of the whole cycles in `signal`, in seconds, or nullopt under one whole cycle.
+std::optional<double> period(const MeasuredSignal& signal) {
+  const std::optional<WholeCycles>& cycles = signal.whole_cycles();
+  if (!cycles) {
     return std::nullopt;
   }
-  return total / static_cast<double>(count) / signal.sample_rate;
+  return cycles->length / static_cast<double>(cycles->count) / signal.sample_rate();
+}
+
+/// The percentage of the whole cycles in `signal` spent above the 50% level, or nullopt under one
+/// whole cycle.
+std::optional<double> positive_duty_cycle(const MeasuredSignal& signal) {
+  const std::optional<WholeCycles>& cycles = signal.whole_cycles();
+  if (!cycles) {
+    return std::nullopt;
+  }
+  return 100.0 * cycles->high / cycles->length;
+}
+
+/// The mean time the `kEdges` edges of `signal` (rising or falling) take from one outer reference
+/// level to the other, in seconds, or nullopt when there is no such edge.
+template <EdgeDurations RiseFallDurations::*kEdges>
+std::optional<double> mean_edge_duration(const MeasuredSignal& signal) {
+  const EdgeDurations& edges = signal.rise_fall().*kEdges;
+  if (edges.count == 0) {
+    return std::nullopt;
+  }
+  return edges.total / static_cast<double>(edges.count) / signal.sample_rate();
 }
 
 constexpr std::array kMeasurements{
     Measurement{.mnemonic = "VPP",
                 .measure = [](const MeasuredSignal& signal) -> std::optional<double> {
-                  return signal.levels.maximum - signal.levels.minimum;
+                  return signal.levels().maximum - signal.levels().minimum;
                 }},
     Measurement{.mnemonic = "VMIN",
                 .measure = [](const MeasuredSignal& signal) -> std::optional<double> {
-                  return signal.levels.minimum;
+                  return signal.levels().minimum;
                 }},
     Measurement{.mnemonic = "VMAX",
                 .measure = [](const MeasuredSignal& signal) -> std::optional<double> {
-                  return signal.levels.maximum;
+                  return signal.levels().maximum;
                 }},
     Measurement{.mnemonic = "VAVerage",
                 .measure = [](const MeasuredSignal& signal) -> std::optional<double> {
-                  return mean(signal.samples);
+                  return mean(signal.samples());
                 }},
     Measurement{.mnemonic = "VRMS",
                 .measure = [](const MeasuredSignal& signal) -> std::optional<double> {
-                  return root_mean_square(signal.samples);
+                  return root_mean_square(signal.samples());
                 }},
     Measurement{.mnemonic = "FREQuency",
                 .measure = [](const MeasuredSignal& signal) -> std::optional<double> {
@@ -437,20 +431,31 @@ constexpr std::array kMeasurements{
     Measurement{.mnemonic = "PERiod", .measure = period, .needs_signal = true},
     Measurement{.mnemonic = "DUTYcycle", .measure = positive_duty_cycle, .needs_signal = true},
     Measurement{.mnemonic = "RISetime",
-                .measure = transition_time<Edge::Direction::kRising>,
+                .measure = mean_edge_duration<&RiseFallDurations::rising>,
                 .needs_signal = true},
     Measurement{.mnemonic = "FALLtime",
-                .measure = transition_time<Edge::Direction::kFalling>,
+                .measure = mean_edge_duration<&RiseFallDurations::falling>,
                 .needs_signal = true},
 };
 
 }  // namespace
 
+MeasuredSignal::MeasuredSignal(std::span<const float> samples, double sample_rate)
+    : samples_(samples), levels_(find_levels(samples)), sample_rate_(sample_rate) {}
+
+const std::optional<WholeCycles>& MeasuredSignal::whole_cycles() const {
+  return whole_cycles_.get([this] { return find_whole_cycles(*this); });
+}
+
+const RiseFallDurations& MeasuredSignal::rise_fall() const {
+  return rise_fall_.get([this] { return find_rise_fall(*this); });
+}
+
 // No signal comes first, since a flat signal has no edges or cycles even when it is clipped flat
 // at a limit; Clipped only marks a value that exists.
 MeasurementResult evaluate(const Measurement& measurement, const ChannelSettings& settings,
                            const MeasuredSignal& signal) {
-  const SignalLevels& levels = signal.levels;
+  const SignalLevels& levels = signal.levels();
   if (measurement.needs_signal && levels.top - levels.base < kNoSignalDivisions * settings.scale) {
     return {.status = MeasurementStatus::kNoSignal, .value = std::nullopt};
   }
@@ -466,6 +471,21 @@ MeasurementResult evaluate(const Measurement& measurement, const ChannelSettings
 
 std::span<const Measurement> measurements() { return kMeasurements; }
 
+CaptureResults measure_all(const Capture& capture) {
+  CaptureResults results;
+  for (std::size_t n = 0; n < kChannelCount; ++n) {
+    if (const std::optional<CapturedChannel>& channel = capture.channels.at(n)) {
+      const MeasuredSignal signal(channel->samples, capture.sample_rate);
+      std::vector<MeasurementResult>& channel_results = results.at(n).emplace();
+      channel_results.reserve(kMeasurements.size());
+      for (const Measurement& measurement : kMeasurements) {
+        channel_results.push_back(evaluate(measurement, channel->settings, signal));
+      }
+    }
+  }
+  return results;
+}
+
 MeasurementResult MeasurementEngine::measure(const std::shared_ptr<const Capture>& capture,
                                              std::size_t channel, std::size_t measurement) {
   if (measurement >= kMeasurements.size()) {
@@ -475,10 +495,10 @@ MeasurementResult MeasurementEngine::measure(const std::shared_ptr<const Capture
   const auto channels = channels_.of(capture);
   ChannelResults& cached = channels->at(channel - 1);
   return cached.results.at(measurement).get([&] {
-    return evaluate(kMeasurements.at(measurement), captured.settings,
-                    {.samples = captured.samples,
-                     .levels = cached.levels.get([&] { return find_levels(captured.samples); }),
-                     .sample_rate = capture->sample_rate});
+    const std::unique_ptr<const MeasuredSignal>& signal = cached.signal.get([&] {
+      return std::make_unique<const MeasuredSignal>(captured.samples, capture->sample_rate);
+    });
+    return evaluate(kMeasurements.at(measurement), captured.settings, *signal);
   });
 }
 

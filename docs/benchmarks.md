@@ -204,3 +204,14 @@ The hosted runner is the CI benchmark job's (`ubuntu-24.04`, 4 CPUs; an AMD EPYC
 Singles at the longest record: the processing thread used to measure a Single's capture itself before ending the Single, about 115 ms during which acquisition, still armed, filled and overflowed the ring. Five Singles at 4 x 1M (`SING;*OPC?;:MEAS:STAT? VPP,CHAN1`, release engine, no other client) dropped 43, 46 and 45 blocks in three runs, and one run also discarded a capture. With the Single's capture measured on the measuring thread too, the same three runs dropped and discarded nothing, so NFR-1 now holds for Singles at the longest record as well as for Running; `LiveLongestRecordTest` asserts it for three Singles.
 
 Under TSan, `test_the_holdoff_spaces_the_trigger_events_of_captures` failed 31 of 48 runs before (12 loops of its 4 cases, twice: 31 both times) and 0 of 48 after. Its Single of a 100 000-point capture made the processing thread measure the Single's capture (110 ms under TSan) and then a second, stale capture assembled from the blocks acquired meanwhile (another 110 ms), so the first Running blocks after `RUN` overflowed the ring, the capture in progress was discarded and the trigger restarted, which cut a holdoff short. The processing thread now measures nothing in live mode, and a capture a command has discarded is never published, so never measured.
+
+### Edges found once per signal ([#81](https://github.com/Danie1Le/openscope/issues/81))
+
+FREQ, PER and DUTY each used to search a channel for whole cycles (two edge passes each), and RIS and FALL each searched it for edges: 8 passes over every channel of every capture. Each signal now finds them once, in 3 passes, and every measurement reads the shared figures. `measure_all` of one 4 x 1M capture (sine, square, triangle and ramp with 10 mV noise), timed 15 times on the release library (same machine and container as above, 2026-11-23, other builds sharing the machine):
+
+| `measure_all` of 4 x 1M | Min | Median | Max |
+|---|---|---|---|
+| Before (`main` at d9ebe79) | 99.5 ms | 100.6 ms | 104.8 ms |
+| After | 61.6 ms | 62.2 ms | 64.8 ms |
+
+Every one of the 40 results (10 measurements on 4 channels) has the same status and the same bits before and after. `live_run 20 1E6 1048576` dropped no block and discarded no capture before or after.

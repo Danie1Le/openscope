@@ -1,11 +1,28 @@
 #pragma once
 
+#include <gtest/gtest.h>
+
+#include <algorithm>
 #include <cstddef>
+#include <span>
+#include <string_view>
 #include <vector>
 
 #include "instrument_fixture.hpp"
+#include "openscope/measurement.hpp"
 
 namespace openscope::test {
+
+/// The position in measurements() of the measurement queried as `mnemonic`. Fails the test and
+/// returns measurements().size() when there is none.
+inline std::size_t measurement_index(std::string_view mnemonic) {
+  const std::span<const Measurement> all = measurements();
+  const auto found = std::ranges::find(all, mnemonic, &Measurement::mnemonic);
+  if (found == all.end()) {
+    ADD_FAILURE() << "no measurement " << mnemonic;
+  }
+  return static_cast<std::size_t>(found - all.begin());
+}
 
 /// `length` samples of a pulse train between 0 V and 1 V with a period of `period` samples: low for
 /// `period - high` samples, then high for `high`, starting `delay` samples (under `period`) late,
