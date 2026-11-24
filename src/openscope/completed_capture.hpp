@@ -17,7 +17,7 @@ struct CompletedCapture {
   std::uint64_t statistics_epoch = 0;
 };
 
-/// Takes each capture `Instrument::process` publishes, in order, for `count_measured`.
+/// Takes each capture `Instrument::process` publishes, in order, for `Instrument::count_measured`.
 using CaptureHandOff = std::function<void(CompletedCapture completed)>;
 
 }  // namespace openscope
