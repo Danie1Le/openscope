@@ -63,16 +63,17 @@ def area_totals(lines, areas=None):
     }
 
 
-def failing_areas(totals, threshold=THRESHOLD):
+def failing_areas(totals):
     """Names of the areas whose line coverage is below the threshold."""
-    return [area for area, (covered, total) in totals.items() if percent(covered, total) < threshold]
+    return [area for area, (covered, total) in totals.items() if percent(covered, total) < THRESHOLD]
 
 
-def summary(lines, totals):
-    """The per-area figures, the per-file breakdown and the summed figure, as text."""
+def summary(lines, totals, failed):
+    """The per-area figures, the per-file breakdown and the summed figure, as text; `failed`
+    names the areas below the threshold (failing_areas)."""
     out = [f"Line coverage by area (each must be at least {THRESHOLD:g}%):"]
     for area, (covered, total) in totals.items():
-        status = "ok" if percent(covered, total) >= THRESHOLD else "BELOW"
+        status = "BELOW" if area in failed else "ok"
         out.append(f"  {area}: {percent(covered, total):.2f}% ({covered} of {total} lines) {status}")
         for path in AREAS[area]:
             entry = lines[path]
@@ -113,11 +114,11 @@ def main():
         sys.exit(f"error: no coverage data for {', '.join(missing)}")
 
     totals = area_totals(lines)
-    text = summary(lines, totals)
+    failed = failing_areas(totals)
+    text = summary(lines, totals, failed)
     (BUILD / "coverage-report.txt").write_text(f"{report}\n{text}\n")
     print(report)
     print(text)
-    failed = failing_areas(totals)
     if failed:
         sys.exit(f"error: line coverage is below {THRESHOLD:g}% for: {', '.join(failed)}")
 

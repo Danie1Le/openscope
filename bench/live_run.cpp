@@ -8,7 +8,6 @@
 // out-of-range argument exits 2 with the usage; a setup the instrument rejects exits 1.
 
 #include <algorithm>
-#include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <exception>
@@ -19,14 +18,14 @@
 #include <ratio>
 #include <span>
 #include <string>
-#include <string_view>
-#include <system_error>
 #include <thread>
 
+#include "engine/parse_in_range.hpp"
 #include "openscope/capture.hpp"
 #include "openscope/instrument.hpp"
 #include "openscope/live_pipeline.hpp"
 #include "openscope/sample_clock.hpp"
+#include "openscope/scpi_error.hpp"
 
 namespace {
 
@@ -40,49 +39,27 @@ struct Options {
   std::size_t record_length = openscope::AcquisitionSettings{}.record_length;
 };
 
-/// `text` as a number in [low, high], all of it; nullopt for anything else (a sign, a suffix, a
-/// second value). Only numbers parsed this way reach the SCPI line, never the argument's text.
-template <typename Number>
-std::optional<Number> number_in(std::string_view text, Number low, Number high) {
-  Number value{};
-  const char* const end = std::to_address(text.cend());
-  const auto [stop, error] = std::from_chars(text.data(), end, value);
-  const bool whole = error == std::errc{} && stop == end;
-  if (!whole || !(value >= low && value <= high)) {  // NaN fails both comparisons.
-    return std::nullopt;
-  }
-  return value;
-}
-
-/// The options in `arguments`, or nullopt when there are too many or one is not valid.
+/// The options in `arguments`, or nullopt when there are too many or one is not valid. Only
+/// numbers parsed with parse_in_range reach the SCPI line, never the argument's text.
 std::optional<Options> options_from(std::span<char*> arguments) {
   Options options;
-  if (arguments.size() > 4) {
-    return std::nullopt;
-  }
-  if (arguments.size() > 1) {
-    const std::optional<int> seconds = number_in(arguments[1], 1, 86'400);
-    if (!seconds) {
-      return std::nullopt;
+  // Reads argument `index`, when given, into `field` if it is a number from `min` to `max`;
+  // false when it is given and is not.
+  const auto read = [&](std::size_t index, auto& field, auto min, auto max) {
+    if (index >= arguments.size()) {
+      return true;
     }
-    options.seconds = *seconds;
-  }
-  if (arguments.size() > 2) {
-    const std::optional<double> rate = number_in(arguments[2], 1.0, 1e9);
-    if (!rate) {
-      return std::nullopt;
+    const auto value = openscope::parse_in_range(arguments[index], min, max);
+    if (value) {
+      field = *value;
     }
-    options.sample_rate = *rate;
-  }
-  if (arguments.size() > 3) {
-    const std::optional<std::size_t> points =
-        number_in(arguments[3], std::size_t{1}, openscope::AcquisitionSettings::kMaxRecordLength);
-    if (!points) {
-      return std::nullopt;
-    }
-    options.record_length = *points;
-  }
-  return options;
+    return value.has_value();
+  };
+  const bool valid = arguments.size() <= 4 && read(1, options.seconds, 1, 86'400) &&
+                     read(2, options.sample_rate, 1.0, 1e9) &&
+                     read(3, options.record_length, std::size_t{1},
+                          openscope::AcquisitionSettings::kMaxRecordLength);
+  return valid ? std::optional(options) : std::nullopt;
 }
 
 /// Runs `line` and returns the error queue's first entry after it.
@@ -115,7 +92,7 @@ int run(std::span<char*> arguments) {
                   "0.01;:SOUR2:NOIS 0.01;:SOUR3:NOIS 0.01;:SOUR4:NOIS 0.01",
                   options.sample_rate, options.record_length));
   std::cout << "setup errors: " << error << '\n';
-  if (error != R"(0,"No error")") {
+  if (error != openscope::error_reply(openscope::kNoError)) {
     std::cerr << "live_run: the instrument rejected the setup\n";
     return 1;
   }

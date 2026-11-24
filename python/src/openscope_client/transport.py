@@ -10,8 +10,9 @@ from openscope_client.errors import ProtocolError
 #: The most bytes one response message may hold, its `\n` aside; a longer one raises
 #: ProtocolError before it is read. The longest reply OpenScope sends is `WAV:DATA?` in ASCII
 #: at the longest record: 1048576 points (`ACQuire:POINts` in docs/scpi-reference.md,
-#: `Capture::kMaxRecordLength` in src/openscope/capture.hpp), each at most 16 bytes with its
-#: comma (the shortest float32 form is at most 9 digits, a sign, a point and `E-38`): 16 MiB.
+#: `AcquisitionSettings::kMaxRecordLength` in src/openscope/capture.hpp), each at most 16 bytes
+#: with its comma (the shortest float32 form is at most 9 digits, a sign, a point and `E-38`):
+#: 16 MiB.
 #: REAL blocks take 4 bytes per point (4 MiB), `FFT:DATA?` 4 bytes per bin, at most half a
 #: record plus one (2 MiB). Four times the longest leaves room. The engine never sends more:
 #: a line whose joined replies would pass it gets `-223,"Too much data"` instead

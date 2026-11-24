@@ -5,7 +5,7 @@ so they must not share a mistake with it. No engine runs here."""
 import math
 
 import pytest
-from ground_truth import AMPLITUDES, NOISE_SHARE, Signal
+from ground_truth import AMPLITUDES, NOISE_SHARE, Signal, dbv
 
 from openscope_client import Function, Measurement
 
@@ -125,3 +125,9 @@ def test_approx_accepts_a_reading_within_the_tolerance_only():
     assert clean.approx(Measurement.FREQUENCY) == 2001.9
     assert clean.approx(Measurement.FREQUENCY) == 1998.1
     assert clean.approx(Measurement.FREQUENCY) != 2002.1
+
+
+def test_dbv_is_twenty_times_the_log_of_the_volts():
+    assert dbv(1.0) == 0.0
+    assert dbv(10.0) == pytest.approx(20.0)
+    assert dbv(1 / math.sqrt(2)) == pytest.approx(-3.0103, abs=1e-4)

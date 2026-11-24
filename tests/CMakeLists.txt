@@ -7,9 +7,9 @@ add_executable(openscope_tests acquisition_test.cpp ascii_test.cpp block_assembl
   command_tree_test.cpp engine_options_test.cpp engine_test.cpp
   fault_command_test.cpp fault_test.cpp fft_commands_test.cpp fft_test.cpp generator_test.cpp
   instrument_test.cpp json_log_test.cpp live_pipeline_test.cpp measurement_statistics_test.cpp
-  measurement_test.cpp measuring_queue_test.cpp pacer_test.cpp phase_test.cpp
-  reply_numbers_test.cpp response_test.cpp
-  run_control_test.cpp running_statistics_test.cpp scpi_server_test.cpp session_test.cpp
+  measurement_test.cpp measuring_queue_test.cpp pacer_test.cpp parse_in_range_test.cpp
+  phase_test.cpp reply_numbers_test.cpp response_test.cpp run_control_test.cpp
+  running_statistics_test.cpp scpi_server_test.cpp session_test.cpp
   settings_test.cpp spsc_ring_buffer_test.cpp statistics_commands_test.cpp test_helpers_test.cpp
   timing_measurement_test.cpp trigger_test.cpp waveform_test.cpp)
 target_link_libraries(openscope_tests PRIVATE openscope openscope_engine openscope_server

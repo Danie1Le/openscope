@@ -327,8 +327,8 @@ TEST_F(MeasurementTest, ChannelParameterIsRequiredAndChecked) {
 // is far above the float samples' rounding but below what summing the 2^20 samples in float
 // instead of double costs (whole cycles would hide that: their rounding errors cancel).
 TEST_F(MeasurementTest, LongestRecordIsMeasuredWhole) {
-  constexpr std::size_t kLongest = 1'048'576;
-  session.send("ACQ:POIN 1048576;:SOUR1:FREQ 10");
+  constexpr std::size_t kLongest = AcquisitionSettings::kMaxRecordLength;
+  session.send(std::format("ACQ:POIN {};:SOUR1:FREQ 10", kLongest));
   instrument.advance(kLongest);
 
   double sum = 0.0;

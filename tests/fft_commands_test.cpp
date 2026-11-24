@@ -56,9 +56,8 @@ class FftCommandsTest : public test::InstrumentFixture {
   /// returns the spectrum of the `FFT:SOUR` channel that `FFT:DATA?` replies under `window`. The
   /// trigger level is out of the sine's reach, so Auto completes the capture one record length in.
   std::vector<float> spectrum_of_sine(std::string_view frequency, std::string_view window) {
-    session.send(
-        std::format("ACQ:SRAT 1.024E6;POIN {};:TRIG:LEV 2;POS 0;:SOUR1:FREQ {};:FFT:WIND {}",
-                    kRecordLength, frequency, window));
+    session.send(std::format("ACQ:SRAT 1.024E6;POIN {};:{};:SOUR1:FREQ {};:FFT:WIND {}",
+                             kRecordLength, test::kUntriggeredCaptures, frequency, window));
     instrument.advance(kRecordLength);
     return float32_reply(session, "FFT:DATA?");
   }
@@ -185,7 +184,8 @@ TEST_F(FftCommandsTest, ARecordLengthOfOneGivesOneDcBin) {
 }
 
 TEST_F(FftCommandsTest, TheLongestRecordLengthGivesHalfAMillionBins) {
-  session.send(std::format("ACQ:POIN {};:TRIG:LEV 2;POS 0", AcquisitionSettings::kMaxRecordLength));
+  session.send(std::format("ACQ:POIN {};:{}", AcquisitionSettings::kMaxRecordLength,
+                           test::kUntriggeredCaptures));
   instrument.advance(AcquisitionSettings::kMaxRecordLength);
 
   EXPECT_EQ(float32_reply(session, "FFT:DATA?").size(),
@@ -201,7 +201,7 @@ TEST_F(FftCommandsTest, SilenceReadsTheFloorInEveryBin) {
 }
 
 TEST_F(FftCommandsTest, SpacingReportsTheSettingsTheCaptureWasTakenWith) {
-  session.send("ACQ:SRAT 2E6;POIN 4096;:TRIG:LEV 2;POS 0");
+  session.send(std::format("ACQ:SRAT 2E6;POIN 4096;:{}", test::kUntriggeredCaptures));
   instrument.advance(4096);
 
   session.send("ACQ:SRAT 5;POIN 7");

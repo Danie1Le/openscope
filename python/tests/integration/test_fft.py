@@ -9,18 +9,24 @@ import math
 import statistics
 
 import pytest
-from engine_helpers import TRANSFORM_LENGTH, take_capture
-from ground_truth import SAMPLE_RATE, Signal
+from engine_helpers import (
+    SETTINGS_CONFLICT,
+    TRANSFORM_LENGTH,
+    scpi_error,
+    spectrum_length,
+    take_capture,
+)
+from ground_truth import SAMPLE_RATE, Signal, dbv
 
-from openscope_client import Function, ScpiError, Window
+from openscope_client import Function, Window
 
 #: The tests transform TRANSFORM_LENGTH samples: every sample of a record that long, or the first
 #: of the `*RST` record of 10000. Bins of 1E6 / 8192 = 122.0703125 Hz.
 SPACING = SAMPLE_RATE / TRANSFORM_LENGTH
 #: The bin the tones sit on or next to.
 BIN = 82
-#: A 2 Vpp sine, 1 V peak, in dBV RMS: 20 log10(1 / sqrt(2)).
-SINE_LEVEL = 20 * math.log10(1 / math.sqrt(2))
+#: A 2 Vpp sine, 1 V peak, in dBV RMS.
+SINE_LEVEL = dbv(1 / math.sqrt(2))
 #: A level below every window's leakage that the tests check: dB.
 EMPTY = -100.0
 
@@ -55,7 +61,7 @@ def response(window: Window, offset: float) -> float:
         value * cmath.exp(2j * math.pi * offset * n / TRANSFORM_LENGTH)
         for n, value in enumerate(values)
     )
-    return 20 * math.log10(max(abs(total) / sum(values), 1e-300))
+    return dbv(max(abs(total) / sum(values), 1e-300))
 
 
 def spectrum_of(scope, frequency: float, window: Window) -> tuple[float, ...]:
@@ -72,7 +78,7 @@ def spectrum_of(scope, frequency: float, window: Window) -> tuple[float, ...]:
 def test_a_bin_centred_tone_reads_its_rms_level_and_spreads_as_its_window(scope, window):
     spectrum = spectrum_of(scope, BIN * SPACING, window)
 
-    assert len(spectrum) == TRANSFORM_LENGTH // 2 + 1
+    assert len(spectrum) == spectrum_length(TRANSFORM_LENGTH)
     assert max(range(len(spectrum)), key=spectrum.__getitem__) == BIN
     # The widest window spreads it over 7 bins. A bin the window leaves empty reads far under
     # -100 dB (the -300 floor, or rounding), so both sides are held at -100 there.
@@ -110,7 +116,7 @@ def test_a_dc_level_reads_its_voltage_in_the_first_bin(scope, window):
     scope.fft.window = window
     take_capture(scope)
 
-    assert scope.fft.spectrum()[0] == pytest.approx(20 * math.log10(0.5), abs=1e-4)
+    assert scope.fft.spectrum()[0] == pytest.approx(dbv(0.5), abs=1e-4)
 
 
 @pytest.mark.parametrize("window", list(Window))
@@ -143,8 +149,8 @@ def test_the_reset_record_length_uses_its_first_8192_samples(scope):
     assert last - first > 0.1  # Apart by far more than the tolerance below.
     assert scope.fft.bin_spacing() == SPACING
     spectrum = scope.fft.spectrum()
-    assert len(spectrum) == TRANSFORM_LENGTH // 2 + 1
-    assert spectrum[0] == pytest.approx(20 * math.log10(first), abs=1e-4)
+    assert len(spectrum) == spectrum_length(TRANSFORM_LENGTH)
+    assert spectrum[0] == pytest.approx(dbv(first), abs=1e-4)
 
 
 def test_fft_settings_belong_to_each_session(engine, open_client):
@@ -163,5 +169,6 @@ def test_the_spectrum_of_a_channel_not_in_the_capture_is_a_settings_conflict(sco
     take_capture(scope)
     scope.fft.source = 2  # Off at *RST.
 
-    with pytest.raises(ScpiError, match="Settings conflict"):
-        scope.fft.spectrum()
+    raised = scpi_error(scope.fft.spectrum)
+
+    assert (raised.code, raised.message) == SETTINGS_CONFLICT

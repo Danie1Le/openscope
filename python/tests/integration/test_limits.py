@@ -1,13 +1,19 @@
 """The server's protection limits: 4 KB lines, 64 MiB replies, 8 clients and the idle timeout
 (docs/scpi-reference.md, Connecting and Lines)."""
 
-import socket
 import threading
 import time
 from collections.abc import Callable
 
 import pytest
-from engine_helpers import BULK_PATIENCE, LONGEST_RECORD, PATIENCE, plain_query, scpi_error
+from engine_helpers import (
+    LONGEST_RECORD,
+    PATIENCE,
+    longest_capture_connection,
+    plain_query,
+    scpi_error,
+    spectrum_length,
+)
 from server_limits import INPUT_BUFFER_OVERRUN, MAX_CLIENTS, MAX_LINE, TOO_MUCH_DATA
 
 from openscope_client import TriggerMode
@@ -82,7 +88,7 @@ def waits_while(other: Callable[[str], str], line: Callable[[], object]) -> list
 def test_a_line_of_bulk_queries_stops_at_the_reply_limit_and_others_are_served(engine):
     bulk = engine.raw_session()
     assert bulk.query(f"ACQ:POIN {LONGEST_RECORD};:SING;*OPC?") == "1"
-    levels = 4 * (LONGEST_RECORD // 2 + 1)  # float32 bytes of the spectrum: 2 MiB.
+    levels = 4 * spectrum_length(LONGEST_RECORD)  # float32 bytes of the spectrum: 2 MiB.
     spectrum = len(f"#{len(str(levels))}{levels}") + levels  # As one IEEE 488.2 block.
     line = bulk_line("FFT:DATA?")
     replies: list[bytes] = []
@@ -100,9 +106,7 @@ def test_another_clients_commands_do_not_wait_for_a_bulk_line_to_be_formatted(en
     # About 3.5 ASCII blocks of 16 MiB fit the reply: 0.6 s of formatting, which no other client
     # waits for, since lines of different Sessions run in parallel.
     # The line may take a TSan engine most of a minute to format; only the other client is timed.
-    with socket.create_connection(("127.0.0.1", engine.port), timeout=BULK_PATIENCE) as bulk:
-        assert plain_query(bulk, f"ACQ:POIN {LONGEST_RECORD};:SING;*OPC?") == b"1"
-
+    with longest_capture_connection(engine.port) as bulk:
         waits = waits_while(
             engine.raw_session().query, lambda: plain_query(bulk, bulk_line("WAV:FORM ASC;DATA?"))
         )

@@ -629,7 +629,8 @@ bool single_capture_stays_latest() {
 
 // The processing thread publishes a Single's capture and ends the Single in one hold of the
 // mutex. With a gap between the two, a command that has already seen the capture could land in
-// it and leave the Single armed for a second capture (about 1 trial in 400 without the fix).
+// it and leave the Single armed for a second capture. Such a gap fails about 1 trial in 400, so
+// kTrials misses it in under 1 run in 1000.
 TEST(BlockProcessingRaceTest, CommandAfterASinglesCaptureFindsTheSingleEnded) {
   constexpr int kTrials = 3000;
   int second_captures = 0;

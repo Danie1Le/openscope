@@ -106,4 +106,11 @@ class UntriggeredDcFixture : public InstrumentFixture {
   UntriggeredDcFixture() { session.send(kUntriggeredDc); }
 };
 
+/// InstrumentFixture taking untriggered captures back to back (kUntriggeredCaptures), for tests
+/// that should not depend on trigger events: measurement and fault facade tests.
+class UntriggeredCapturesFixture : public InstrumentFixture {
+ protected:
+  void SetUp() override { session.send(kUntriggeredCaptures); }
+};
+
 }  // namespace openscope::test

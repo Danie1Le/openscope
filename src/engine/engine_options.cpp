@@ -2,18 +2,18 @@
 
 #include <boost/asio/ip/address.hpp>
 #include <boost/system/detail/error_code.hpp>
-#include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <format>
 #include <limits>
-#include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <tuple>
+
+#include "engine/parse_in_range.hpp"
 
 namespace openscope {
 
@@ -29,13 +29,12 @@ constexpr std::chrono::seconds::rep kMaxIdleTimeout = 86400;
 /// `text` as a whole number from `min` to `max`. Throws std::invalid_argument naming `option`.
 template <typename Number>
 Number parse_number(std::string_view option, std::string_view text, Number min, Number max) {
-  Number value{};
-  const auto [end, error] = std::from_chars(text.data(), std::to_address(text.end()), value);
-  if (error != std::errc() || end != std::to_address(text.end()) || value < min || value > max) {
+  const std::optional<Number> value = parse_in_range(text, min, max);
+  if (!value) {
     throw std::invalid_argument(
         std::format("{} takes a whole number from {} to {}, not '{}'", option, min, max, text));
   }
-  return value;
+  return *value;
 }
 
 /// `text` if it is an IP address, as ScpiServer reads it. Throws std::invalid_argument naming

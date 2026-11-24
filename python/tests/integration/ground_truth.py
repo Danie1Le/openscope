@@ -134,6 +134,11 @@ class Signal:
         return replace(self, noise=NOISE_SHARE * self.amplitude)
 
 
+def dbv(volts: float) -> float:
+    """`volts` RMS in dBV, the unit of spectrum levels (the twin of tests/decibels.hpp)."""
+    return 20 * math.log10(volts)
+
+
 def assert_measures(scope: OpenScope, signal: Signal, measurement: Measurement) -> None:
     """Checks that `measurement` of channel 1 in the latest capture of `signal` reads its ground
     truth within the spec's tolerance, with an OK status (the client raises otherwise)."""
