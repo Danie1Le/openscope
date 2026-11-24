@@ -19,9 +19,14 @@ THRESHOLD = 85.0
 # sum of all files) keeps a 23-line file such as trigger.cpp from being outweighed by the rest,
 # and not per file, where a tiny file would gate on noise.
 AREAS = {
-    # Edge detection, and the capture assembly that holds the pre-trigger samples, the holdoff,
-    # the Auto timeout and the placement of time zero (spec #1: Acquisition).
-    "trigger": ["src/openscope/trigger.cpp", "src/openscope/capture.cpp"],
+    # Edge detection, the capture assembly that holds the pre-trigger samples, the holdoff, the
+    # Auto timeout and the placement of time zero, and the block assembly that discards a capture
+    # at a settings change or a dropped block (spec #1: Acquisition).
+    "trigger": [
+        "src/openscope/trigger.cpp",
+        "src/openscope/capture.cpp",
+        "src/openscope/block_assembler.cpp",
+    ],
     "measurement": [
         "src/openscope/measurement.cpp",
         "src/openscope/measurement_statistics.cpp",

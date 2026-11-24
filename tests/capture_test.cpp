@@ -12,16 +12,19 @@
 #include <thread>
 #include <vector>
 
+#include "capture_blocks.hpp"
 #include "instrument_fixture.hpp"
 #include "openscope/channel.hpp"
 #include "openscope/instrument.hpp"
 #include "openscope/sample_block.hpp"
-#include "openscope/sample_clock.hpp"
-#include "openscope/trigger.hpp"
 
 namespace openscope {
 namespace {
 
+using test::HandedOn;
+using test::kChannelOne;
+using test::kUntriggeredEveryRecord;
+using test::rising_block;
 using testing::ElementsAre;
 using testing::FloatNear;
 
@@ -156,35 +159,6 @@ TEST(CaptureAssemblerTest, RecordLengthOfZeroIsALogicError) {
                std::logic_error);
 }
 
-/// CH1 enabled, triggering on itself.
-constexpr std::array<ChannelSettings, kChannelCount> kChannelOne{{{.enabled = true}, {}, {}, {}}};
-
-/// Auto with time zero on the first sample: a signal that never triggers gives an untriggered
-/// capture every record length.
-constexpr TriggerSettings kUntriggeredEveryRecord{.position = 0.0};
-
-/// A block of CH1 samples from `first` on, rising from 0 V by 1 V a sample, so it never moves the
-/// hysteresis band below the 0 V trigger level and never triggers.
-SampleBlock rising_block(SampleIndex first, std::size_t count) {
-  SampleBlock block{.first_index = first, .count = count, .channels = {}};
-  for (std::size_t n = 0; n < count; ++n) {
-    block.channels[0].push_back(static_cast<float>(first + n));
-  }
-  return block;
-}
-
-/// The first sample indexes of the captures an assembler hands on, oldest first.
-struct HandedOn {
-  std::vector<SampleIndex> first_indexes;
-
-  /// The sink to pass to `push`.
-  CaptureSink sink() {
-    return [this](const std::shared_ptr<const Capture>& capture) {
-      first_indexes.push_back(capture->first_index);
-    };
-  }
-};
-
 TEST(CaptureAssemblerTest, PushHandsOnEveryCaptureAsItCompletes) {
   CaptureAssembler assembler;
   HandedOn handed_on;
@@ -192,16 +166,16 @@ TEST(CaptureAssemblerTest, PushHandsOnEveryCaptureAsItCompletes) {
 
   assembler.push(rising_block(0, 7), acquisition, kChannelOne, kUntriggeredEveryRecord,
                  CaptureLimit::kEvery, handed_on.sink());
-  EXPECT_THAT(handed_on.first_indexes, ElementsAre(0U, 2U, 4U));
+  EXPECT_THAT(handed_on.first_indexes(), ElementsAre(0U, 2U, 4U));
 
   assembler.push(rising_block(7, 1), acquisition, kChannelOne, kUntriggeredEveryRecord,
                  CaptureLimit::kEvery, handed_on.sink());
-  EXPECT_THAT(handed_on.first_indexes, ElementsAre(0U, 2U, 4U, 6U));
+  EXPECT_THAT(handed_on.first_indexes(), ElementsAre(0U, 2U, 4U, 6U));
 
   const std::optional<std::size_t> end =
       assembler.push(rising_block(8, 1), acquisition, kChannelOne, kUntriggeredEveryRecord,
                      CaptureLimit::kEvery, handed_on.sink());
-  EXPECT_THAT(handed_on.first_indexes, ElementsAre(0U, 2U, 4U, 6U));
+  EXPECT_THAT(handed_on.first_indexes(), ElementsAre(0U, 2U, 4U, 6U));
   EXPECT_EQ(end, std::nullopt);
 }
 
@@ -214,7 +188,7 @@ TEST(CaptureAssemblerTest, PushOfTheFirstCaptureOnlyHandsOnThatCapture) {
                      kUntriggeredEveryRecord, CaptureLimit::kFirst, handed_on.sink());
 
   EXPECT_EQ(end, 2U);
-  EXPECT_THAT(handed_on.first_indexes, ElementsAre(0U));
+  EXPECT_THAT(handed_on.first_indexes(), ElementsAre(0U));
 }
 
 TEST(CapturedChannelTest, IsTheChannelOrThrowsWhenItIsNotInTheCapture) {
