@@ -5,6 +5,7 @@
 #include <string>
 
 #include "openscope/scpi_error.hpp"
+#include "scpi_session.hpp"
 
 namespace openscope {
 namespace {
@@ -26,8 +27,8 @@ TEST(SessionTest, QueuedErrorOwnsItsMessageText) {
 }
 
 TEST(ErrorReplyTest, IsTheCodeThenTheQuotedMessage) {
-  EXPECT_EQ(error_reply(kNoError), R"(0,"No error")");
-  EXPECT_EQ(error_reply(kSettingsConflict), R"(-221,"Settings conflict")");
+  EXPECT_EQ(error_reply(kNoError), test::kNoErrorReply);
+  EXPECT_EQ(error_reply(kSettingsConflict), test::kSettingsConflictReply);
 }
 
 }  // namespace
