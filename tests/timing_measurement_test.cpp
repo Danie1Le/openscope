@@ -510,15 +510,20 @@ TEST(TimingSteppingTest, RepliesDoNotDependOnHowTheClockIsStepped) {
   }
 }
 
-/// The measurement `mnemonic` of hand-built `samples` on a channel at its `*RST` settings
-/// (1 V/div, so a 1 V swing is a signal), taken at one sample per second so that times read in
-/// samples.
-MeasurementResult measure(std::string_view mnemonic, std::span<const float> samples) {
+/// The measurement `mnemonic` of `signal` on a channel at its `*RST` settings (1 V/div, so a 1 V
+/// swing is a signal).
+MeasurementResult measure(std::string_view mnemonic, const MeasuredSignal& signal) {
   const std::size_t index = test::measurement_index(mnemonic);
   if (index == measurements().size()) {
     return {.status = MeasurementStatus::kOk, .value = std::nullopt};
   }
-  return evaluate(measurements()[index], ChannelSettings{}, MeasuredSignal(samples));
+  return evaluate(measurements()[index], ChannelSettings{}, signal);
+}
+
+/// The measurement `mnemonic` of hand-built `samples`, taken at one sample per second so that
+/// times read in samples.
+MeasurementResult measure(std::string_view mnemonic, std::span<const float> samples) {
+  return measure(mnemonic, MeasuredSignal(samples));
 }
 
 /// A pulse train's high samples per 100-sample period and where its first period starts.
@@ -659,12 +664,24 @@ TEST(MeasuredSignalTest, RiseFallCountsAndSumsTheCompleteEdgesOfEachDirection) {
   EXPECT_NEAR(edges.falling.total, 2.4, 1e-9);
 }
 
+// A signal views its samples, so flattening them after the first timing measurement shows whether
+// a later one searches them again: a search would now find no edge (Too few cycles). Each
+// measurement must instead read the whole cycles and edges the first ones found.
 TEST(MeasuredSignalTest, FindsTheEdgesOnceForEveryMeasurement) {
-  const std::vector<float> samples = pulse_train(350, 100, 50);
+  std::vector<float> samples = pulse_train(350, 100, 30);
   const MeasuredSignal signal(samples);
+  const MeasurementResult frequency = measure("FREQuency", signal);
+  const MeasurementResult rise_time = measure("RISetime", signal);
+  ASSERT_EQ(frequency.value, 0.01);
+  ASSERT_THAT(rise_time.value, testing::Optional(DoubleNear(0.8, 1e-9)));
 
-  EXPECT_EQ(&signal.whole_cycles(), &signal.whole_cycles());
-  EXPECT_EQ(&signal.rise_fall(), &signal.rise_fall());
+  std::ranges::fill(samples, 0.0F);
+
+  EXPECT_EQ(measure("FREQuency", signal).value, frequency.value);
+  EXPECT_EQ(measure("PERiod", signal).value, 100.0);
+  EXPECT_EQ(measure("DUTYcycle", signal).value, 30.0);
+  EXPECT_EQ(measure("RISetime", signal).value, rise_time.value);
+  EXPECT_EQ(measure("FALLtime", signal).value, rise_time.value);
 }
 
 // Measurements that share one signal's edges reply exactly what each replies on a signal of its

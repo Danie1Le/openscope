@@ -128,9 +128,13 @@ TEST(HandedOnTest, KeepsEveryCaptureInOrder) {
 
 TEST(MeasurementIndexTest, IsThePositionOfTheMnemonicInMeasurements) {
   const std::span<const Measurement> all = measurements();
+  const std::size_t vpp = measurement_index("VPP");
+  const std::size_t fall_time = measurement_index("FALLtime");
+  ASSERT_LT(vpp, all.size());
+  ASSERT_LT(fall_time, all.size());
 
-  EXPECT_EQ(all[measurement_index("VPP")].mnemonic, "VPP");
-  EXPECT_EQ(all[measurement_index("FALLtime")].mnemonic, "FALLtime");
+  EXPECT_EQ(all[vpp].mnemonic, "VPP");
+  EXPECT_EQ(all[fall_time].mnemonic, "FALLtime");
 }
 
 TEST(MeasurementIndexTest, FailsTheTestForAnUnknownMnemonic) {
