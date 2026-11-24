@@ -5,7 +5,6 @@
 #include <string>
 
 #include "openscope/scpi_error.hpp"
-#include "scpi_session.hpp"
 
 namespace openscope {
 namespace {
@@ -24,11 +23,6 @@ TEST(SessionTest, QueuedErrorOwnsItsMessageText) {
 
   EXPECT_EQ(error.code, -222);
   EXPECT_EQ(error.message, "Parameter error; value out of range for this channel");
-}
-
-TEST(ErrorReplyTest, IsTheCodeThenTheQuotedMessage) {
-  EXPECT_EQ(error_reply(kNoError), test::kNoErrorReply);
-  EXPECT_EQ(error_reply(kSettingsConflict), test::kSettingsConflictReply);
 }
 
 }  // namespace

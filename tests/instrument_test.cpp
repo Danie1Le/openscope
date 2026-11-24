@@ -10,6 +10,7 @@
 #include <string>
 
 #include "instrument_fixture.hpp"
+#include "openscope/scpi_error.hpp"
 #include "openscope/session.hpp"
 #include "scpi_session.hpp"
 
@@ -20,6 +21,7 @@ using test::kInputBufferOverrunReply;
 using test::kNoErrorReply;
 using test::kParameterNotAllowedReply;
 using test::kQueueOverflowReply;
+using test::kSettingsConflictReply;
 using test::kSyntaxErrorReply;
 using test::kUndefinedHeaderReply;
 using test::ScpiSession;
@@ -36,6 +38,12 @@ TEST_F(InstrumentTest, IdnReportsManufacturerModelSerialAndVersion) {
 
 TEST_F(InstrumentTest, SystErrReportsNoErrorWhenQueueIsEmpty) {
   EXPECT_EQ(session.next_error(), kNoErrorReply);
+}
+
+// error_reply builds every SYST:ERR? reply: the code, then the message in double quotes.
+TEST(ErrorReplyTest, IsTheCodeThenTheQuotedMessage) {
+  EXPECT_EQ(error_reply(kNoError), kNoErrorReply);
+  EXPECT_EQ(error_reply(kSettingsConflict), kSettingsConflictReply);
 }
 
 TEST_F(InstrumentTest, UnknownHeaderQueuesUndefinedHeaderWithoutReply) {
